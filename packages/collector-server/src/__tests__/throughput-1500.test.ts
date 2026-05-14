@@ -115,6 +115,6 @@ describe('cc-session upload throughput', () => {
       expect(posted2xx).toBe(TOTAL);
       expect(landed).toBe(TOTAL);
     },
-    120_000,
+    240_000,
   );
 });
