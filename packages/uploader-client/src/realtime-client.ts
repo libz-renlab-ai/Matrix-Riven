@@ -14,7 +14,7 @@
  * - No queue, no batching — every call is one POST or one drop.
  *
  * Caller wiring (M-F2-B, not in this file):
- *   import { postCcStatusSnapshot } from '@teamagent/digital-twin/realtime-client';
+ *   import { postCcStatusSnapshot } from '@matrix-riven/uploader-client';
  *   void postCcStatusSnapshot(snapshot, { baseUrl, timeoutMs: 50 });
  *
  * Test coverage: `__tests__/realtime-client.test.ts` exercises 200 / timeout /
