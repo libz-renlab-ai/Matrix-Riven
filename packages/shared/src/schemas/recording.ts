@@ -1,4 +1,10 @@
 /**
+ * 注意（设计文档 §5）：此文件作为 shared 叶子文件保留，当前录屏功能尚未接线。
+ * daemon/queue.ts 与 daemon/uploader.ts 里的 recording 分支是有意保留的死代码，
+ * 占位供后续功能接入，不应删除。详见设计文档 §5。
+ */
+
+/**
  * Schema B: recording payload destined for `POST /v1/recordings`.
  *
  * Wire shape (issue #146 F2 — aligned with mock-server.ts validation):
