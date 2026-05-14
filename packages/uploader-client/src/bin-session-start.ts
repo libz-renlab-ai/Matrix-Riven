@@ -3,6 +3,7 @@
  * SessionStart hook 薄壳：读 stdin → 调 emitCcStatus(session_start) → 退出。
  * 不引入 packages/cli 的 runHook 框架。绝不抛错、绝不阻塞会话。
  */
+import path from 'node:path';
 import { emitCcStatus } from './realtime-emit.js';
 
 async function readStdin(): Promise<string> {
@@ -42,7 +43,7 @@ export async function main(
 }
 
 // 自调用判断：纯 process.argv 检查（ESM 源文件里没有 require/module）。
-if (process.argv[1]?.includes('bin-session-start')) {
+if (path.basename(process.argv[1] ?? '').startsWith('bin-session-start')) {
   main().catch(() => {
     /* never block session close */
   });

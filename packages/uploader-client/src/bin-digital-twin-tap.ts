@@ -85,12 +85,13 @@ export interface ResolveDaemonBinDeps {
  *   1. `~/.teamagent/digital-twin/bin-uploader.cjs` — the user-installed
  *      production location. Stable across worktrees and `git pull`s, so the
  *      daemon stays runnable even when the working tree is mid-rebase.
- *   2. `<monorepo>/packages/digital-twin/dist/bin-uploader.cjs` — fallback
+ *   2. `<monorepo>/packages/uploader-client/dist/bin-uploader.cjs` — fallback
  *      for fresh worktrees / vitest / dev loops where the user-installed
  *      copy doesn't exist yet. Resolved relative to this entry's `__dirname`
- *      (works for both `cli/src/` during vitest and `cli/dist/` post-bundle,
- *      since both are `<monorepo>/packages/cli/{src,dist}` two levels above
- *      `digital-twin/dist`).
+ *      (works for both `uploader-client/src/` during vitest and
+ *      `uploader-client/dist/` post-bundle, since both are
+ *      `<monorepo>/packages/uploader-client/{src,dist}` two levels above
+ *      `uploader-client/dist`).
  *
  * When (2) hits but (1) doesn't, perform a best-effort atomic self-install:
  * copy the monorepo bundle to a sibling `<userInstalled>.tmp.<pid>.<hr>`,
@@ -129,7 +130,7 @@ export function resolveDaemonBin(
 
   // Issue #368 (v0.11.1) — same-dir fallback. In a published tarball install,
   // `bin-digital-twin-tap.cjs` lives at `<install>/dist/` next to a sibling
-  // `bin-uploader.cjs` (both bundled by `packages/teamagent/tsup.config.ts`).
+  // `bin-uploader.cjs` (both bundled by `packages/uploader-client/tsup.config.ts`).
   // Returning that sibling directly lets the very first Stop hook fire — on a
   // machine where `teamagent install-user-hook` had no chance to stage the
   // binary yet — spawn the daemon. Self-install logic below still triggers on
@@ -149,7 +150,7 @@ export function resolveDaemonBin(
     here,
     '..',
     '..',
-    'digital-twin',
+    'uploader-client',
     'dist',
     'bin-uploader.cjs',
   );
