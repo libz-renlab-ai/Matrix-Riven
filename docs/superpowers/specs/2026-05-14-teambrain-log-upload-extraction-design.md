@@ -169,8 +169,11 @@ TeamBrain 的 `bin-session-start.ts` / `bin-user-prompt-submit.ts` 依赖 `packa
 3. `pnpm -r test` 全绿（搬过来的测试 + 新增薄壳测试）。
 4. `pnpm -r build` 产出：`uploader-client` 的 CJS standalone bin 不含外部 `require()`；
    `collector-server` 的 `bin-prod-server.cjs` 同样自包含。
-5. 端到端冒烟：本地起 `bin-prod-server` → 手工 POST 一份 transcript 到
-   `/v1/cc-sessions` → 服务端按 `<user>/<date>/` 落盘 → 看板页面能列出该 session。
+5. 端到端冒烟（走真实的客户端 → 服务端链路）：本地起 `bin-prod-server`（指定
+   `$TEAMAGENT_COLLECTOR_DIR`）→ 把一份 fixture transcript 放进
+   `~/.teamagent/digital-twin/queue/pending/`（`<id>.payload` + `<id>.json` 对）→
+   跑 `bin-uploader` 守护进程 → 队列被排空、服务端按 `<user>/<date>/` 落盘 →
+   看板页面能列出该 session。
 6. 仓库不含 `recorder/`、`bpp/`、`videos-html.ts`。
 
 ## 9. 风险与缓解
