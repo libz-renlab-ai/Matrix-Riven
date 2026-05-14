@@ -16,6 +16,7 @@ import {
   statSync,
   existsSync,
   readFileSync,
+  appendFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join, resolve as resolvePath, sep } from 'node:path';
@@ -76,7 +77,6 @@ export interface MockServerHandle {
 }
 
 const ROUTE_CC_SESSIONS = '/v1/cc-sessions';
-const ROUTE_RECORDINGS = '/v1/recordings';
 /** Issue #350 — lightweight CC runtime status snapshot ingress (plain JSON, not gzipped). */
 const ROUTE_CC_STATUS = '/v1/cc-status';
 
@@ -518,6 +518,35 @@ function handleGet(
   send(res, 404);
 }
 
+/**
+ * M2 — append a single L2 scan alert event to `_audit/<date>.jsonl` under
+ * outputDir.  Replicates the essential write format of the original
+ * `appendAudit` from bpp/store without pulling in bpp dependencies.
+ * "第二层服务端扫描如果命中第一层漏掉的敏感字段，必须记一条警报"
+ */
+function appendL2Alert(
+  outputDir: string,
+  alert: {
+    schema_version: number;
+    id: string;
+    event_type: string;
+    actor: string;
+    timestamp: string;
+    metadata: {
+      matched_rule_kinds: string[];
+      session_id: string;
+      date: string;
+      route: string;
+    };
+  },
+): void {
+  const date = alert.timestamp.slice(0, 10);
+  const dir = resolvePath(outputDir, '_audit');
+  mkdirSync(dir, { recursive: true });
+  const file = resolvePath(dir, `${date}.jsonl`);
+  appendFileSync(file, JSON.stringify(alert) + '\n', 'utf8');
+}
+
 export async function startMockServer(opts: MockServerOptions): Promise<MockServerHandle> {
   const outputDir = opts.outputDir ?? join(process.cwd(), 'test-output');
   mkdirSync(outputDir, { recursive: true });
@@ -539,7 +568,6 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
     const route = (req.url ?? '').split('?')[0] ?? '';
     if (
       route !== ROUTE_CC_SESSIONS &&
-      route !== ROUTE_RECORDINGS &&
       route !== ROUTE_CC_STATUS
     ) {
       send(res, 404);
@@ -614,7 +642,7 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
       const isLog = route === ROUTE_CC_SESSIONS;
       const obj = json as Record<string, unknown>;
       const envelope = (obj.envelope ?? {}) as Record<string, unknown>;
-      const idRaw = isLog ? envelope.session_id : envelope.recording_id;
+      const idRaw = envelope.session_id;
       let id: string;
       if (typeof idRaw === 'string' && idRaw.length > 0) {
         const validated = validateIdParam(idRaw);
@@ -665,8 +693,7 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
         // anything L1 missed — a disabled rule, a bypassed collector, a
         // hand-crafted POST. On a hit the transcript is redacted BEFORE it
         // lands, and the alert is recorded below — silently scrubbing is not
-        // enough ("必须记一条警报"). cc-session transcripts only; recordings
-        // carry binary audio that is not text-scannable.
+        // enough ("必须记一条警报").
         let l2MatchedKinds: string[] = [];
         let l2RedactionCount = 0;
         if (isLog) {
@@ -733,6 +760,29 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
                 // best-effort sidecar — never 5xx a successful upload
               }
             }
+          }
+        }
+
+        // "第二层服务端扫描如果命中第一层漏掉的敏感字段，必须记一条警报". An
+        // audit-append failure must never 5xx an otherwise-successful upload —
+        // the transcript is already safely on disk, redacted.
+        if (l2MatchedKinds.length > 0) {
+          try {
+            appendL2Alert(outputDir, {
+              schema_version: 1,
+              id: `l2-${randomUUID()}`,
+              event_type: 'l2_scan_alert',
+              actor: userIdSafe,
+              timestamp: now().toISOString(),
+              metadata: {
+                matched_rule_kinds: l2MatchedKinds,
+                session_id: id,
+                date,
+                route,
+              },
+            });
+          } catch {
+            // best-effort audit — never block a successful upload
           }
         }
 
