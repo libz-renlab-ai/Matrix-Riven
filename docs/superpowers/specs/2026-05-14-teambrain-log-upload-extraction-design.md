@@ -191,3 +191,5 @@ TeamBrain 的 `bin-session-start.ts` / `bin-user-prompt-submit.ts` 依赖 `packa
 拆分完成、§8 验收标准全部通过后：在 Matrix-Riven 仓库 commit，push 到
 `github.com/libz-renlab-ai/Matrix-Riven`（仓库已 `git init` 并配置 `origin`，默认分支
 `main`）。
+
+> 实现状态：已完成（分支 feat/log-upload-extraction，2026-05-14）。三包均 typecheck/test/build 通过，端到端冒烟通过。
