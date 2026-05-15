@@ -5,7 +5,7 @@ import type { CcStatusSnapshot } from '@matrix-riven/shared';
  * cc-status data — kept separate so each aggregator picks the cheapest view:
  *   - allSnapshots:        every snapshot, for model-distribution counting
  *   - latestPerSession:    one row per session, for cumulative-field sums
- *   - redactionsPerSession: L1 PII redaction counts from <sid>.l1_redaction_count.json
+ *   - redactionsPerSession: L1 PII redaction counts from <sid>.meta.json (l1_redaction_count field)
  */
 export interface RawSnapshots {
   allSnapshots: CcStatusSnapshot[];
