@@ -73,33 +73,40 @@ node scripts/install-client.mjs
 > 先看会发生什么再下手？跑 `node scripts/install-client.mjs --dry-run`，不写文件，只打印计划。
 > 想反悔？跑 `node scripts/install-client.mjs --uninstall`，会移除 hook 条目 + 删 staged bins（保留 `~/.riven/digital-twin/queue/` 队列和配置不动）。
 
-### Step 3. 验证日志真能上传
+### Step 3. 验证安装
 
-**不需要重启 Claude Code**——下面这两条命令用 CLI 直接走完整链路：
-
-```bash
-# 3a. 造一份假 transcript 入队（不需要 login，第一次会自动建 config）
-node ~/.riven/digital-twin/bin-digital-twin.cjs inject-mock
-
-# 3b. 立刻触发守护进程把队列推到服务端
-node ~/.riven/digital-twin/bin-uploader.cjs
-```
-
-> Windows git-bash 上 `~` 可能不展开——如果第一条命令报 "Cannot find module"，把 `~` 换成 `$USERPROFILE`（或在 PowerShell 里换成 `$env:USERPROFILE`）。
-
-**成功判据**（同时满足三条）：
-
-1. `inject-mock` 输出最后一行形如 `digital-twin: injected mock transcript (session=01XXXXX) -> .../queue/pending/01XXXXX.payload`
-2. `bin-uploader.cjs` exit code 是 `0`
-3. 抓服务端看自己的 user_id 是否出现：
+Step 2 的 installer 已经在内部跑过一次 dry-run 探针（`RIVEN_UPLOADER_DRYRUN=1`），bundle、imports、hook 写入都验证过了。再做以下两条只读检查即可：
 
 ```bash
-curl -sS http://192.168.22.88:8933/api/users
+# 3a. 状态自检
+node ~/.riven/digital-twin/bin-digital-twin.cjs status
 ```
 
-输出的 JSON `users` 数组里能找到你自己的 user_id（默认是 `<git config user.email>` 或 `<unix-user>@<hostname>` 兜底）→ **安装成功**。
+**成功判据**（同时满足）：
+- `enabled: true`
+- `endpoint: http://192.168.22.88:8933`
+- `user_id` 显示出你自己的邮箱 / hostname-fallback
+- `queue.pending: 0`（或刚装完为 0；有几条无所谓，daemon 会自己推）
 
-之后每次你在 Claude Code 里结束一个会话，Stop hook 都会自动 tap + spawn 守护进程上传，无需手动再做任何事。
+```bash
+# 3b. 网络可达性自检（注意 --noproxy，绕过本机 HTTP 代理）
+curl -sS --noproxy '*' -o /dev/null -w "%{http_code}\n" http://192.168.22.88:8933/
+```
+
+应返回 `200`。
+
+> Windows git-bash 上 `~` 可能不展开——如果命令报 "Cannot find module"，把 `~` 换成 `$USERPROFILE`（或在 PowerShell 里换成 `$env:USERPROFILE`）。
+
+**真实上传** 在你下次正常用完一段 Claude Code 会话、Stop hook 触发时自动发生。之后 `curl --noproxy '*' http://192.168.22.88:8933/api/users` 就能看到你自己的 user_id（默认是 `<git config user.email>` 或 `<unix-user>@<hostname>` 兜底）。
+
+> **不要** 跑 `bin-digital-twin inject-mock` 紧跟 `bin-uploader.cjs` 做"端到端验证"——`inject-mock` 出来的是假 transcript，紧接 `bin-uploader` 会真把它推到 prod collector 污染数据。需要本地烟测就加 `RIVEN_UPLOADER_DRYRUN=1`：
+>
+> ```bash
+> node ~/.riven/digital-twin/bin-digital-twin.cjs inject-mock
+> RIVEN_UPLOADER_DRYRUN=1 node ~/.riven/digital-twin/bin-uploader.cjs
+> ```
+>
+> 这条路径只解析、不发包，不污染服务端。
 
 ---
 
