@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import type { CcStatusSnapshot } from '@matrix-riven/shared';
 import type {
   CostBlock,
@@ -5,8 +6,12 @@ import type {
   ModelDistribution,
   ProductivityBlock,
   ProductivityPerUser,
+  ProjectsBlock,
   QuotaPerUser,
   RawSnapshots,
+  TopCwd,
+  TopGitBranch,
+  UserCwdEntry,
 } from './types.js';
 
 export function aggregateCost(raw: RawSnapshots): CostBlock {
@@ -157,4 +162,76 @@ function averageMinutes(snaps: readonly CcStatusSnapshot[]): number {
   if (durations.length === 0) return 0;
   const total = durations.reduce((a, b) => a + b, 0);
   return Math.round((total / durations.length) * 10) / 10;
+}
+
+// ────────────────────────────── aggregateProjects ──────────────────────────────
+
+export function aggregateProjects(raw: RawSnapshots): ProjectsBlock {
+  // ── top_cwd: aggregate session count + total minutes per cwd_basename ──
+  const cwdAcc = new Map<string, { session_count: number; total_minutes: number }>();
+  for (const s of raw.latestPerSession.values()) {
+    if (typeof s.cwd !== 'string' || s.cwd.length === 0) continue;
+    const key = basename(s.cwd);
+    const minutes = sessionMinutes(s);
+    const cur = cwdAcc.get(key);
+    if (cur) {
+      cur.session_count += 1;
+      cur.total_minutes += minutes;
+    } else {
+      cwdAcc.set(key, { session_count: 1, total_minutes: minutes });
+    }
+  }
+  const top_cwd: TopCwd[] = Array.from(cwdAcc, ([cwd_basename, agg]) => ({
+    cwd_basename,
+    session_count: agg.session_count,
+    total_minutes: Math.round(agg.total_minutes),
+  }))
+    .sort((a, b) => b.session_count - a.session_count || a.cwd_basename.localeCompare(b.cwd_basename))
+    .slice(0, 10);
+
+  // ── top_git_branch ──
+  const branchAcc = new Map<string, number>();
+  for (const s of raw.latestPerSession.values()) {
+    if (typeof s.git_branch !== 'string' || s.git_branch.length === 0) continue;
+    branchAcc.set(s.git_branch, (branchAcc.get(s.git_branch) ?? 0) + 1);
+  }
+  const top_git_branch: TopGitBranch[] = Array.from(branchAcc, ([git_branch, session_count]) => ({
+    git_branch,
+    session_count,
+  }))
+    .sort((a, b) => b.session_count - a.session_count || a.git_branch.localeCompare(b.git_branch))
+    .slice(0, 10);
+
+  // ── user_cwd_matrix: two-level Map avoids key-encoding fragility ──
+  // user_id → cwd_basename → count
+  const matrixAcc = new Map<string, Map<string, number>>();
+  for (const s of raw.latestPerSession.values()) {
+    if (typeof s.cwd !== 'string' || s.cwd.length === 0) continue;
+    const bn = basename(s.cwd);
+    let byCwd = matrixAcc.get(s.user_id);
+    if (!byCwd) {
+      byCwd = new Map();
+      matrixAcc.set(s.user_id, byCwd);
+    }
+    byCwd.set(bn, (byCwd.get(bn) ?? 0) + 1);
+  }
+  const user_cwd_matrix: UserCwdEntry[] = [];
+  for (const [user_id, byCwd] of matrixAcc) {
+    for (const [cwd_basename, session_count] of byCwd) {
+      user_cwd_matrix.push({ user_id, cwd_basename, session_count });
+    }
+  }
+  user_cwd_matrix.sort((a, b) =>
+    a.user_id.localeCompare(b.user_id) || b.session_count - a.session_count,
+  );
+
+  return { top_cwd, top_git_branch, user_cwd_matrix };
+}
+
+function sessionMinutes(s: CcStatusSnapshot): number {
+  if (!s.session_started_at) return 0;
+  const start = Date.parse(s.session_started_at);
+  const end = Date.parse(s.ts);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  return (end - start) / 1000 / 60;
 }

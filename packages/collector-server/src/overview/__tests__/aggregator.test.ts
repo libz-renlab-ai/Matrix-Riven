@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CcStatusSnapshot } from '@matrix-riven/shared';
-import { aggregateCost, aggregateProductivity } from '../aggregator.js';
+import { aggregateCost, aggregateProductivity, aggregateProjects } from '../aggregator.js';
 import type { RawSnapshots } from '../types.js';
 
 // ────────────────────────────── fixture helpers ──────────────────────────────
@@ -209,5 +209,89 @@ describe('aggregateProductivity', () => {
     raw.latestPerSession.set('s2', snap({ session_id: 's2', user_id: 'alice@x', turn_count: 5 }));
     const out = aggregateProductivity(raw);
     expect(out.per_user.map((u) => u.user_id)).toEqual(['alice@x', 'zoe@x']);
+  });
+});
+
+// ────────────────────────────── aggregateProjects ──────────────────────────────
+
+describe('aggregateProjects', () => {
+  it('empty → empty arrays', () => {
+    const out = aggregateProjects(emptyRaw());
+    expect(out.top_cwd).toEqual([]);
+    expect(out.top_git_branch).toEqual([]);
+    expect(out.user_cwd_matrix).toEqual([]);
+  });
+
+  it('top_cwd uses basename(cwd), aggregates session_count and total_minutes', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({
+      session_id: 's1', user_id: 'a@x', cwd: '/home/a/projA',
+      session_started_at: '2026-05-15T10:00:00.000Z',
+      ts: '2026-05-15T10:30:00.000Z',  // 30 min
+    }));
+    raw.latestPerSession.set('s2', snap({
+      session_id: 's2', user_id: 'b@x', cwd: '/home/b/projA',
+      session_started_at: '2026-05-15T11:00:00.000Z',
+      ts: '2026-05-15T11:20:00.000Z',  // 20 min
+    }));
+    raw.latestPerSession.set('s3', snap({
+      session_id: 's3', user_id: 'a@x', cwd: '/Z/projB',
+    }));
+    const out = aggregateProjects(raw);
+    expect(out.top_cwd).toEqual([
+      { cwd_basename: 'projA', session_count: 2, total_minutes: 50 },
+      { cwd_basename: 'projB', session_count: 1, total_minutes: 0 },
+    ]);
+  });
+
+  it('top_git_branch sorted DESC by session_count', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({ session_id: 's1', git_branch: 'main' }));
+    raw.latestPerSession.set('s2', snap({ session_id: 's2', git_branch: 'main' }));
+    raw.latestPerSession.set('s3', snap({ session_id: 's3', git_branch: 'feature/x' }));
+    const out = aggregateProjects(raw);
+    expect(out.top_git_branch).toEqual([
+      { git_branch: 'main', session_count: 2 },
+      { git_branch: 'feature/x', session_count: 1 },
+    ]);
+  });
+
+  it('user_cwd_matrix groups (user, cwd) pairs', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({ session_id: 's1', user_id: 'a@x', cwd: '/p/A' }));
+    raw.latestPerSession.set('s2', snap({ session_id: 's2', user_id: 'a@x', cwd: '/p/A' }));
+    raw.latestPerSession.set('s3', snap({ session_id: 's3', user_id: 'a@x', cwd: '/p/B' }));
+    raw.latestPerSession.set('s4', snap({ session_id: 's4', user_id: 'b@x', cwd: '/p/A' }));
+    const out = aggregateProjects(raw);
+    expect(out.user_cwd_matrix).toEqual(expect.arrayContaining([
+      { user_id: 'a@x', cwd_basename: 'A', session_count: 2 },
+      { user_id: 'a@x', cwd_basename: 'B', session_count: 1 },
+      { user_id: 'b@x', cwd_basename: 'A', session_count: 1 },
+    ]));
+    expect(out.user_cwd_matrix).toHaveLength(3);
+  });
+
+  it('snapshots without cwd skipped from cwd/matrix; without git_branch skipped from branch', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({ session_id: 's1', user_id: 'a@x' }));
+    raw.latestPerSession.set('s2', snap({ session_id: 's2', user_id: 'a@x', cwd: '/p/A' }));
+    const out = aggregateProjects(raw);
+    expect(out.top_cwd).toEqual([{ cwd_basename: 'A', session_count: 1, total_minutes: 0 }]);
+    expect(out.top_git_branch).toEqual([]);
+    expect(out.user_cwd_matrix).toEqual([{ user_id: 'a@x', cwd_basename: 'A', session_count: 1 }]);
+  });
+
+  it('top_cwd and top_git_branch capped at 10 entries', () => {
+    const raw = emptyRaw();
+    for (let i = 0; i < 15; i++) {
+      raw.latestPerSession.set(`s${i}`, snap({
+        session_id: `s${i}`,
+        cwd: `/p/proj${i}`,
+        git_branch: `branch-${i}`,
+      }));
+    }
+    const out = aggregateProjects(raw);
+    expect(out.top_cwd).toHaveLength(10);
+    expect(out.top_git_branch).toHaveLength(10);
   });
 });
