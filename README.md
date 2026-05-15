@@ -94,7 +94,7 @@ pnpm -r build
 
 配置文件落在 `~/.riven/digital-twin.json`（**注意是 `.riven` 顶层的 json 文件，不在 `digital-twin/` 子目录里**）。首次运行 `bin-digital-twin.cjs login <token>` 后自动生成。其他本地数据（队列、daemon pid、上传日志、machine-id）都在 `~/.riven/digital-twin/` 下。
 
-⚠️ **当前 `login` 不接受 endpoint 参数**，写出的配置默认使用一个上游遗留的内网 IP（`http://192.168.22.88:8080`）。新部署时需要手动编辑 `~/.riven/digital-twin.json` 里的 `uploader.endpoint` 字段指向你的真实 server，这是已知未优化点。
+⚠️ **当前 `login` 不接受 endpoint 参数**，写出的配置默认使用一个上游遗留的内网 IP（`http://192.168.22.88:8933`）。新部署时需要手动编辑 `~/.riven/digital-twin.json` 里的 `uploader.endpoint` 字段指向你的真实 server，这是已知未优化点。
 
 ### 4. 实时状态（可选）
 

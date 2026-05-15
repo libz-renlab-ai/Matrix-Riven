@@ -84,7 +84,7 @@ export interface DigitalTwinParsedArgs {
   cwd?: string;
   /** inject-mock: override session id (default: ulid()). */
   sessionId?: string;
-  /** member-stats: central server URL (default: http://127.0.0.1:8080). */
+  /** member-stats: central server URL (default: http://127.0.0.1:8933). */
   server?: string;
   /** member-stats: user id to query (default: this machine's configured user). */
   user?: string;
@@ -378,8 +378,8 @@ export function executeDigitalTwinInjectMock(
   return { exitCode: 1 };
 }
 
-/** Default central-server URL — matches runProdServer's default PORT=8080. */
-const DEFAULT_MEMBER_STATS_SERVER = 'http://127.0.0.1:8080';
+/** Default central-server URL — matches runProdServer's default PORT=8933. */
+const DEFAULT_MEMBER_STATS_SERVER = 'http://127.0.0.1:8933';
 
 /**
  * `bin-digital-twin member-stats` — 对话上传通道 self-view. Queries

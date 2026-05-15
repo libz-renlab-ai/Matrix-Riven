@@ -370,4 +370,4 @@ log(`next steps:`);
 log(`  1. Restart Claude Code (so it re-reads ~/.claude/settings.json).`);
 log(`  2. Verify with: node ${join(stageDir, 'bin-digital-twin.cjs')} inject-mock`);
 log(`  3. Then run: node ${join(stageDir, 'bin-uploader.cjs')}`);
-log(`  4. Check that http://192.168.22.88:8080/api/users lists your user_id.`);
+log(`  4. Check that http://192.168.22.88:8933/api/users lists your user_id.`);

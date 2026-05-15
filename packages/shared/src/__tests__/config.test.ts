@@ -74,7 +74,7 @@ describe('config', () => {
       const cfg = defaultConfig({ user_id: 'a@b', machine_id: 'h-1' });
       expect(cfg.uploader.enabled).toBe(true);
       expect(cfg.uploader.token).toBeNull();
-      expect(cfg.uploader.endpoint).toBe('http://192.168.22.88:8080');
+      expect(cfg.uploader.endpoint).toBe('http://192.168.22.88:8933');
     });
 
     it('respects custom endpoint', () => {
@@ -138,7 +138,7 @@ describe('config', () => {
       expect(cfg).not.toBeNull();
       expect(cfg!.uploader.enabled).toBe(true);
       expect(cfg!.uploader.token).toBe(TEAM_SHARED_TOKEN);
-      expect(cfg!.uploader.endpoint).toBe('http://192.168.22.88:8080');
+      expect(cfg!.uploader.endpoint).toBe('http://192.168.22.88:8933');
       expect(cfg!.identity.user_id).toBe('auto@example.com');
       expect(cfg!.identity.machine_id).toBe('auto-host-12345678');
 

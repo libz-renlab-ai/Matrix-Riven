@@ -10,7 +10,7 @@
  *
  * Env vars (legacy `TEAMAGENT_*` / `BPP_*` names accepted with a deprecation
  * warning — see compat.ts):
- *   PORT                       (default 8080)
+ *   PORT                       (default 8933)
  *   HOST                       (default 0.0.0.0)
  *   RIVEN_COLLECTOR_DIR        (default $HOME/riven-collector;
  *                               legacy: TEAMAGENT_COLLECTOR_DIR / ~/teamagent-collector)
@@ -39,7 +39,7 @@ export async function runProdServer(deps: RunProdServerDeps = {}): Promise<() =>
   const home = (deps.homedir ?? homedir)();
   const log = deps.log ?? ((msg: string) => process.stderr.write(`${msg}\n`));
 
-  const portRaw = env.PORT ?? '8080';
+  const portRaw = env.PORT ?? '8933';
   const portParsed = Number(portRaw);
   if (!Number.isInteger(portParsed) || portParsed < 0 || portParsed > 65535) {
     throw new Error(

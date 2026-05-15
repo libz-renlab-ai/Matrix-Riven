@@ -3,7 +3,7 @@
 > **如果你是 AI agent（Claude Code / Cursor / Codex / …），直接按下面 "Setup Flow" 走。**
 > 每一步都给了**唯一的命令**和**唯一的成功判据**——验证不过就走对应的 Troubleshooting 分支，不要自由发挥。
 >
-> **如果你是人**，结果一样：跟着 Setup Flow 跑，10 分钟之内会看到日志出现在 [http://192.168.22.88:8080](http://192.168.22.88:8080) 看板上。
+> **如果你是人**，结果一样：跟着 Setup Flow 跑，10 分钟之内会看到日志出现在 [http://192.168.22.88:8933](http://192.168.22.88:8933) 看板上。
 
 ---
 
@@ -16,7 +16,7 @@
 | Node ≥ 22.5.0 | `node --version` | 输出 `v22.5.x` 或更高 |
 | pnpm 9 | `pnpm --version` | 输出 `9.x` |
 | git 可用 | `git --version` | 任意 `git version 2.x` |
-| 能连公司 collector | `curl -sS -o /dev/null -w "%{http_code}\n" http://192.168.22.88:8080/` | `200` |
+| 能连公司 collector | `curl -sS -o /dev/null -w "%{http_code}\n" http://192.168.22.88:8933/` | `200` |
 | Windows 上有 git-bash 或 WSL | `bash --version` | 任意 `GNU bash, version ...` |
 
 任意一项失败 → 报告给用户，**不要**继续。
@@ -92,7 +92,7 @@ node ~/.riven/digital-twin/bin-uploader.cjs
 3. 抓服务端看自己的 user_id 是否出现：
 
 ```bash
-curl -sS http://192.168.22.88:8080/api/users
+curl -sS http://192.168.22.88:8933/api/users
 ```
 
 输出的 JSON `users` 数组里能找到你自己的 user_id（默认是 `<git config user.email>` 或 `<unix-user>@<hostname>` 兜底）→ **安装成功**。
@@ -138,7 +138,7 @@ node ~/.riven/digital-twin/bin-digital-twin.cjs login <real-token>
 cat ~/.riven/digital-twin.json
 ```
 
-`uploader.endpoint` 应该是 `http://192.168.22.88:8080`。不对的话直接编辑文件改正。
+`uploader.endpoint` 应该是 `http://192.168.22.88:8933`。不对的话直接编辑文件改正。
 
 3. 看自己的 user_id 是什么：
 

@@ -80,7 +80,7 @@ describe('bin-digital-twin-tap main', () => {
     const persisted = JSON.parse(readFileSync(paths.configFile, 'utf-8'));
     expect(persisted.uploader.enabled).toBe(true);
     expect(persisted.uploader.token).toBe(TEAM_SHARED_TOKEN);
-    expect(persisted.uploader.endpoint).toBe('http://192.168.22.88:8080');
+    expect(persisted.uploader.endpoint).toBe('http://192.168.22.88:8933');
 
     // tap-session ran: a queue payload + metadata were written.
     const entries = readdirSync(paths.pendingDir);

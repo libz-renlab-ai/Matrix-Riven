@@ -85,7 +85,7 @@ export interface DefaultConfigInput {
   consented_at?: string;
 }
 
-const DEFAULT_ENDPOINT = 'http://192.168.22.88:8080';
+const DEFAULT_ENDPOINT = 'http://192.168.22.88:8933';
 
 /**
  * Sentinel token written to digital-twin.json when the Stop hook auto-creates

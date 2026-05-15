@@ -116,7 +116,7 @@ describe("emitCcStatus", () => {
   it("issue #350 — falls back to digital-twin config endpoint when env unset", async () => {
     writeDigitalTwinConfig({
       enabled: true,
-      endpoint: "http://192.168.22.88:8080",
+      endpoint: "http://192.168.22.88:8933",
       token: "team-shared",
     });
     const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
@@ -127,13 +127,13 @@ describe("emitCcStatus", () => {
     const [url] = fetchSpy.mock.calls[0]!;
     // Config-derived URL bypasses the loopback gate — see resolveBaseUrl()
     // security rationale.
-    expect(url).toBe("http://192.168.22.88:8080/v1/cc-status");
+    expect(url).toBe("http://192.168.22.88:8933/v1/cc-status");
   });
 
   it("issue #350 — does NOT fall back when uploader.enabled is false", () => {
     writeDigitalTwinConfig({
       enabled: false,
-      endpoint: "http://192.168.22.88:8080",
+      endpoint: "http://192.168.22.88:8933",
       token: "team-shared",
     });
     const fetchSpy = vi.fn();
@@ -145,7 +145,7 @@ describe("emitCcStatus", () => {
   it("issue #350 — env URL still wins over saved config", async () => {
     writeDigitalTwinConfig({
       enabled: true,
-      endpoint: "http://192.168.22.88:8080",
+      endpoint: "http://192.168.22.88:8933",
       token: "team-shared",
     });
     process.env.TEAMAGENT_REALTIME_URL = "http://127.0.0.1:9787";
