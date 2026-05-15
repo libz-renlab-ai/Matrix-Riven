@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CcStatusSnapshot } from '@matrix-riven/shared';
-import { aggregateCost, aggregateProductivity, aggregateProjects, aggregateQuality } from '../aggregator.js';
+import { aggregateCost, aggregateProductivity, aggregateProjects, aggregateQuality, buildOverview } from '../aggregator.js';
 import type { RawSnapshots } from '../types.js';
 
 // ────────────────────────────── fixture helpers ──────────────────────────────
@@ -360,5 +360,34 @@ describe('aggregateQuality', () => {
       { user_id: 'b@x', redaction_count: 3 },
     ]);
     expect(out.team_total_redactions).toBe(3);
+  });
+});
+
+// ────────────────────────────── buildOverview ──────────────────────────────
+
+describe('buildOverview', () => {
+  it('returns top-level shape with date, generated_at, and all four blocks', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({ session_id: 's1', user_id: 'a@x', cost_usd: 1, turn_count: 5 }));
+    const out = buildOverview(raw, '2026-05-15');
+    expect(out.date).toBe('2026-05-15');
+    expect(typeof out.generated_at).toBe('string');
+    expect(Number.isFinite(Date.parse(out.generated_at))).toBe(true);
+    expect(out.cost.team_total_usd).toBe(1);
+    expect(out.productivity.per_user).toHaveLength(1);
+    expect(out.projects.top_cwd).toEqual([]);
+    expect(out.quality.team_total_redactions).toBe(0);
+  });
+
+  it('empty input returns structurally-complete response with zero/empty values', () => {
+    const out = buildOverview(emptyRaw(), '2026-05-15');
+    expect(out).toEqual({
+      date: '2026-05-15',
+      generated_at: expect.any(String),
+      cost: { team_total_usd: 0, per_user: [], quota_per_user: [], model_distribution: [] },
+      productivity: { per_user: [] },
+      projects: { top_cwd: [], top_git_branch: [], user_cwd_matrix: [] },
+      quality: { team_total_redactions: 0, redactions_per_user: [], tool_failures_per_user: [], out_of_control_sessions: [] },
+    });
   });
 });

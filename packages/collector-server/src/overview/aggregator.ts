@@ -5,6 +5,7 @@ import type {
   CostPerUser,
   ModelDistribution,
   OutOfControlSession,
+  OverviewResponse,
   ProductivityBlock,
   ProductivityPerUser,
   ProjectsBlock,
@@ -291,5 +292,18 @@ export function aggregateQuality(raw: RawSnapshots): QualityBlock {
     redactions_per_user,
     tool_failures_per_user,
     out_of_control_sessions,
+  };
+}
+
+// ────────────────────────────── buildOverview ──────────────────────────────
+
+export function buildOverview(raw: RawSnapshots, date: string): OverviewResponse {
+  return {
+    date,
+    generated_at: new Date().toISOString(),
+    cost: aggregateCost(raw),
+    productivity: aggregateProductivity(raw),
+    projects: aggregateProjects(raw),
+    quality: aggregateQuality(raw),
   };
 }
