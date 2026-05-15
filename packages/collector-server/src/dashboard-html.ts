@@ -416,6 +416,7 @@ header button:hover { background: #1d4ed8; }
 
   function renderQuality(q) {
     var body = $('panel-quality').querySelector('.panel-body');
+    if (!q) { body.innerHTML = '<div class="empty">No data</div>'; return; }
     var html = '<div class="big-number">' + (q.team_total_redactions || 0) + '</div>' +
       '<div class="muted">L1 sensitive-field redactions today</div>';
     if (q.redactions_per_user.length === 0 && q.tool_failures_per_user.length === 0 && q.out_of_control_sessions.length === 0) {
