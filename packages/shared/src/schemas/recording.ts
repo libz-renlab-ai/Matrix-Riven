@@ -53,11 +53,17 @@ export interface RecordingMetadata {
   payload_size: number;
   source: string;
   host: { os: string; arch: string; hostname: string };
-  teamagent_version: string;
+  /** Matrix-Riven client version that wrote this queue entry. */
+  riven_version: string;
+  /**
+   * @deprecated Renamed to `riven_version`. Kept readable for in-flight
+   * queue entries written by older (TeamBrain-era) clients.
+   */
+  teamagent_version?: string;
   schema_version: 1;
   /**
-   * Issue #266 F7 — ISO timestamp of the first transient/network upload
-   * failure. Same semantics as CcSessionMetadata.first_failed_at.
+   * ISO timestamp of the first transient/network upload failure. Same
+   * semantics as CcSessionMetadata.first_failed_at.
    */
   first_failed_at?: string;
 }
@@ -75,8 +81,9 @@ export interface RecordingEnvelopeBlock {
   payload_size: number;
   source: string;
   host: { os: string; arch: string; hostname: string };
-  teamagent_version: string;
-  /** ISO timestamp first persisted into config (issue #146 F9 audit field). */
+  /** Matrix-Riven client version that produced this envelope. */
+  riven_version: string;
+  /** ISO timestamp first persisted into config (audit field). */
   consented_at: string | null;
 }
 
@@ -124,7 +131,11 @@ export function buildRecordingEnvelope(
       payload_size: input.metadata.payload_size,
       source: input.metadata.source,
       host: input.metadata.host,
-      teamagent_version: input.metadata.teamagent_version,
+      // Compat: accept legacy `teamagent_version` metadata from older clients.
+      riven_version:
+        input.metadata.riven_version ??
+        input.metadata.teamagent_version ??
+        'unknown',
       consented_at: input.identity.consented_at ?? null,
     },
     audio: {
@@ -156,7 +167,9 @@ export function isRecordingMetadata(v: unknown): v is RecordingMetadata {
     o.container === 'ogg' &&
     typeof o.payload_size === 'number' &&
     typeof o.source === 'string' &&
-    typeof o.teamagent_version === 'string' &&
+    // Accept either `riven_version` (canonical) or legacy `teamagent_version`.
+    (typeof o.riven_version === 'string' ||
+      typeof o.teamagent_version === 'string') &&
     o.schema_version === 1
   );
 }

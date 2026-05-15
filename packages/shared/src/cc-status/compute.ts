@@ -1,13 +1,12 @@
 /**
- * Issue #350 — pure helpers for assembling a {@link CcStatusSnapshot}.
+ * Pure helpers for assembling a {@link CcStatusSnapshot}.
  *
  * Everything here is a pure function: no `fs`, no clock except what the caller
- * injects via `nowMs`. The impure shell (the statusline `.cjs` and any hook
- * entry that wires this up) reads the transcript files / quota cache / git
- * branch and feeds the parsed values in. This mirrors the field-computation
- * already shipped in `scripts/teamagent-statusline.cjs` (#337) — that file
- * stays standalone (it can't import a workspace package), so treat this module
- * as the canonical spec the statusline parallels.
+ * injects via `nowMs`. The impure shell (any hook entry that wires this up)
+ * reads the transcript files / quota cache / git branch and feeds the parsed
+ * values in. Historically this module mirrored a standalone statusline script
+ * that lived in the upstream TeamBrain repo (`scripts/teamagent-statusline.cjs`,
+ * not present in Matrix-Riven); treat this module as the canonical spec.
  */
 import {
   CC_STATUS_SCHEMA_VERSION,

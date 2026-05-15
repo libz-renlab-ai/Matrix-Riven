@@ -4,6 +4,7 @@
  * 不引入 packages/cli 的 runHook 框架。绝不抛错、绝不阻塞会话。
  */
 import path from 'node:path';
+import { readEnvWithLegacy } from '@matrix-riven/shared';
 import { emitCcStatus } from './realtime-emit.js';
 
 async function readStdin(): Promise<string> {
@@ -15,7 +16,7 @@ async function readStdin(): Promise<string> {
 export async function main(
   stdinReader: () => Promise<string> = readStdin,
 ): Promise<void> {
-  if (process.env.TEAMAGENT_DISABLED === '1') return;
+  if (readEnvWithLegacy(process.env, 'RIVEN_DISABLED', 'TEAMAGENT_DISABLED') === '1') return;
   let raw: string;
   try {
     raw = (await stdinReader()).trim();

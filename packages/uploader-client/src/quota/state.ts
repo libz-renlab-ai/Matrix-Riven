@@ -6,7 +6,7 @@
  *
  *   1. Read OAuth credentials from `~/.claude/.credentials.json`.
  *   2. Persist the most recent successful quota probe to
- *      `~/.teamagent/digital-twin/quota-cache.json`.
+ *      `<dataRootDir>/digital-twin/quota-cache.json`.
  *   3. Load the cache on probe failure.
  *
  * All functions take fs hooks via deps so tests stay hermetic.

@@ -12,6 +12,7 @@ import {
   loadConfig,
   isEnabled,
   digitalTwinPaths,
+  readEnvWithLegacy,
 } from '@matrix-riven/shared';
 import {
   acquirePidLock,
@@ -25,10 +26,10 @@ export interface DaemonRunDeps {
   exit?: (code: number) => void;
   log?: (msg: string) => void;
   /**
-   * Issue #368 — install-time / `teamagent doctor` smoke test. When true, the
-   * daemon proves all top-level imports loaded (no `MODULE_NOT_FOUND` for
-   * `ulid` &c.) and exits 0 immediately, without touching config, the PID
-   * lock, or the upload loop. Defaults to `process.env.TEAMAGENT_UPLOADER_DRYRUN === '1'`.
+   * Install-time smoke test. When true, the daemon proves all top-level
+   * imports loaded (no `MODULE_NOT_FOUND` for `ulid` &c.) and exits 0
+   * immediately, without touching config, the PID lock, or the upload loop.
+   * Defaults to `RIVEN_UPLOADER_DRYRUN === '1'` (legacy `TEAMAGENT_UPLOADER_DRYRUN`).
    */
   dryRun?: boolean;
 }
@@ -38,7 +39,13 @@ export async function runDaemon(deps: DaemonRunDeps = {}): Promise<void> {
   const exit = deps.exit ?? ((code: number) => process.exit(code));
   const log = deps.log ?? ((msg: string) => process.stderr.write(`${msg}\n`));
 
-  const dryRun = deps.dryRun ?? process.env.TEAMAGENT_UPLOADER_DRYRUN === '1';
+  const dryRun =
+    deps.dryRun ??
+    readEnvWithLegacy(
+      process.env,
+      'RIVEN_UPLOADER_DRYRUN',
+      'TEAMAGENT_UPLOADER_DRYRUN',
+    ) === '1';
   if (dryRun) {
     // Reaching here at all means every top-level import resolved — that's the
     // whole point of the probe (the issue #368 bug crashed before this line).

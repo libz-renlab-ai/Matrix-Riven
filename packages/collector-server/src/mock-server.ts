@@ -21,7 +21,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { join, resolve as resolvePath, sep } from 'node:path';
 import { DASHBOARD_HTML } from './dashboard-html.js';
-import { safeUserId, dateStamp } from '@matrix-riven/shared';
+import { safeUserId, dateStamp, readEnvWithLegacy } from '@matrix-riven/shared';
 import {
   appendCcStatusSnapshot,
   readLatestPerSession,
@@ -34,7 +34,8 @@ import {
 import { computeMemberStats } from './member-stats.js';
 // M2 (对话上传通道) — transport security on the conversation-upload path.
 // `wrapServerWithHttps` reuses the plain-HTTP request listener over TLS;
-// `requireBearerToken` gates POST /v1/cc-sessions when BPP_AUTH_TOKEN is set.
+// `requireBearerToken` gates POST /v1/cc-sessions when RIVEN_AUTH_TOKEN (or
+// legacy BPP_AUTH_TOKEN) is set.
 import { wrapServerWithHttps } from './https-server.js';
 import { requireBearerToken } from './auth-gate.js';
 // M2 — server-side L2 scan ("第二层敏感信息扫描（兜底）"): the catch-all for
@@ -62,8 +63,9 @@ export interface MockServerOptions {
    */
   tls?: { keyPath: string; certPath: string };
   /**
-   * M2 — when set (non-empty), `POST /v1/cc-sessions` requires a matching
-   * `Authorization: Bearer <token>`. Defaults to `process.env.BPP_AUTH_TOKEN`.
+   * When set (non-empty), `POST /v1/cc-sessions` requires a matching
+   * `Authorization: Bearer <token>`. Defaults to the `RIVEN_AUTH_TOKEN` env
+   * var (legacy `BPP_AUTH_TOKEN` accepted with a deprecation warning).
    * Empty/undefined = auth disabled (dev/test default).
    */
   authToken?: string;
@@ -552,9 +554,12 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
   mkdirSync(outputDir, { recursive: true });
   const host = opts.host ?? '127.0.0.1';
   const now = opts.now ?? (() => new Date());
-  // M2 — token-auth gate on the conversation-upload endpoint. Empty string
-  // means auth is disabled (the dev/test default).
-  const authToken = opts.authToken ?? process.env.BPP_AUTH_TOKEN ?? '';
+  // Token-auth gate on the conversation-upload endpoint. Empty string means
+  // auth is disabled (the dev/test default).
+  const authToken =
+    opts.authToken ??
+    readEnvWithLegacy(process.env, 'RIVEN_AUTH_TOKEN', 'BPP_AUTH_TOKEN') ??
+    '';
 
   const requestHandler = (req: IncomingMessage, res: ServerResponse): void => {
     if (req.method === 'GET') {

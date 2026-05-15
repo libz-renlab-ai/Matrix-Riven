@@ -1,8 +1,11 @@
 export {
   digitalTwinPaths,
   DEFAULT_PATHS,
+  resolveDataRootDir,
   type DigitalTwinPaths,
 } from './paths.js';
+
+export { readEnvWithLegacy } from './compat.js';
 
 export { MAX_PAYLOAD_BYTES } from './limits.js';
 

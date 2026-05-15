@@ -4,22 +4,27 @@
  *
  * Wraps startMockServer with production defaults:
  *   - Bind 0.0.0.0 (LAN-visible) instead of 127.0.0.1
- *   - outputDir from $TEAMAGENT_COLLECTOR_DIR (default $HOME/teamagent-collector)
+ *   - outputDir from $RIVEN_COLLECTOR_DIR (default $HOME/riven-collector)
  *   - Logs each request line to stderr
  *   - SIGTERM / SIGINT trigger graceful shutdown
  *
- * Env vars:
+ * Env vars (legacy `TEAMAGENT_*` / `BPP_*` names accepted with a deprecation
+ * warning — see compat.ts):
  *   PORT                       (default 8080)
  *   HOST                       (default 0.0.0.0)
- *   TEAMAGENT_COLLECTOR_DIR    (default $HOME/teamagent-collector)
- *   BPP_AUTH_TOKEN             (optional — when set, POST /v1/cc-sessions
- *                               requires `Authorization: Bearer <token>`)
+ *   RIVEN_COLLECTOR_DIR        (default $HOME/riven-collector;
+ *                               legacy: TEAMAGENT_COLLECTOR_DIR / ~/teamagent-collector)
+ *   RIVEN_AUTH_TOKEN           (optional — when set, POST /v1/cc-sessions
+ *                               requires `Authorization: Bearer <token>`;
+ *                               legacy: BPP_AUTH_TOKEN)
  *   HTTPS_KEY_PATH / HTTPS_CERT_PATH
  *                              (optional — when BOTH are set, serve over TLS
  *                               instead of plain HTTP)
  */
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { readEnvWithLegacy } from '@matrix-riven/shared';
 import { startMockServer } from './mock-server.js';
 
 export interface RunProdServerDeps {
@@ -38,17 +43,32 @@ export async function runProdServer(deps: RunProdServerDeps = {}): Promise<() =>
   const portParsed = Number(portRaw);
   if (!Number.isInteger(portParsed) || portParsed < 0 || portParsed > 65535) {
     throw new Error(
-      `[teamagent-collector] invalid PORT='${portRaw}' — must be an integer 0-65535`,
+      `[riven-collector] invalid PORT='${portRaw}' — must be an integer 0-65535`,
     );
   }
   const port = portParsed;
   const host = env.HOST ?? '0.0.0.0';
-  const outputDir = env.TEAMAGENT_COLLECTOR_DIR ?? join(home, 'teamagent-collector');
+  // Resolve outputDir from env, with TeamBrain → Matrix-Riven legacy fallback.
+  // If the env vars are unset, also fall back to the legacy default
+  // (~/teamagent-collector) when that directory exists on disk — so a host
+  // migrating off TeamBrain keeps reading from its existing data dir without
+  // needing the operator to set an env var.
+  const explicitDir = readEnvWithLegacy(
+    env,
+    'RIVEN_COLLECTOR_DIR',
+    'TEAMAGENT_COLLECTOR_DIR',
+  );
+  const rivenDefault = join(home, 'riven-collector');
+  const legacyDefault = join(home, 'teamagent-collector');
+  const outputDir =
+    explicitDir ??
+    (existsSync(legacyDefault) && !existsSync(rivenDefault)
+      ? legacyDefault
+      : rivenDefault);
 
-  // M2 — optional token auth on the conversation-upload endpoint. Passed
-  // explicitly (rather than relying on startMockServer's process.env default)
-  // so an injected `deps.env` is honoured in tests.
-  const authToken = env.BPP_AUTH_TOKEN ?? '';
+  // Optional token auth on the conversation-upload endpoint.
+  const authToken =
+    readEnvWithLegacy(env, 'RIVEN_AUTH_TOKEN', 'BPP_AUTH_TOKEN') ?? '';
   // M2 — optional TLS. Both key + cert paths must be set to serve over HTTPS;
   // a partial config is treated as plain HTTP so a half-finished deploy fails
   // loud (no cert) rather than silently downgrading.
@@ -66,10 +86,10 @@ export async function runProdServer(deps: RunProdServerDeps = {}): Promise<() =>
     authToken,
     tls,
   });
-  log(`[teamagent-collector] listening on ${handle.url}`);
-  log(`[teamagent-collector] outputDir = ${handle.outputDir}`);
-  if (authToken) log(`[teamagent-collector] token auth ENABLED on POST /v1/cc-sessions`);
-  if (tls) log(`[teamagent-collector] TLS ENABLED (key=${tls.keyPath})`);
+  log(`[riven-collector] listening on ${handle.url}`);
+  log(`[riven-collector] outputDir = ${handle.outputDir}`);
+  if (authToken) log(`[riven-collector] token auth ENABLED on POST /v1/cc-sessions`);
+  if (tls) log(`[riven-collector] TLS ENABLED (key=${tls.keyPath})`);
   deps.onReady?.({ url: handle.url, outputDir: handle.outputDir });
 
   return handle.close;
@@ -80,7 +100,7 @@ if (argv1.includes('bin-prod-server')) {
   runProdServer()
     .then((close) => {
       const shutdown = (signal: string) => {
-        process.stderr.write(`[teamagent-collector] ${signal} received — shutting down\n`);
+        process.stderr.write(`[riven-collector] ${signal} received — shutting down\n`);
         close()
           .then(() => process.exit(0))
           .catch((err) => {
@@ -92,7 +112,7 @@ if (argv1.includes('bin-prod-server')) {
       process.on('SIGINT', () => shutdown('SIGINT'));
     })
     .catch((err) => {
-      process.stderr.write(`[teamagent-collector] fatal: ${String(err)}\n`);
+      process.stderr.write(`[riven-collector] fatal: ${String(err)}\n`);
       process.exit(1);
     });
 }

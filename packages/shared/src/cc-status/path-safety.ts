@@ -2,9 +2,7 @@
  * Path-safety primitives shared by `mock-server.ts` (transcript / recording /
  * quota ingest) and `cc-status/store.ts` (cc-status snapshots). Lives in its
  * own no-dep module so both can import it without a circular reference
- * (`mock-server.ts` already imports `cc-status/store.ts`). The standalone
- * `scripts/teamagent-statusline.cjs` keeps its own copy (`ccSafeUserId`) — it
- * can't import a workspace package — with a "keep in sync" comment.
+ * (`mock-server.ts` already imports `cc-status/store.ts`).
  */
 
 /**

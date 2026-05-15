@@ -18,7 +18,7 @@ const meta: CcSessionMetadata = {
   captured_at: '2026-05-08T00:00:00Z',
   source: 'stop-hook',
   host: { os: 'linux', arch: 'x64', hostname: 'h' },
-  teamagent_version: '0.0.0',
+  riven_version: '0.0.0',
   schema_version: 1,
 };
 
@@ -36,7 +36,7 @@ const recordingMeta: RecordingMetadata = {
   payload_size: 1234,
   source: 'recorder',
   host: { os: 'linux', arch: 'x64', hostname: 'h' },
-  teamagent_version: '0.0.0',
+  riven_version: '0.0.0',
   schema_version: 1,
 };
 
@@ -257,7 +257,10 @@ describe('uploadEntry', () => {
               captured_at: input.metadata.captured_at,
               source: input.metadata.source,
               host: input.metadata.host,
-              teamagent_version: input.metadata.teamagent_version,
+              riven_version:
+                input.metadata.riven_version ??
+                input.metadata.teamagent_version ??
+                'unknown',
               consented_at: input.identity.consented_at ?? null,
             },
             transcript: {

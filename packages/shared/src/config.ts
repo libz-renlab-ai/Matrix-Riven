@@ -179,8 +179,8 @@ export interface EnsureDefaultConfigDeps {
  * (`status`) so a surprised user can investigate in two keystrokes.
  */
 export const FIRST_RUN_BANNER =
-  '[teamagent digital-twin] uploader enabled (zero-touch); ' +
-  'pause: `teamagent digital-twin pause` · status: `teamagent digital-twin status`';
+  '[riven digital-twin] uploader enabled (zero-touch); ' +
+  'pause: `bin-digital-twin pause` · status: `bin-digital-twin status`';
 
 function defaultStderr(msg: string): void {
   process.stderr.write(msg.endsWith('\n') ? msg : `${msg}\n`);

@@ -18,7 +18,7 @@ const sampleMeta: CcSessionMetadata = {
   captured_at: '2026-05-08T12:34:56.789Z',
   source: 'stop-hook',
   host: { os: 'linux', arch: 'x64', hostname: 'host-1' },
-  teamagent_version: '0.9.5',
+  riven_version: '0.2.0',
   schema_version: 1,
 };
 
@@ -54,7 +54,7 @@ describe('buildCcSessionEnvelope', () => {
     expect(env.envelope.captured_at).toBe(sampleMeta.captured_at);
     expect(env.envelope.source).toBe(sampleMeta.source);
     expect(env.envelope.host).toEqual(sampleMeta.host);
-    expect(env.envelope.teamagent_version).toBe(sampleMeta.teamagent_version);
+    expect(env.envelope.riven_version).toBe(sampleMeta.riven_version);
   });
 
   it('produces a JSON-serializable envelope (mock-server can read it)', () => {

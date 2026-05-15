@@ -67,7 +67,7 @@ describe('tapSession', () => {
         homedir: () => home,
         ulid: () => fixedUlid,
         now: () => fixedNow,
-        teamagentVersion: '0.9.5',
+        rivenVersion: '0.2.0',
         platform: 'linux',
         arch: 'x64',
         hostname: 'host-1',
@@ -96,7 +96,7 @@ describe('tapSession', () => {
     expect(meta.captured_at).toBe('2026-05-08T12:34:56.789Z');
     expect(meta.source).toBe('stop-hook');
     expect(meta.host).toEqual({ os: 'linux', arch: 'x64', hostname: 'host-1' });
-    expect(meta.teamagent_version).toBe('0.9.5');
+    expect(meta.riven_version).toBe('0.2.0');
     expect(meta.schema_version).toBe(1);
     // Issue #283 — no quota passed; metadata.json must not have a quota field.
     expect(meta.quota).toBeUndefined();
@@ -221,8 +221,8 @@ describe('tapSession', () => {
     expect(inSpec).toBe('ignore');
     expect(typeof outSpec).toBe('number'); // a file descriptor
     expect(outSpec).toBe(errSpec); // same fd for stdout + stderr
-    // The log file itself was created under ~/.teamagent/digital-twin/.
-    const logPath = join(home, '.teamagent', 'digital-twin', 'uploader.log');
+    // The log file itself was created under <dataRootDir>/digital-twin/.
+    const logPath = join(home, '.riven', 'digital-twin', 'uploader.log');
     expect(existsSync(logPath)).toBe(true);
   });
 

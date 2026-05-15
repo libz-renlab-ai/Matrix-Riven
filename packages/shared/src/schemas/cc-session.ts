@@ -30,7 +30,15 @@ export interface CcSessionMetadata {
   captured_at: string;
   source: string;
   host: { os: string; arch: string; hostname: string };
-  teamagent_version: string;
+  /** Matrix-Riven client version that wrote this queue entry. */
+  riven_version: string;
+  /**
+   * @deprecated Renamed to `riven_version`. Kept readable here so in-flight
+   * queue entries written by older (TeamBrain-era) clients still parse —
+   * `buildCcSessionEnvelope` falls back to this field when `riven_version`
+   * is missing.
+   */
+  teamagent_version?: string;
   schema_version: 1;
   /**
    * Issue #283 — optional Max-tier quota snapshot persisted alongside the
@@ -61,8 +69,9 @@ export interface CcSessionEnvelopeBlock {
   captured_at: string;
   source: string;
   host: { os: string; arch: string; hostname: string };
-  teamagent_version: string;
-  /** ISO timestamp first persisted into config (issue #146 F9 audit field). */
+  /** Matrix-Riven client version that produced this envelope. */
+  riven_version: string;
+  /** ISO timestamp first persisted into config (audit field). */
   consented_at: string | null;
 }
 
@@ -145,7 +154,13 @@ export function buildCcSessionEnvelope(input: BuildEnvelopeInput): CcSessionEnve
       captured_at: input.metadata.captured_at,
       source: input.metadata.source,
       host: input.metadata.host,
-      teamagent_version: input.metadata.teamagent_version,
+      // Prefer the canonical `riven_version`; fall back to the deprecated
+      // `teamagent_version` field for in-flight queue entries written by
+      // older clients.
+      riven_version:
+        input.metadata.riven_version ??
+        input.metadata.teamagent_version ??
+        'unknown',
       consented_at: input.identity.consented_at ?? null,
     },
     transcript: {

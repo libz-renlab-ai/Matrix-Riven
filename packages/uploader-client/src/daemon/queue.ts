@@ -1,7 +1,7 @@
 /**
  * Queue operations for the digital-twin uploader daemon.
  *
- * Layout under `~/.teamagent/digital-twin/queue/`:
+ * Layout under `<dataRootDir>/digital-twin/queue/`:
  *   pending/<ulid>.payload  + <ulid>.json
  *   dead-letter/<ulid>.payload + <ulid>.json
  *   recording_temp/         (PR-4)

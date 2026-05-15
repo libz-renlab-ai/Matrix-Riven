@@ -40,7 +40,7 @@ function metaForId(id: string): CcSessionMetadata {
     captured_at: '2026-05-08T00:00:00Z',
     source: 'stop-hook',
     host: { os: 'linux', arch: 'x64', hostname: 'h' },
-    teamagent_version: '0.0.0',
+    riven_version: '0.0.0',
     schema_version: 1,
   };
 }

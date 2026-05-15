@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { runProdServer } from '../bin-prod-server.js';
 
 describe('runProdServer', () => {
-  it('binds host/port from env, writes to $TEAMAGENT_COLLECTOR_DIR, logs ready', async () => {
+  it('binds host/port from env, writes to $RIVEN_COLLECTOR_DIR, logs ready', async () => {
     const outputDir = mkdtempSync(join(tmpdir(), 'dt-prod-'));
     const logs: string[] = [];
     let info: { url: string; outputDir: string } | undefined;
@@ -15,7 +15,7 @@ describe('runProdServer', () => {
       env: {
         PORT: '0',
         HOST: '127.0.0.1',
-        TEAMAGENT_COLLECTOR_DIR: outputDir,
+        RIVEN_COLLECTOR_DIR: outputDir,
       } as NodeJS.ProcessEnv,
       homedir: () => '/tmp/notused',
       log: (msg: string) => logs.push(msg),
@@ -52,7 +52,7 @@ describe('runProdServer', () => {
     await close();
   });
 
-  it('falls back to $HOME/teamagent-collector when env var unset', async () => {
+  it('falls back to $HOME/riven-collector when env vars unset and no legacy dir', async () => {
     const fakeHome = mkdtempSync(join(tmpdir(), 'dt-home-'));
     let info: { outputDir: string } | undefined;
     const close = await runProdServer({
@@ -63,7 +63,44 @@ describe('runProdServer', () => {
         info = i;
       },
     });
+    expect(info!.outputDir).toBe(join(fakeHome, 'riven-collector'));
+    await close();
+  });
+
+  it('falls back to legacy $HOME/teamagent-collector when only that dir exists', async () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), 'dt-home-'));
+    // Pre-create the legacy dir so the bin-prod-server can find it.
+    mkdirSync(join(fakeHome, 'teamagent-collector'), { recursive: true });
+    let info: { outputDir: string } | undefined;
+    const close = await runProdServer({
+      env: { PORT: '0', HOST: '127.0.0.1' } as NodeJS.ProcessEnv,
+      homedir: () => fakeHome,
+      log: () => {},
+      onReady: (i) => {
+        info = i;
+      },
+    });
     expect(info!.outputDir).toBe(join(fakeHome, 'teamagent-collector'));
+    await close();
+  });
+
+  it('honours legacy TEAMAGENT_COLLECTOR_DIR env var with a deprecation warning', async () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), 'dt-home-'));
+    const explicitDir = mkdtempSync(join(tmpdir(), 'dt-explicit-'));
+    let info: { outputDir: string } | undefined;
+    const close = await runProdServer({
+      env: {
+        PORT: '0',
+        HOST: '127.0.0.1',
+        TEAMAGENT_COLLECTOR_DIR: explicitDir,
+      } as NodeJS.ProcessEnv,
+      homedir: () => fakeHome,
+      log: () => {},
+      onReady: (i) => {
+        info = i;
+      },
+    });
+    expect(info!.outputDir).toBe(explicitDir);
     await close();
   });
 

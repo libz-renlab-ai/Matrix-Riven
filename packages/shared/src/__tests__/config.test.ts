@@ -226,7 +226,7 @@ describe('config', () => {
     it('malformed JSON → returns null, file untouched', () => {
       const home = freshHome();
       const file = digitalTwinPaths(home).configFile;
-      const { teamagentDir } = digitalTwinPaths(home);
+      const { dataRootDir } = digitalTwinPaths(home);
       // Ensure parent dir exists, then write garbage.
       saveConfig(defaultConfig({ user_id: 'placeholder', machine_id: 'p' }), file);
       writeFileSync(file, '{not valid json', 'utf-8');
@@ -238,7 +238,7 @@ describe('config', () => {
       const after = readFileSync(file, 'utf-8');
       expect(after).toBe(before);
       // Sanity: dir really existed.
-      expect(existsSync(teamagentDir)).toBe(true);
+      expect(existsSync(dataRootDir)).toBe(true);
     });
 
     it('shape-invalid JSON (missing uploader block) → returns null, file untouched', () => {
@@ -272,7 +272,7 @@ describe('config', () => {
       expect(cfg!.consented_at).toBe(fixedNow.toISOString());
       // Single banner; mentions both pause + status (so user can navigate).
       expect(notifications).toHaveLength(1);
-      expect(notifications[0]).toContain('teamagent digital-twin');
+      expect(notifications[0]).toContain('riven digital-twin');
       expect(notifications[0]).toMatch(/pause/i);
       expect(notifications[0]).toMatch(/status/i);
     });

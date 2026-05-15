@@ -11,7 +11,7 @@
  * - NEVER exits non-zero. Stop hook must not block session close.
  * - Returns silently if config disables digital-twin or if no transcript exists.
  * - Best-effort daemon spawn via resolveDaemonBin: prefers the user-installed
- *   `~/.teamagent/digital-twin/bin-uploader.cjs`, falls back to the monorepo
+ *   `<dataRootDir>/digital-twin/bin-uploader.cjs`, falls back to the monorepo
  *   build at `packages/digital-twin/dist/bin-uploader.cjs`, and silently
  *   self-installs the latter to the former on first hit. If neither exists,
  *   queue files persist for a future tick to pick up.
@@ -30,6 +30,7 @@ import {
   ensureDefaultConfig,
   isEnabled,
   digitalTwinPaths,
+  readEnvWithLegacy,
 } from '@matrix-riven/shared';
 import {
   tapSession,
@@ -82,7 +83,7 @@ export interface ResolveDaemonBinDeps {
  * is reachable (queue files then persist for a future tick to pick up).
  *
  * Lookup order:
- *   1. `~/.teamagent/digital-twin/bin-uploader.cjs` — the user-installed
+ *   1. `<dataRootDir>/digital-twin/bin-uploader.cjs` — the user-installed
  *      production location. Stable across worktrees and `git pull`s, so the
  *      daemon stays runnable even when the working tree is mid-rebase.
  *   2. `<monorepo>/packages/uploader-client/dist/bin-uploader.cjs` — fallback
@@ -107,16 +108,12 @@ export interface ResolveDaemonBinDeps {
  *     `monorepoDist` so this tick still spawns the daemon. Next tick may
  *     succeed if the failure was transient.
  *
- * Staleness story (issue #146 install-hook TODO, resolved): this runtime
- * self-install runs only on first hit; once `userInstalled` exists the
- * monorepo bundle is not re-checked here. The canonical upgrade path is
- * now `teamagent install-hook`, which stages `bin-uploader.cjs` into the
- * same `<userInstalled>` location alongside the hook bundles via
- * `stageDaemonBinaryToUser`. This `resolveDaemonBin` self-install is kept
- * as a safety net for fresh installs that haven't run install-hook yet
- * (and for dev worktrees where `pnpm --filter @matrix-riven/uploader-client
- * build` is run after `teamagent install-hook`), not as the primary
- * upgrade mechanism.
+ * Staleness story: this runtime self-install runs only on first hit; once
+ * `userInstalled` exists the monorepo bundle is not re-checked here. A
+ * canonical `riven install-hook` upgrade path is on the roadmap but not yet
+ * shipped — until it lands, the dev workflow is `pnpm --filter
+ * @matrix-riven/uploader-client build` followed by re-firing a Stop hook
+ * (or deleting the cached `<userInstalled>` copy) to repopulate.
  */
 export function resolveDaemonBin(
   home: string,
@@ -128,14 +125,13 @@ export function resolveDaemonBin(
   const userInstalled = path.join(paths.digitalTwinDir, 'bin-uploader.cjs');
   if (ex(userInstalled)) return userInstalled;
 
-  // Issue #368 (v0.11.1) — same-dir fallback. In a published tarball install,
-  // `bin-digital-twin-tap.cjs` lives at `<install>/dist/` next to a sibling
-  // `bin-uploader.cjs` (both bundled by `packages/uploader-client/tsup.config.ts`).
-  // Returning that sibling directly lets the very first Stop hook fire — on a
-  // machine where `teamagent install-user-hook` had no chance to stage the
-  // binary yet — spawn the daemon. Self-install logic below still triggers on
-  // first hit so subsequent ticks resolve via `userInstalled` (cheaper, and
-  // stable across `git pull` / nvm switch).
+  // Same-dir fallback. In a published tarball install, `bin-digital-twin-tap.cjs`
+  // lives at `<install>/dist/` next to a sibling `bin-uploader.cjs` (both
+  // bundled by `packages/uploader-client/tsup.config.ts`). Returning that
+  // sibling directly lets the very first Stop hook fire on a fresh install —
+  // before any installer has had a chance to stage the binary — spawn the
+  // daemon. Self-install logic below still triggers on first hit so subsequent
+  // ticks resolve via `userInstalled` (cheaper, and stable across `git pull`).
   const sameDirBin = path.join(here, 'bin-uploader.cjs');
   if (ex(sameDirBin)) {
     return selfInstallFromSource(
@@ -200,7 +196,7 @@ function selfInstallFromSource(
       return dest;
     } catch (copyErr) {
       log(
-        `[teamagent.digital-twin] resolveDaemonBin self-install failed: ${String(copyErr)}\n`,
+        `[riven.digital-twin] resolveDaemonBin self-install failed: ${String(copyErr)}\n`,
       );
       return src;
     }
@@ -224,12 +220,10 @@ export async function main(
   arg1: (() => Promise<string>) | MainDeps = readStdin,
   arg2: (() => string) = homedir,
 ): Promise<void> {
-  // Issue #343 PR-1: master kill switch. When TEAMAGENT_DISABLED=1 the
-  // digital-twin tap bails before reading stdin, config load, and the
-  // tapSession() forward to @matrix-riven/uploader-client. This hook bypasses
-  // runHook/runAdvancedHook (no ctx), so the check reads process.env
-  // directly.
-  if (process.env.TEAMAGENT_DISABLED === '1') return;
+  // Master kill switch. When RIVEN_DISABLED=1 (or legacy TEAMAGENT_DISABLED=1)
+  // the digital-twin tap bails before reading stdin, config load, and the
+  // tapSession() forward.
+  if (readEnvWithLegacy(process.env, 'RIVEN_DISABLED', 'TEAMAGENT_DISABLED') === '1') return;
   // Back-compat positional signature: (stdinReader, homedirFn).
   // New signature: (deps: MainDeps).
   const deps: MainDeps =
@@ -238,7 +232,7 @@ export async function main(
   const homedirFn = deps.homedir ?? homedir;
   const home = homedirFn();
   // Zero-touch onboarding: auto-create a default config on first invocation
-  // so newly-installed teammates don't need to run `teamagent digital-twin
+  // so newly-installed teammates don't need to run `bin-digital-twin
   // login` manually. Respects `enabled: false` (user-paused) and malformed
   // JSON (returns null → silent skip below).
   let cfg;

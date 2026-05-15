@@ -1,8 +1,8 @@
 /**
- * `teamagent digital-twin <subcommand>` handlers.
+ * `riven digital-twin <subcommand>` handlers (binary: `bin-digital-twin.cjs`).
  *
  * 7 subcommands:
- *   - login <token>  → write token to ~/.teamagent/digital-twin.json
+ *   - login <token>  → write token to <dataRootDir>/digital-twin.json
  *   - logout         → clear uploader.token
  *   - status         → human-readable config + queue + daemon status
  *   - pause          → uploader.enabled = false
@@ -10,7 +10,7 @@
  *   - inject-mock    → enqueue a synthetic cc-session for local testing
  *   - member-stats   → query the central server for this member's upload
  *                      stats (已上传对话总量 / 最近一次上传时间 / 敏感字段被
- *                      模糊化次数) — M2 对话上传通道 self-view
+ *                      模糊化次数) — 对话上传通道 self-view
  *
  * Handlers accept dependency injection via `homedir` + `print` so tests can
  * point at a tmp HOME and capture stdout without touching the real shell.
@@ -24,6 +24,7 @@ import {
   loadConfig,
   saveConfig,
   defaultConfig,
+  ensureDefaultConfig,
   getUserId,
   getMachineId,
 } from '@matrix-riven/shared';
@@ -95,14 +96,14 @@ export function parseDigitalTwinArgs(rest: string[]): DigitalTwinParsedArgs {
   const sub = rest[0];
   if (!sub) {
     throw new DigitalTwinArgError(
-      'Usage: teamagent digital-twin <login|logout|status|pause|resume|inject-mock|member-stats> [args]',
+      'Usage: bin-digital-twin <login|logout|status|pause|resume|inject-mock|member-stats> [args]',
     );
   }
   switch (sub) {
     case 'login': {
       const token = rest[1];
       if (!token) {
-        throw new DigitalTwinArgError('Usage: teamagent digital-twin login <token>');
+        throw new DigitalTwinArgError('Usage: bin-digital-twin login <token>');
       }
       return { sub: 'login', token };
     }
@@ -213,7 +214,7 @@ export function executeDigitalTwinPause(deps: DigitalTwinDeps = {}): DigitalTwin
   const existing = loadConfig(paths.configFile);
   if (!existing) {
     r.printErr(
-      'digital-twin: not configured (run `teamagent digital-twin login <token>` first)',
+      'digital-twin: not configured (run `bin-digital-twin login <token>` first)',
     );
     return { exitCode: 1 };
   }
@@ -230,7 +231,7 @@ export function executeDigitalTwinResume(deps: DigitalTwinDeps = {}): DigitalTwi
   const existing = loadConfig(paths.configFile);
   if (!existing) {
     r.printErr(
-      'digital-twin: not configured (run `teamagent digital-twin login <token>` first)',
+      'digital-twin: not configured (run `bin-digital-twin login <token>` first)',
     );
     return { exitCode: 1 };
   }
@@ -259,7 +260,7 @@ export function executeDigitalTwinStatus(deps: DigitalTwinDeps = {}): DigitalTwi
   const existing = loadConfig(paths.configFile);
   if (!existing) {
     r.print(
-      'digital-twin: not configured (run `teamagent digital-twin login <token>`)',
+      'digital-twin: not configured (run `bin-digital-twin login <token>`)',
     );
     return { exitCode: 0 };
   }
@@ -317,6 +318,21 @@ export function executeDigitalTwinInjectMock(
   const cwd = parsed.cwd ?? r.cwd();
   const sessionId = parsed.sessionId ?? r.ulid();
 
+  // Mirror what `bin-digital-twin-tap.cjs` does on a real Stop event: ensure a
+  // default config exists before enqueueing, so a fresh-install verify path
+  // (where the user has never run `login` or fired a real Stop hook) can
+  // round-trip through the daemon. Without this, the subsequent
+  // `bin-uploader.cjs` run exits 2 ("config missing or disabled") and the
+  // queued payload silently piles up.
+  try {
+    ensureDefaultConfig(home);
+  } catch (err) {
+    r.printErr(
+      `digital-twin inject-mock: failed to ensure default config: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return { exitCode: 1 };
+  }
+
   const transcript = claudeTranscriptPath(home, cwd, sessionId);
   try {
     mkdirSync(dirname(transcript), { recursive: true });
@@ -366,7 +382,7 @@ export function executeDigitalTwinInjectMock(
 const DEFAULT_MEMBER_STATS_SERVER = 'http://127.0.0.1:8080';
 
 /**
- * `teamagent digital-twin member-stats` — M2 (对话上传通道) self-view. Queries
+ * `bin-digital-twin member-stats` — 对话上传通道 self-view. Queries
  * the central server's `GET /v1/member-stats?user=` for this member's
  * 已上传对话总量 / 最近一次上传时间 / 敏感字段被模糊化次数.
  */
@@ -382,7 +398,7 @@ export async function executeDigitalTwinMemberStats(
   const user = parsed.user ?? userIdFn();
   if (!user) {
     r.printErr(
-      'digital-twin member-stats: 无法确定成员身份 — 用 --user=<id> 指定，或先跑 `teamagent digital-twin login`',
+      'digital-twin member-stats: 无法确定成员身份 — 用 --user=<id> 指定，或先跑 `bin-digital-twin login`',
     );
     return { exitCode: 1 };
   }

@@ -20,7 +20,7 @@ const sampleMeta: RecordingMetadata = {
   payload_size: 1234,
   source: 'recorder',
   host: { os: 'linux', arch: 'x64', hostname: 'host-1' },
-  teamagent_version: '0.9.5',
+  riven_version: '0.2.0',
   schema_version: 1,
 };
 
@@ -66,7 +66,7 @@ describe('buildRecordingEnvelope', () => {
     expect(env.envelope.payload_size).toBe(sampleMeta.payload_size);
     expect(env.envelope.source).toBe(sampleMeta.source);
     expect(env.envelope.host).toEqual(sampleMeta.host);
-    expect(env.envelope.teamagent_version).toBe(sampleMeta.teamagent_version);
+    expect(env.envelope.riven_version).toBe(sampleMeta.riven_version);
     expect(env.audio.codec).toBe('opus');
     expect(env.audio.bitrate).toBe(24000);
     expect(env.audio.sample_rate).toBe(16000);

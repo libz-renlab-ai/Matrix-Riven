@@ -292,7 +292,7 @@ describe('executeDigitalTwinStatus', () => {
     expect(r.exitCode).toBe(0);
     const joined = c.out.join('\n');
     expect(joined).toContain('not configured');
-    expect(joined).toContain('teamagent digital-twin login');
+    expect(joined).toContain('bin-digital-twin login');
   });
 
   it('prints multi-line status with config + queue + daemon info', () => {

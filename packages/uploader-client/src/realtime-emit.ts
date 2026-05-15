@@ -1,28 +1,27 @@
 /**
- * Feature #2 v3 — env-gated fire-and-forget emitter wired into the
- * SessionStart and UserPromptSubmit hook bundles.
+ * Env-gated fire-and-forget emitter wired into the SessionStart and
+ * UserPromptSubmit hook bundles.
  *
- * PR #401 shipped the receiver-side primitives (`realtime-client.ts` +
- * `realtime-stream.ts` + `bin-realtime-demo.ts`) but never wired any hook to
- * them, so the only thing the boss kanban ever showed was the demo's three
- * synthetic teammates. This helper closes that gap with the smallest possible
- * surface: when `TEAMAGENT_REALTIME_URL` is set, emit one snapshot per hook
- * fire; when it's unset, no-op.
+ * When `RIVEN_REALTIME_URL` (or legacy `TEAMAGENT_REALTIME_URL`) is set, emit
+ * one cc-status snapshot per hook fire; when it's unset, fall through to the
+ * saved digital-twin config endpoint, and if neither resolves no-op.
  *
- * Contract (matches plan v2 §1 and the comment block at the top of
- * `realtime-client.ts`):
+ * Contract:
  *   - Never throws. Every call is wrapped in try/catch; any failure logs at
- *     most one line to stderr (and only if TEAMAGENT_REALTIME_DEBUG=1).
+ *     most one line to stderr (and only if RIVEN_REALTIME_DEBUG=1).
  *   - Never blocks. The fetch is fire-and-forget — we `void` the promise and
  *     return synchronously. The hook lifecycle drains microtasks before
  *     exiting, so the timeout fires inside the same process tick.
- *   - Never retries. Drops on timeout / 5xx / network. M5 git-sync remains
- *     the final-consistency fallback for anything the receiver dropped.
+ *   - Never retries. Drops on timeout / 5xx / network.
  *
- * Env:
- *   TEAMAGENT_REALTIME_URL    — base URL (e.g. http://127.0.0.1:9787). Unset → no-op.
- *   TEAMAGENT_REALTIME_TOKEN  — optional bearer for the receiver.
- *   TEAMAGENT_REALTIME_DEBUG  — when "1", logs every emit outcome.
+ * Env (legacy `TEAMAGENT_*` names are accepted with a deprecation warning):
+ *   RIVEN_REALTIME_URL          — base URL (e.g. http://127.0.0.1:9787). Unset → fall back to saved config.
+ *   RIVEN_REALTIME_TOKEN        — optional bearer for the receiver.
+ *   RIVEN_REALTIME_ALLOW_REMOTE — "1" to allow non-loopback env URLs.
+ *   RIVEN_REALTIME_RAW_PROMPT   — "1" to thread raw_prompt onto the snapshot.
+ *   RIVEN_REALTIME_DEBUG        — "1" logs every emit outcome.
+ *   RIVEN_DISABLED              — "1" hard kill switch.
+ *   RIVEN_HOME                  — override for $HOME (test seam).
  *
  * Usage:
  *   import { emitCcStatus } from "./realtime-emit.js";
@@ -35,6 +34,7 @@ import {
   getMachineId,
   getUserId,
   loadConfig,
+  readEnvWithLegacy,
   type CcStatusSnapshot,
   type DigitalTwinConfig,
 } from "@matrix-riven/shared";
@@ -43,7 +43,7 @@ import {
   type PostCcStatusOutcome,
 } from "./realtime-client.js";
 
-// Hosts considered safe to push cc-status to without TEAMAGENT_REALTIME_ALLOW_REMOTE=1.
+// Hosts considered safe to push cc-status to without RIVEN_REALTIME_ALLOW_REMOTE=1.
 // Adversarial review on PR #404: an attacker who can set the env var (hostile
 // dotfile sync, supply-chain pnpm script, social engineering) gets cwd + git
 // email + machine id + bearer token exfiltrated to any URL. Default to
@@ -85,7 +85,7 @@ export interface EmitInput {
    * Optional raw user prompt text. Issue #308 grill §3 mandates "完整存 raw
    * prompt" for leader-side evidence / replay. The caller (UserPromptSubmit
    * hook) is responsible for gating this behind the
-   * `TEAMAGENT_REALTIME_RAW_PROMPT=1` env opt-in — emit threads whatever it
+   * `RIVEN_REALTIME_RAW_PROMPT=1` env opt-in — emit threads whatever it
    * receives directly to `CcStatusSnapshot.raw_prompt`. Empty string is
    * treated as "unset" (so an opt-in caller can still skip individual
    * empty prompts).
@@ -95,13 +95,17 @@ export interface EmitInput {
 
 const TIMEOUT_MS = 50;
 
-function readEnv(name: string): string | undefined {
-  const v = process.env[name];
-  return v && v.length > 0 ? v : undefined;
+/**
+ * Read an env var by its `RIVEN_*` name, falling back to the legacy
+ * `TEAMAGENT_*` name with a one-shot deprecation warning. Treats an empty
+ * string as "unset" (env-var semantics for flag / URL / token use).
+ */
+function readEnv(rivenName: string, legacyName: string): string | undefined {
+  return readEnvWithLegacy(process.env, rivenName, legacyName);
 }
 
 function debugLog(line: string): void {
-  if (readEnv("TEAMAGENT_REALTIME_DEBUG") === "1") {
+  if (readEnv("RIVEN_REALTIME_DEBUG", "TEAMAGENT_REALTIME_DEBUG") === "1") {
     try {
       process.stderr.write(`[realtime-emit] ${line}\n`);
     } catch {
@@ -124,9 +128,9 @@ let cachedUserId: string | null = null;
 let cachedMachineId: string | null = null;
 
 /**
- * Issue #350 (v0.11.1) — cached digital-twin config-derived realtime URL.
- * Read once per process from `~/.teamagent/digital-twin.json` so each hook
- * fire stays under the 50ms critical-path budget. Three terminal states:
+ * Cached digital-twin config-derived realtime URL. Read once per process from
+ * `<dataRootDir>/digital-twin.json` so each hook fire stays under the 50ms
+ * critical-path budget. Three terminal states:
  *
  *   '__unread'    — uninitialized; trigger one fs read on next emit
  *   null          — config absent / disabled / unparseable; skip emit
@@ -143,37 +147,34 @@ export function __resetIdentityCacheForTests(): void {
 }
 
 /**
- * Issue #350 (v0.11.1) — resolve the realtime cc-status base URL.
+ * Resolve the realtime cc-status base URL.
  *
  * Order of precedence:
- *   1. `TEAMAGENT_REALTIME_URL` env var, gated to loopback unless
- *      `TEAMAGENT_REALTIME_ALLOW_REMOTE=1`. The loopback gate is the security
- *      boundary called out on PR #404: an attacker who can flip an env var
- *      should not be able to exfiltrate cwd / git email / bearer to an
- *      arbitrary URL. Env-set URLs stay default-loopback.
- *   2. `~/.teamagent/digital-twin.json` `uploader.endpoint`, when the file
+ *   1. `RIVEN_REALTIME_URL` (or legacy `TEAMAGENT_REALTIME_URL`) env var,
+ *      gated to loopback unless `RIVEN_REALTIME_ALLOW_REMOTE=1`. The loopback
+ *      gate is a security boundary: an attacker who can flip an env var must
+ *      not be able to exfiltrate cwd / git email / bearer to an arbitrary URL.
+ *   2. `<dataRootDir>/digital-twin.json` `uploader.endpoint`, when the file
  *      exists and `uploader.enabled === true`. This path **bypasses** the
  *      loopback gate intentionally: the URL there was written either by the
- *      user running `teamagent digital-twin login` or by `ensureDefaultConfig`
- *      auto-creating the team-shared config (`http://192.168.22.88:8080`
- *      from `config.ts:DEFAULT_ENDPOINT`). Either way the URL is the team's
- *      explicit, persistent choice — not an environmental override an
- *      attacker can flip mid-session. PR #404's threat model is unaffected.
+ *      user running `riven digital-twin login` or by `ensureDefaultConfig`
+ *      auto-creating the team-shared config — the team's explicit, persistent
+ *      choice, not an environmental override an attacker can flip mid-session.
  *
  * Returns null when neither source resolves a usable URL — emitCcStatus then
- * skips, same as before this change.
+ * skips.
  */
 function resolveBaseUrl(): string | null {
-  const envUrl = readEnv("TEAMAGENT_REALTIME_URL");
+  const envUrl = readEnv("RIVEN_REALTIME_URL", "TEAMAGENT_REALTIME_URL");
   if (envUrl) {
     if (
       urlIsLoopback(envUrl) ||
-      readEnv("TEAMAGENT_REALTIME_ALLOW_REMOTE") === "1"
+      readEnv("RIVEN_REALTIME_ALLOW_REMOTE", "TEAMAGENT_REALTIME_ALLOW_REMOTE") === "1"
     ) {
       return envUrl;
     }
     debugLog(
-      `skip env URL (non-loopback, set TEAMAGENT_REALTIME_ALLOW_REMOTE=1 to override) url=${envUrl}`,
+      `skip env URL (non-loopback, set RIVEN_REALTIME_ALLOW_REMOTE=1 to override) url=${envUrl}`,
     );
     return null;
   }
@@ -191,8 +192,9 @@ function resolveBaseUrl(): string | null {
  * ignores `$env:USERPROFILE` / `$env:HOME` overrides.
  */
 function homeForConfig(): string {
+  const overridden = readEnvWithLegacy(process.env, "RIVEN_HOME", "TEAMAGENT_HOME");
   return (
-    process.env.TEAMAGENT_HOME ??
+    overridden ??
     process.env.HOME ??
     process.env.USERPROFILE ??
     homedir()
@@ -268,16 +270,16 @@ function buildSnapshot(input: EmitInput): CcStatusSnapshot {
     snap.context_tokens = tokens;
     snap.context_pct = Math.round((tokens / 200_000) * 100) / 100;
   }
-  // Issue #308 grill §3: opt-in raw prompt evidence. Defense-in-depth — the
-  // hook layer (bin-user-prompt-submit.ts) is the policy boundary, but a
-  // future direct caller of emitCcStatus would otherwise bypass the env
-  // gate. Re-check here so the transport refuses to send prompt content
-  // unless TEAMAGENT_REALTIME_RAW_PROMPT=1 is explicitly set, regardless of
-  // what the caller passed. /review pre-landing adversarial review #9.
+  // Opt-in raw prompt evidence. Defense-in-depth — the hook layer
+  // (bin-user-prompt-submit.ts) is the policy boundary, but a future direct
+  // caller of emitCcStatus would otherwise bypass the env gate. Re-check
+  // here so the transport refuses to send prompt content unless
+  // RIVEN_REALTIME_RAW_PROMPT=1 (or the legacy TEAMAGENT_REALTIME_RAW_PROMPT)
+  // is explicitly set, regardless of what the caller passed.
   if (
     typeof input.rawPrompt === "string" &&
     input.rawPrompt.length > 0 &&
-    readEnv("TEAMAGENT_REALTIME_RAW_PROMPT") === "1"
+    readEnv("RIVEN_REALTIME_RAW_PROMPT", "TEAMAGENT_REALTIME_RAW_PROMPT") === "1"
   ) {
     snap.raw_prompt = input.rawPrompt;
   }
@@ -294,16 +296,15 @@ export function emitCcStatus(input: EmitInput): void {
   // hook bundles before they call here, but any future direct caller (a
   // third hook, a CLI subcommand, an integration test) gets the same opt-out
   // for free by reading the env var here.
-  if (readEnv("TEAMAGENT_DISABLED") === "1") {
-    debugLog(`skip (TEAMAGENT_DISABLED=1) event=${input.event}`);
+  if (readEnv("RIVEN_DISABLED", "TEAMAGENT_DISABLED") === "1") {
+    debugLog(`skip (RIVEN_DISABLED=1) event=${input.event}`);
     return;
   }
-  // Issue #350 (v0.11.1) — `resolveBaseUrl()` consolidates the env-var path
-  // (loopback-gated, unchanged threat model) with a saved-config fallback
-  // (`~/.teamagent/digital-twin.json` `uploader.endpoint` when `enabled`).
+  // `resolveBaseUrl()` consolidates the env-var path (loopback-gated,
+  // unchanged threat model) with a saved-config fallback
+  // (`<dataRootDir>/digital-twin.json` `uploader.endpoint` when `enabled`).
   // The saved-config path is intentionally not loopback-gated — see the
-  // function comment for the security rationale. Returns null when neither
-  // source resolves; we skip in that case (same outcome as pre-v0.11.1).
+  // function comment for the security rationale.
   const baseUrl = resolveBaseUrl();
   if (!baseUrl) {
     debugLog(`skip (no base URL resolved) event=${input.event}`);
@@ -316,7 +317,7 @@ export function emitCcStatus(input: EmitInput): void {
     debugLog(`build-failed err=${String(err)}`);
     return;
   }
-  const bearerToken = readEnv("TEAMAGENT_REALTIME_TOKEN");
+  const bearerToken = readEnv("RIVEN_REALTIME_TOKEN", "TEAMAGENT_REALTIME_TOKEN");
   try {
     void postCcStatusSnapshot(snapshot, {
       baseUrl,

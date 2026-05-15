@@ -1,22 +1,20 @@
 /**
- * Issue #350 — CC runtime status snapshot.
+ * CC runtime status snapshot.
  *
  * A single point-in-time picture of one Claude Code instance: model, context
  * usage, cost, rolling token windows, session health, quota utilization, and a
  * few output-volume aggregates. Pushed to `POST /v1/cc-status` and served back
  * (latest / history) over `GET /api/cc-status*` so downstream projects can pull
  * "what is this teammate's CC doing right now" without screen-scraping a
- * statusline. This is the F2-D deliverable of epic #335 — it consumes the
- * field-computation work shipped in #337 (`scripts/teamagent-statusline.cjs`)
- * and turns it into a server-queryable data model.
+ * statusline.
  *
  * Wire shape (`POST /v1/cc-status` body):
  *
  *   { ...CcStatusSnapshot }   // a flat JSON object, NOT gzipped, NOT enveloped
  *
  * The transport is deliberately lighter than `/v1/cc-sessions` (which keeps
- * uploading gzipped transcript JSONL — the learning loop + Feature #3 video
- * depend on it). A dropped cc-status snapshot is fine; the next hook re-pushes.
+ * uploading gzipped transcript JSONL). A dropped cc-status snapshot is fine;
+ * the next hook re-pushes.
  */
 
 /** Bump when the snapshot shape changes in a non-additive way. */
@@ -66,7 +64,7 @@ export interface CcStatusSnapshot {
   /** sum of assistant turn tokens in the last 7 days (rolling). */
   tokens_7d?: number;
 
-  // ---- quota (from ~/.teamagent/digital-twin/quota-cache.json, issue #283) ----
+  // ---- quota (from <dataRootDir>/digital-twin/quota-cache.json) ----
   subscription_tier?: string;
   five_hour_utilization?: number;
   seven_day_utilization?: number;
@@ -86,7 +84,8 @@ export interface CcStatusSnapshot {
   // ---- raw prompt evidence (issue #308, grill §3) ----
   /**
    * Raw user prompt text captured at UserPromptSubmit. Privacy-sensitive:
-   * client side ONLY threads this when `TEAMAGENT_REALTIME_RAW_PROMPT=1` is
+   * client side ONLY threads this when `RIVEN_REALTIME_RAW_PROMPT=1` (or the
+   * legacy `TEAMAGENT_REALTIME_RAW_PROMPT`) is
    * set; default behavior leaves it `undefined` so a leaked / misconfigured
    * receiver URL never exfiltrates prompt content. The receiver may
    * persist this to a `raw_events` table for evidence / replay; downstream

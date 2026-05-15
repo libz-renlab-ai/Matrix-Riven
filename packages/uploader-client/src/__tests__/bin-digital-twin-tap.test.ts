@@ -147,7 +147,7 @@ describe('bin-digital-twin-tap main', () => {
     writeTranscript(home, cwd, sessionId, 'x');
 
     const paths = digitalTwinPaths(home);
-    mkdirSync(paths.teamagentDir, { recursive: true });
+    mkdirSync(paths.dataRootDir, { recursive: true });
     writeFileSync(paths.configFile, '{not json', 'utf-8');
     const before = readFileSync(paths.configFile, 'utf-8');
 

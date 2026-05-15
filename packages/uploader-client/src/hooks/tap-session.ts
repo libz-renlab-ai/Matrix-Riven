@@ -36,6 +36,13 @@ export interface TapSessionDeps {
   ) => Pick<ChildProcess, 'unref' | 'on'>;
   ulid?: () => string;
   now?: () => Date;
+  /**
+   * Matrix-Riven client version stamped into the queue metadata. Legacy
+   * alias `teamagentVersion` is accepted for now (the older option name
+   * appeared in tests / callers from the TeamBrain era).
+   */
+  rivenVersion?: string;
+  /** @deprecated Use `rivenVersion`. */
   teamagentVersion?: string;
   platform?: NodeJS.Platform;
   arch?: string;
@@ -143,7 +150,7 @@ export function tapSession(
       captured_at: now().toISOString(),
       source: 'stop-hook',
       host: { os: platform, arch, hostname: host },
-      teamagent_version: deps.teamagentVersion ?? 'unknown',
+      riven_version: deps.rivenVersion ?? deps.teamagentVersion ?? 'unknown',
       schema_version: 1 as const,
       // Issue #283: forward quota only when caller provided one — keeps the
       // field absent from the JSON on pre-#283 Stop taps (no JSON churn).
@@ -156,11 +163,11 @@ export function tapSession(
     // spawn what was passed in. Spawn failure is silent — the queue file
     // persists for later daemon runs to pick up.
     //
-    // Issue #368: capture the daemon's stdout+stderr into uploader.log instead
-    // of `stdio: 'ignore'`, so a `MODULE_NOT_FOUND` / auth-failure / crash is
-    // recorded (visible via `teamagent digital-twin status` / `teamagent
-    // doctor`) rather than swallowed. If the log can't be opened we fall back
-    // to `'ignore'` — the daemon must still spawn.
+    // Capture the daemon's stdout+stderr into uploader.log instead of
+    // `stdio: 'ignore'`, so a `MODULE_NOT_FOUND` / auth-failure / crash is
+    // recorded (visible via `bin-digital-twin status`) rather than swallowed.
+    // If the log can't be opened we fall back to `'ignore'` — the daemon must
+    // still spawn.
     if (deps.daemonBin && existsSync(deps.daemonBin)) {
       const spawnFn = deps.spawn ?? nodeSpawn;
       let logFd: number | undefined;

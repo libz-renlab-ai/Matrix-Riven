@@ -4,6 +4,9 @@ dist/
 .DS_Store
 coverage/
 *.tsbuildinfo
+.riven/
+packages/*/.riven/
+# Legacy (TeamBrain-era) data dirs — kept ignored during the deprecation window.
 .teamagent/
 packages/*/.teamagent/
 .env

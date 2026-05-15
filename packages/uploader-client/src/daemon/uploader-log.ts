@@ -1,12 +1,12 @@
 /**
- * Issue #368 — uploader daemon log helpers.
+ * Uploader daemon log helpers.
  *
  * The Stop-hook tap spawns `bin-uploader.cjs` with its stdout+stderr pointed
- * at `~/.teamagent/digital-twin/uploader.log` (see `tap-session.ts`), so a
+ * at `<dataRootDir>/digital-twin/uploader.log` (see `tap-session.ts`), so a
  * crash (`MODULE_NOT_FOUND`, auth failure, unhandled throw) is recorded rather
- * than swallowed by `stdio: 'ignore'`. `teamagent digital-twin status` and
- * `teamagent doctor` surface the most recent error line from here so a broken
- * upload pipeline is visible instead of silent.
+ * than swallowed by `stdio: 'ignore'`. `bin-digital-twin status` surfaces the
+ * most recent error line from here so a broken upload pipeline is visible
+ * instead of silent.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { digitalTwinPaths } from '@matrix-riven/shared';
@@ -35,7 +35,7 @@ export interface UploaderLogError {
 }
 
 /**
- * Return the last error-looking line from `~/.teamagent/digital-twin/uploader.log`,
+ * Return the last error-looking line from `<dataRootDir>/digital-twin/uploader.log`,
  * or `null` when the log doesn't exist, can't be read, or has no error line.
  * Best-effort: never throws.
  */
