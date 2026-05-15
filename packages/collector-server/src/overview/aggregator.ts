@@ -3,6 +3,8 @@ import type {
   CostBlock,
   CostPerUser,
   ModelDistribution,
+  ProductivityBlock,
+  ProductivityPerUser,
   QuotaPerUser,
   RawSnapshots,
 } from './types.js';
@@ -89,4 +91,55 @@ function computeModelDistribution(all: readonly CcStatusSnapshot[]): ModelDistri
   }
   out.sort((a, b) => b.snapshot_count - a.snapshot_count);
   return out;
+}
+
+// ────────────────────────────── aggregateProductivity ──────────────────────────────
+
+export function aggregateProductivity(raw: RawSnapshots): ProductivityBlock {
+  const sessionsByUser = groupSessionsByUser(raw.latestPerSession);
+
+  // Pre-compute "session_ids with any OVER_200K" from allSnapshots so we
+  // count without needing to re-scan inside the user loop.
+  const over200kSessions = new Set<string>();
+  for (const s of raw.allSnapshots) {
+    if (s.session_health === 'OVER_200K') over200kSessions.add(s.session_id);
+  }
+
+  const per_user: ProductivityPerUser[] = [];
+  for (const [user_id, snaps] of sessionsByUser) {
+    const turn_count = sumOpt(snaps.map((s) => s.turn_count));
+    const tool_calls_total = sumOpt(snaps.map((s) => s.tool_calls_total));
+    const tool_calls_failed = sumOpt(snaps.map((s) => s.tool_calls_failed));
+    const session_count = snaps.length;
+    const avg_session_minutes = averageMinutes(snaps);
+    const over_200k_count = snaps.reduce(
+      (acc, s) => acc + (over200kSessions.has(s.session_id) ? 1 : 0),
+      0,
+    );
+    per_user.push({
+      user_id,
+      turn_count,
+      tool_calls_total,
+      tool_calls_failed,
+      session_count,
+      avg_session_minutes,
+      over_200k_count,
+    });
+  }
+  per_user.sort((a, b) => b.turn_count - a.turn_count);
+  return { per_user };
+}
+
+function averageMinutes(snaps: readonly CcStatusSnapshot[]): number {
+  const durations: number[] = [];
+  for (const s of snaps) {
+    if (!s.session_started_at) continue;
+    const start = Date.parse(s.session_started_at);
+    const end = Date.parse(s.ts);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+    durations.push((end - start) / 1000 / 60);
+  }
+  if (durations.length === 0) return 0;
+  const total = durations.reduce((a, b) => a + b, 0);
+  return Math.round((total / durations.length) * 10) / 10;
 }

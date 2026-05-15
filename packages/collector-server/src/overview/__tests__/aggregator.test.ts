@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CcStatusSnapshot } from '@matrix-riven/shared';
-import { aggregateCost } from '../aggregator.js';
+import { aggregateCost, aggregateProductivity } from '../aggregator.js';
 import type { RawSnapshots } from '../types.js';
 
 // ────────────────────────────── fixture helpers ──────────────────────────────
@@ -110,5 +110,88 @@ describe('aggregateCost', () => {
     const out = aggregateCost(raw);
     expect(out.team_total_usd).toBe(2);
     expect(out.per_user).toEqual([{ user_id: 'alice@x', cost_usd: 2 }]);
+  });
+});
+
+// ────────────────────────────── aggregateProductivity ──────────────────────────────
+
+describe('aggregateProductivity', () => {
+  it('empty → empty per_user', () => {
+    const out = aggregateProductivity(emptyRaw());
+    expect(out.per_user).toEqual([]);
+  });
+
+  it('single user, single session: cumulative fields read from latest snapshot', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({
+      session_id: 's1', user_id: 'alice@x',
+      turn_count: 12, tool_calls_total: 30, tool_calls_failed: 2,
+      session_started_at: '2026-05-15T10:00:00.000Z',
+      ts: '2026-05-15T10:30:00.000Z',
+    }));
+    const out = aggregateProductivity(raw);
+    expect(out.per_user).toEqual([
+      {
+        user_id: 'alice@x',
+        turn_count: 12,
+        tool_calls_total: 30,
+        tool_calls_failed: 2,
+        session_count: 1,
+        avg_session_minutes: 30,
+        over_200k_count: 0,
+      },
+    ]);
+  });
+
+  it('multi user sorted by turn_count DESC', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({ session_id: 's1', user_id: 'alice@x', turn_count: 5 }));
+    raw.latestPerSession.set('s2', snap({ session_id: 's2', user_id: 'bob@x', turn_count: 12 }));
+    const out = aggregateProductivity(raw);
+    expect(out.per_user.map((u) => u.user_id)).toEqual(['bob@x', 'alice@x']);
+  });
+
+  it('over_200k_count counts sessions where ANY snapshot is OVER_200K (uses allSnapshots)', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({ session_id: 's1', user_id: 'alice@x' }));
+    raw.latestPerSession.set('s2', snap({ session_id: 's2', user_id: 'alice@x' }));
+    raw.allSnapshots = [
+      snap({ session_id: 's1', user_id: 'alice@x', session_health: 'OK' }),
+      snap({ session_id: 's1', user_id: 'alice@x', session_health: 'OVER_200K' }),
+      snap({ session_id: 's2', user_id: 'alice@x', session_health: 'OK' }),
+    ];
+    const out = aggregateProductivity(raw);
+    expect(out.per_user[0]!.over_200k_count).toBe(1);
+  });
+
+  it('avg_session_minutes: averaged across sessions with valid started_at', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({
+      session_id: 's1', user_id: 'alice@x',
+      session_started_at: '2026-05-15T10:00:00.000Z',
+      ts: '2026-05-15T10:20:00.000Z',  // 20 min
+    }));
+    raw.latestPerSession.set('s2', snap({
+      session_id: 's2', user_id: 'alice@x',
+      session_started_at: '2026-05-15T11:00:00.000Z',
+      ts: '2026-05-15T12:00:00.000Z',  // 60 min
+    }));
+    const out = aggregateProductivity(raw);
+    expect(out.per_user[0]!.avg_session_minutes).toBe(40);
+  });
+
+  it('missing cumulative fields counted as 0; avg_session_minutes = 0 when no started_at', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({ session_id: 's1', user_id: 'alice@x' }));
+    const out = aggregateProductivity(raw);
+    expect(out.per_user[0]).toEqual({
+      user_id: 'alice@x',
+      turn_count: 0,
+      tool_calls_total: 0,
+      tool_calls_failed: 0,
+      session_count: 1,
+      avg_session_minutes: 0,
+      over_200k_count: 0,
+    });
   });
 });
