@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CcStatusSnapshot } from '@matrix-riven/shared';
-import { aggregateCost, aggregateProductivity, aggregateProjects } from '../aggregator.js';
+import { aggregateCost, aggregateProductivity, aggregateProjects, aggregateQuality } from '../aggregator.js';
 import type { RawSnapshots } from '../types.js';
 
 // ────────────────────────────── fixture helpers ──────────────────────────────
@@ -293,5 +293,72 @@ describe('aggregateProjects', () => {
     const out = aggregateProjects(raw);
     expect(out.top_cwd).toHaveLength(10);
     expect(out.top_git_branch).toHaveLength(10);
+  });
+});
+
+// ────────────────────────────── aggregateQuality ──────────────────────────────
+
+describe('aggregateQuality', () => {
+  it('empty → all zeros / empty arrays', () => {
+    const out = aggregateQuality(emptyRaw());
+    expect(out.team_total_redactions).toBe(0);
+    expect(out.redactions_per_user).toEqual([]);
+    expect(out.tool_failures_per_user).toEqual([]);
+    expect(out.out_of_control_sessions).toEqual([]);
+  });
+
+  it('sums redactions across sessions per user; per_user sorted DESC', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({ session_id: 's1', user_id: 'a@x' }));
+    raw.latestPerSession.set('s2', snap({ session_id: 's2', user_id: 'a@x' }));
+    raw.latestPerSession.set('s3', snap({ session_id: 's3', user_id: 'b@x' }));
+    raw.redactionsPerSession.set('s1', 2);
+    raw.redactionsPerSession.set('s2', 3);
+    raw.redactionsPerSession.set('s3', 1);
+    const out = aggregateQuality(raw);
+    expect(out.team_total_redactions).toBe(6);
+    expect(out.redactions_per_user).toEqual([
+      { user_id: 'a@x', redaction_count: 5 },
+      { user_id: 'b@x', redaction_count: 1 },
+    ]);
+  });
+
+  it('tool_failures_per_user takes latest snapshot per session, sums per user, sorted DESC', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({ session_id: 's1', user_id: 'a@x', tool_calls_failed: 4 }));
+    raw.latestPerSession.set('s2', snap({ session_id: 's2', user_id: 'a@x', tool_calls_failed: 1 }));
+    raw.latestPerSession.set('s3', snap({ session_id: 's3', user_id: 'b@x', tool_calls_failed: 10 }));
+    const out = aggregateQuality(raw);
+    expect(out.tool_failures_per_user).toEqual([
+      { user_id: 'b@x', tool_calls_failed: 10 },
+      { user_id: 'a@x', tool_calls_failed: 5 },
+    ]);
+  });
+
+  it('out_of_control_sessions lists each session that had ANY OVER_200K snapshot, with that ts', () => {
+    const raw = emptyRaw();
+    raw.allSnapshots = [
+      snap({ session_id: 's1', user_id: 'a@x', session_health: 'OK', ts: '2026-05-15T10:00:00.000Z' }),
+      snap({ session_id: 's1', user_id: 'a@x', session_health: 'OVER_200K', ts: '2026-05-15T10:05:00.000Z' }),
+      snap({ session_id: 's2', user_id: 'b@x', session_health: 'OVER_200K', ts: '2026-05-15T11:00:00.000Z' }),
+    ];
+    const out = aggregateQuality(raw);
+    expect(out.out_of_control_sessions).toEqual([
+      { user_id: 'a@x', session_id: 's1', reason: 'OVER_200K', ts: '2026-05-15T10:05:00.000Z' },
+      { user_id: 'b@x', session_id: 's2', reason: 'OVER_200K', ts: '2026-05-15T11:00:00.000Z' },
+    ]);
+  });
+
+  it('users with no redactions excluded from redactions_per_user', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({ session_id: 's1', user_id: 'a@x' }));
+    raw.latestPerSession.set('s2', snap({ session_id: 's2', user_id: 'b@x' }));
+    raw.redactionsPerSession.set('s1', 0);
+    raw.redactionsPerSession.set('s2', 3);
+    const out = aggregateQuality(raw);
+    expect(out.redactions_per_user).toEqual([
+      { user_id: 'b@x', redaction_count: 3 },
+    ]);
+    expect(out.team_total_redactions).toBe(3);
   });
 });

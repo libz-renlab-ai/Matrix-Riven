@@ -4,11 +4,15 @@ import type {
   CostBlock,
   CostPerUser,
   ModelDistribution,
+  OutOfControlSession,
   ProductivityBlock,
   ProductivityPerUser,
   ProjectsBlock,
+  QualityBlock,
   QuotaPerUser,
   RawSnapshots,
+  RedactionPerUser,
+  ToolFailurePerUser,
   TopCwd,
   TopGitBranch,
   UserCwdEntry,
@@ -234,4 +238,58 @@ function sessionMinutes(s: CcStatusSnapshot): number {
   const end = Date.parse(s.ts);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
   return (end - start) / 1000 / 60;
+}
+
+// ────────────────────────────── aggregateQuality ──────────────────────────────
+
+export function aggregateQuality(raw: RawSnapshots): QualityBlock {
+  // ── redactions per user (sum across sessions, drop zeros, sort DESC) ──
+  const redByUser = new Map<string, number>();
+  let team_total_redactions = 0;
+  for (const [session_id, count] of raw.redactionsPerSession) {
+    if (!Number.isFinite(count) || count <= 0) continue;
+    const sess = raw.latestPerSession.get(session_id);
+    if (!sess) continue;  // orphan sidecar — skip
+    redByUser.set(sess.user_id, (redByUser.get(sess.user_id) ?? 0) + count);
+    team_total_redactions += count;
+  }
+  const redactions_per_user: RedactionPerUser[] = Array.from(redByUser, ([user_id, redaction_count]) => ({
+    user_id,
+    redaction_count,
+  })).sort((a, b) => b.redaction_count - a.redaction_count || a.user_id.localeCompare(b.user_id));
+
+  // ── tool_failures_per_user ──
+  const failByUser = new Map<string, number>();
+  for (const s of raw.latestPerSession.values()) {
+    const f = s.tool_calls_failed ?? 0;
+    if (f === 0) continue;
+    failByUser.set(s.user_id, (failByUser.get(s.user_id) ?? 0) + f);
+  }
+  const tool_failures_per_user: ToolFailurePerUser[] = Array.from(failByUser, ([user_id, tool_calls_failed]) => ({
+    user_id,
+    tool_calls_failed,
+  })).sort((a, b) => b.tool_calls_failed - a.tool_calls_failed || a.user_id.localeCompare(b.user_id));
+
+  // ── out_of_control_sessions: first OVER_200K snapshot per session ──
+  const firstOver = new Map<string, CcStatusSnapshot>();
+  for (const s of raw.allSnapshots) {
+    if (s.session_health !== 'OVER_200K') continue;
+    const prev = firstOver.get(s.session_id);
+    if (!prev || s.ts < prev.ts) firstOver.set(s.session_id, s);
+  }
+  const out_of_control_sessions: OutOfControlSession[] = Array.from(firstOver.values())
+    .map((s) => ({
+      user_id: s.user_id,
+      session_id: s.session_id,
+      reason: 'OVER_200K' as const,
+      ts: s.ts,
+    }))
+    .sort((a, b) => a.ts.localeCompare(b.ts));
+
+  return {
+    team_total_redactions,
+    redactions_per_user,
+    tool_failures_per_user,
+    out_of_control_sessions,
+  };
 }
