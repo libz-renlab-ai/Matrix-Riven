@@ -41,6 +41,9 @@ import { requireBearerToken } from './auth-gate.js';
 // M2 — server-side L2 scan ("第二层敏感信息扫描（兜底）"): the catch-all for
 // anything the member's L1 pass missed before a transcript lands on disk.
 import { detectSensitiveText, redactSensitiveText } from '@matrix-riven/shared';
+// Leadership overview (Task 8) — GET /api/overview wires these two together.
+import { scanForOverview } from './overview/disk-scan.js';
+import { buildOverview } from './overview/aggregator.js';
 
 /** Cap raw POST body to bound memory + reject obvious DoS payloads. */
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -466,6 +469,34 @@ function handleGet(
         detail: err instanceof Error ? err.message : String(err),
       });
     }
+    return;
+  }
+
+  // Task 8 — leadership-overview view. Wraps disk-scan + aggregator behind
+  // one read-only GET. `date=` defaults to today (UTC, via `dateStamp`); a
+  // malformed param 400s through the same `validateDateParam` used by
+  // `/api/dates` and `/api/sessions`. `scanForOverview` is documented
+  // never-throws but the try/catch is belt-and-suspenders against future
+  // refactors that might forget that contract.
+  if (path === '/api/overview') {
+    const dateRaw = q.get('date');
+    const date =
+      dateRaw === null ? dateStamp(undefined, now()) : validateDateParam(dateRaw);
+    if (date === null) {
+      send(res, 400, { error: 'invalid date format', expected: 'YYYY-MM-DD' });
+      return;
+    }
+    let raw;
+    try {
+      raw = scanForOverview(outputDir, date);
+    } catch (err) {
+      send(res, 500, {
+        error: 'scan failed',
+        detail: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    send(res, 200, buildOverview(raw, date));
     return;
   }
 
