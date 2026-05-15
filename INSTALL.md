@@ -14,12 +14,14 @@
 | 检查 | 命令 | 成功判据 |
 |---|---|---|
 | Node ≥ 22.5.0 | `node --version` | 输出 `v22.5.x` 或更高 |
-| pnpm 9 | `pnpm --version` | 输出 `9.x` |
+| pnpm ≥ 9 | `pnpm --version` | 输出 `9.x` / `10.x` / `11.x` 任意一个 |
 | git 可用 | `git --version` | 任意 `git version 2.x` |
-| 能连公司 collector | `curl -sS -o /dev/null -w "%{http_code}\n" http://192.168.22.88:8933/` | `200` |
+| 能连公司 collector | `curl -sS --noproxy '*' -o /dev/null -w "%{http_code}\n" http://192.168.22.88:8933/` | `200` |
 | Windows 上有 git-bash 或 WSL | `bash --version` | 任意 `GNU bash, version ...` |
 
 任意一项失败 → 报告给用户，**不要**继续。
+
+> **collector 检查拿到 `502` + 响应头有 `Proxy-Connection`**：你的机器走了 HTTP 代理（Clash / 公司代理 / VPN），代理打不通内网。固定加 `--noproxy '*'`（上表已加），或先 `unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY` 再试。同理之后跑 `bin-uploader` 时，**uploader 也走系统代理**——确认 `NO_PROXY=192.168.22.0/24,localhost` 已设到 shell / 系统环境变量里，否则上传会被代理拦下。
 
 ---
 
