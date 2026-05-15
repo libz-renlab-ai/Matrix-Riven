@@ -25,7 +25,7 @@ export const DASHBOARD_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>TeamAgent Collector</title>
+<title>Matrix Riven Collector</title>
 <style>
 * { box-sizing: border-box; }
 body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f6f7f9; color: #222; }
@@ -62,14 +62,51 @@ header button:hover { background: #1d4ed8; }
 .qbar.hot > span { background: #ef4444; }
 .qbar.stale { border: 1px dashed #9ca3af; opacity: 0.5; }
 .qbadge { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10px; color: #6b7280; min-width: 30px; text-align: right; }
+.tab-nav { display: inline-flex; gap: 4px; margin-left: 16px; }
+.tab-btn {
+  background: transparent; border: 1px solid #6b7280; color: #d1d5db;
+  padding: 4px 12px; border-radius: 4px; cursor: pointer; font: inherit;
+}
+.tab-btn:hover { background: #374151; }
+.tab-btn.active { background: #2563eb; color: white; border-color: #2563eb; }
+.tab-content[hidden] { display: none; }
+.overview-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px;
+}
+.ov-panel {
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px;
+  display: block; flex-direction: initial; min-height: initial;
+}
+.ov-panel > h2 {
+  margin: 0 0 8px; padding: 0; font-size: 14px;
+  color: #111827; text-transform: none; letter-spacing: normal; border-bottom: none;
+}
+.ov-panel .panel-body { font-size: 12px; }
+.ov-panel .panel-body .row {
+  display: grid; grid-template-columns: 1fr auto;
+  align-items: center; gap: 6px; padding: 2px 0;
+}
+.ov-panel .panel-body .row .bar {
+  background: #dbeafe; height: 12px; border-radius: 2px;
+  grid-column: 1 / -1;
+}
+.ov-panel .panel-body .row.clickable { cursor: pointer; }
+.ov-panel .panel-body .row.clickable:hover { background: #f3f4f6; }
+.big-number { font-size: 28px; font-weight: 600; padding: 4px 0; }
+.muted { color: #6b7280; font-size: 11px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>TeamAgent Collector</h1>
+  <h1>Matrix Riven Collector</h1>
+  <nav class="tab-nav">
+    <button id="tab-btn-browse" class="tab-btn active" onclick="activateTab('browse')">Browse</button>
+    <button id="tab-btn-overview" class="tab-btn" onclick="activateTab('overview')">Overview</button>
+  </nav>
   <span class="ts" id="ts"></span>
   <button id="refresh">Refresh</button>
 </header>
+<section id="tab-browse" class="tab-content">
 <div class="grid">
   <div class="panel"><h2>Users</h2><ul id="users"><li class="empty">loading...</li></ul></div>
   <div class="panel"><h2>Dates</h2><ul id="dates"><li class="empty">select a user</li></ul></div>
@@ -79,6 +116,27 @@ header button:hover { background: #1d4ed8; }
   <h2 id="ph">Preview</h2>
   <div id="pv"><div class="empty">select a session</div></div>
 </div>
+</section>
+<section id="tab-overview" class="tab-content" hidden>
+  <div class="overview-grid">
+    <article class="panel ov-panel" id="panel-cost">
+      <h2>💰 Cost</h2>
+      <div class="panel-body"><div class="empty">loading…</div></div>
+    </article>
+    <article class="panel ov-panel" id="panel-productivity">
+      <h2>⚡ Productivity</h2>
+      <div class="panel-body"><div class="empty">loading…</div></div>
+    </article>
+    <article class="panel ov-panel" id="panel-projects">
+      <h2>📦 Projects</h2>
+      <div class="panel-body"><div class="empty">loading…</div></div>
+    </article>
+    <article class="panel ov-panel" id="panel-quality">
+      <h2>⚠️ Quality</h2>
+      <div class="panel-body"><div class="empty">loading…</div></div>
+    </article>
+  </div>
+</section>
 <script>
 (function () {
   var sel = { user: null, date: null, sid: null, sext: null };
@@ -251,6 +309,163 @@ header button:hover { background: #1d4ed8; }
     esc = esc.replace(/:\\s*(-?\\d+(?:\\.\\d+)?)/g, ': <span class="n">$1</span>');
     return esc;
   }
+  function activateTab(name) {
+    var browseSec = $('tab-browse'), overviewSec = $('tab-overview');
+    var browseBtn = $('tab-btn-browse'), overviewBtn = $('tab-btn-overview');
+    if (name === 'overview') {
+      browseSec.setAttribute('hidden', '');
+      overviewSec.removeAttribute('hidden');
+      browseBtn.classList.remove('active');
+      overviewBtn.classList.add('active');
+      loadOverview();
+    } else {
+      overviewSec.setAttribute('hidden', '');
+      browseSec.removeAttribute('hidden');
+      overviewBtn.classList.remove('active');
+      browseBtn.classList.add('active');
+    }
+  }
+  // Expose for the inline header onclick handlers — the IIFE wraps everything
+  // else, but the buttons in the rendered HTML reference the global scope.
+  window.activateTab = activateTab;
+
+  function loadOverview() {
+    fetch('/api/overview?date=' + encodeURIComponent(todayUtc()))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        renderCost(d.cost);
+        renderProductivity(d.productivity);
+        renderProjects(d.projects);
+        renderQuality(d.quality);
+        setTs();
+      })
+      .catch(function (e) {
+        var msg = '<div class="err">overview load failed: ' + escHtml(e.message) + '</div>';
+        ['panel-cost', 'panel-productivity', 'panel-projects', 'panel-quality'].forEach(function (id) {
+          $(id).querySelector('.panel-body').innerHTML = msg;
+        });
+      });
+  }
+
+  function renderBar(label, value, max, suffix) {
+    var pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+    var disp = (typeof value === 'number' && value.toFixed) ? value.toFixed(2) : String(value);
+    return '<div class="row clickable" data-user="' + escHtml(label) + '">' +
+      '<span>' + escHtml(label) + '</span>' +
+      '<span>' + escHtml(disp) + (suffix || '') + '</span>' +
+      '<div class="bar" style="width:' + pct + '%"></div>' +
+    '</div>';
+  }
+
+  function renderCost(c) {
+    var body = $('panel-cost').querySelector('.panel-body');
+    if (!c || c.per_user.length === 0) { body.innerHTML = '<div class="empty">No data</div>'; return; }
+    var maxCost = c.per_user[0].cost_usd || 1;
+    var html = '<div class="big-number">$' + (c.team_total_usd || 0).toFixed(2) + '</div>' +
+      '<div class="muted">today team total</div>';
+    c.per_user.forEach(function (u) { html += renderBar(u.user_id, u.cost_usd, maxCost, ' USD'); });
+    if (c.model_distribution && c.model_distribution.length) {
+      html += '<div class="muted" style="margin-top:8px">model usage:</div>';
+      c.model_distribution.forEach(function (m) {
+        html += '<div class="row"><span>' + escHtml(m.model) + '</span><span>' +
+          (m.pct * 100).toFixed(0) + '%</span></div>';
+      });
+    }
+    body.innerHTML = html;
+    wireDrillDown(body);
+  }
+
+  function renderProductivity(p) {
+    var body = $('panel-productivity').querySelector('.panel-body');
+    if (!p || p.per_user.length === 0) { body.innerHTML = '<div class="empty">No data</div>'; return; }
+    var maxTurn = p.per_user[0].turn_count || 1;
+    var html = '';
+    p.per_user.forEach(function (u) {
+      var failRate = u.tool_calls_total > 0
+        ? '(fail ' + ((u.tool_calls_failed / u.tool_calls_total) * 100).toFixed(0) + '%)'
+        : '';
+      html += '<div class="row clickable" data-user="' + escHtml(u.user_id) + '">' +
+        '<span>' + escHtml(u.user_id) + '</span>' +
+        '<span>' + u.turn_count + ' turns ' + failRate + '</span>' +
+        '<div class="bar" style="width:' + ((u.turn_count / maxTurn) * 100) + '%"></div>' +
+        '</div>';
+    });
+    body.innerHTML = html;
+    wireDrillDown(body);
+  }
+
+  function renderProjects(p) {
+    var body = $('panel-projects').querySelector('.panel-body');
+    if (!p || p.top_cwd.length === 0) { body.innerHTML = '<div class="empty">No data</div>'; return; }
+    var html = '<div class="muted">top projects today:</div>';
+    var maxSess = p.top_cwd[0].session_count || 1;
+    p.top_cwd.forEach(function (c) {
+      html += '<div class="row"><span>' + escHtml(c.cwd_basename) + '</span>' +
+        '<span>' + c.session_count + ' sess</span>' +
+        '<div class="bar" style="width:' + ((c.session_count / maxSess) * 100) + '%"></div></div>';
+    });
+    if (p.top_git_branch && p.top_git_branch.length) {
+      html += '<div class="muted" style="margin-top:8px">top branches:</div>';
+      p.top_git_branch.slice(0, 5).forEach(function (b) {
+        html += '<div class="row"><span>' + escHtml(b.git_branch) + '</span>' +
+          '<span>' + b.session_count + '</span></div>';
+      });
+    }
+    body.innerHTML = html;
+  }
+
+  function renderQuality(q) {
+    var body = $('panel-quality').querySelector('.panel-body');
+    var html = '<div class="big-number">' + (q.team_total_redactions || 0) + '</div>' +
+      '<div class="muted">L1 sensitive-field redactions today</div>';
+    if (q.redactions_per_user.length === 0 && q.tool_failures_per_user.length === 0 && q.out_of_control_sessions.length === 0) {
+      body.innerHTML = html + '<div class="empty">No alerts</div>';
+      return;
+    }
+    if (q.redactions_per_user.length) {
+      html += '<div class="muted" style="margin-top:8px">redactions per user:</div>';
+      q.redactions_per_user.forEach(function (r) {
+        html += '<div class="row clickable" data-user="' + escHtml(r.user_id) + '">' +
+          '<span>' + escHtml(r.user_id) + '</span>' +
+          '<span>' + r.redaction_count + '</span></div>';
+      });
+    }
+    if (q.tool_failures_per_user.length) {
+      html += '<div class="muted" style="margin-top:8px">tool failures:</div>';
+      q.tool_failures_per_user.forEach(function (t) {
+        html += '<div class="row clickable" data-user="' + escHtml(t.user_id) + '">' +
+          '<span>' + escHtml(t.user_id) + '</span>' +
+          '<span>' + t.tool_calls_failed + '</span></div>';
+      });
+    }
+    if (q.out_of_control_sessions.length) {
+      html += '<div class="muted" style="margin-top:8px">OVER_200K sessions:</div>';
+      q.out_of_control_sessions.forEach(function (o) {
+        html += '<div class="row clickable" data-user="' + escHtml(o.user_id) + '">' +
+          '<span>' + escHtml(o.user_id) + ' / ' + escHtml(o.session_id) + '</span>' +
+          '<span class="muted">' + escHtml(o.ts) + '</span></div>';
+      });
+    }
+    body.innerHTML = html;
+    wireDrillDown(body);
+  }
+
+  function wireDrillDown(container) {
+    Array.prototype.forEach.call(container.querySelectorAll('.row.clickable'), function (row) {
+      row.onclick = function () {
+        var u = row.getAttribute('data-user');
+        if (!u) return;
+        activateTab('browse');
+        // Reuse the existing user-selection flow: simulate a click on the
+        // matching user in the Browse list.
+        var match = Array.prototype.filter.call($('users').querySelectorAll('li'), function (li) {
+          return li.textContent.indexOf(u) === 0;
+        })[0];
+        if (match) match.click();
+      };
+    });
+  }
+
   $('refresh').onclick = loadUsers;
   loadUsers();
 })();

@@ -290,7 +290,7 @@ describe('mock-server dashboard', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type') ?? '').toContain('text/html');
     const body = await res.text();
-    expect(body).toContain('TeamAgent Collector');
+    expect(body).toContain('Matrix Riven Collector');
   });
 
   it('GET /index.html also returns the dashboard', async () => {

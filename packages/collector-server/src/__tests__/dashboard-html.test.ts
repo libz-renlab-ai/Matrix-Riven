@@ -55,3 +55,31 @@ describe('DASHBOARD_HTML template', () => {
     expect(styleCloses.length).toBe(1);
   });
 });
+
+describe('Overview tab hooks', () => {
+  it('contains tab nav buttons for Browse and Overview', () => {
+    expect(DASHBOARD_HTML).toMatch(/id=["']tab-btn-browse["']/);
+    expect(DASHBOARD_HTML).toMatch(/id=["']tab-btn-overview["']/);
+  });
+
+  it('contains the Overview tab container and the 4 panel containers', () => {
+    expect(DASHBOARD_HTML).toMatch(/id=["']tab-overview["']/);
+    expect(DASHBOARD_HTML).toMatch(/id=["']panel-cost["']/);
+    expect(DASHBOARD_HTML).toMatch(/id=["']panel-productivity["']/);
+    expect(DASHBOARD_HTML).toMatch(/id=["']panel-projects["']/);
+    expect(DASHBOARD_HTML).toMatch(/id=["']panel-quality["']/);
+  });
+
+  it('contains a fetch call to /api/overview', () => {
+    expect(DASHBOARD_HTML).toContain('/api/overview');
+  });
+
+  it('defines an activateTab function', () => {
+    expect(DASHBOARD_HTML).toContain('activateTab');
+  });
+
+  it('still wires up the Browse tab (regression: existing /api/users panel survives)', () => {
+    expect(DASHBOARD_HTML).toMatch(/id=["']tab-browse["']/);
+    expect(DASHBOARD_HTML).toContain('/api/users');
+  });
+});
