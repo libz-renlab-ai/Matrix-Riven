@@ -111,6 +111,14 @@ describe('aggregateCost', () => {
     expect(out.team_total_usd).toBe(2);
     expect(out.per_user).toEqual([{ user_id: 'alice@x', cost_usd: 2 }]);
   });
+
+  it('on tied cost_usd, falls back to user_id ascending', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({ session_id: 's1', user_id: 'zoe@x', cost_usd: 2 }));
+    raw.latestPerSession.set('s2', snap({ session_id: 's2', user_id: 'alice@x', cost_usd: 2 }));
+    const out = aggregateCost(raw);
+    expect(out.per_user.map((u) => u.user_id)).toEqual(['alice@x', 'zoe@x']);
+  });
 });
 
 // ────────────────────────────── aggregateProductivity ──────────────────────────────
@@ -193,5 +201,13 @@ describe('aggregateProductivity', () => {
       avg_session_minutes: 0,
       over_200k_count: 0,
     });
+  });
+
+  it('on tied turn_count, falls back to user_id ascending', () => {
+    const raw = emptyRaw();
+    raw.latestPerSession.set('s1', snap({ session_id: 's1', user_id: 'zoe@x', turn_count: 5 }));
+    raw.latestPerSession.set('s2', snap({ session_id: 's2', user_id: 'alice@x', turn_count: 5 }));
+    const out = aggregateProductivity(raw);
+    expect(out.per_user.map((u) => u.user_id)).toEqual(['alice@x', 'zoe@x']);
   });
 });

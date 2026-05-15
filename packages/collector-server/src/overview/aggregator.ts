@@ -18,7 +18,10 @@ export function aggregateCost(raw: RawSnapshots): CostBlock {
     const cost_usd = sumOpt(snaps.map((s) => s.cost_usd));
     perUser.push({ user_id, cost_usd });
   }
-  perUser.sort((a, b) => b.cost_usd - a.cost_usd);
+  perUser.sort(
+    (a, b) =>
+      b.cost_usd - a.cost_usd || a.user_id.localeCompare(b.user_id),
+  );
   const team_total_usd = perUser.reduce((acc, u) => acc + u.cost_usd, 0);
 
   // quota_per_user: per user, take the snapshot with the most recent ts that carries quota fields.
@@ -126,10 +129,22 @@ export function aggregateProductivity(raw: RawSnapshots): ProductivityBlock {
       over_200k_count,
     });
   }
-  per_user.sort((a, b) => b.turn_count - a.turn_count);
+  per_user.sort(
+    (a, b) =>
+      b.turn_count - a.turn_count || a.user_id.localeCompare(b.user_id),
+  );
   return { per_user };
 }
 
+/**
+ * Average duration in minutes across sessions that carry a valid
+ * `session_started_at`. Sessions missing that field are excluded from BOTH
+ * numerator and denominator — the returned value is "average of measurable
+ * sessions", not "average of all sessions". A caller building a label like
+ * "avg X min over N sessions" should pair this with `session_count` only when
+ * every session has a `session_started_at`; otherwise prefer "avg X min
+ * (some sessions un-measured)".
+ */
 function averageMinutes(snaps: readonly CcStatusSnapshot[]): number {
   const durations: number[] = [];
   for (const s of snaps) {
