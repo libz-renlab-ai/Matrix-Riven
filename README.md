@@ -158,7 +158,31 @@ v0.2.0 把运行时命名空间从 `teamagent` / `TEAMAGENT_*` 改成了 `riven`
 
 ---
 
+## Overview tab（领导视图）
+
+Dashboard 默认开在 **Browse** tab——transcript 文件浏览，跟以前一样。
+
+切到 **Overview** tab 看团队聚合视图（单日）：
+
+- 💰 **Cost** — 今日团队总花费 + 每人花费排行 + 模型选用分布
+- ⚡ **Productivity** — 每人 turn 数 / tool 失败率 / 平均会话时长 / OVER_200K 次数
+- 📦 **Projects** — 团队在哪些项目（cwd）/ 分支上花时间最多
+- ⚠️ **Quality** — 敏感字段被脱敏次数 / tool 失败热点 / 失控会话
+
+任意 panel 里点用户名 → 跳回 Browse tab + 自动选中该用户，看会话原文。
+
+数据 API：`GET /api/overview?date=YYYY-MM-DD`（默认今天 UTC）。返回 JSON 见 [`docs/superpowers/specs/2026-05-15-leadership-overview-design.md`](docs/superpowers/specs/2026-05-15-leadership-overview-design.md) §5.3。
+
+> **权限说明**：和其它 `/api/*` 一样，当前没加 token gate，假设公司内网受限。
+> 如果要把它暴露到不受控网络，先按 §7.3 加 auth 再 deploy。
+
+---
+
 ## 设计文档
 
-- **设计文档**：[`docs/superpowers/specs/2026-05-14-teambrain-log-upload-extraction-design.md`](docs/superpowers/specs/2026-05-14-teambrain-log-upload-extraction-design.md)
-- **实现计划**：[`docs/superpowers/plans/2026-05-14-teambrain-log-upload-extraction.md`](docs/superpowers/plans/2026-05-14-teambrain-log-upload-extraction.md)
+- **当前 milestone（领导视图）**
+  - 设计：[`docs/superpowers/specs/2026-05-15-leadership-overview-design.md`](docs/superpowers/specs/2026-05-15-leadership-overview-design.md)
+  - 实现计划：[`docs/superpowers/plans/2026-05-15-leadership-overview.md`](docs/superpowers/plans/2026-05-15-leadership-overview.md)
+- **拆包 milestone（从 TeamBrain 剥离）**
+  - 设计：[`docs/superpowers/specs/2026-05-14-teambrain-log-upload-extraction-design.md`](docs/superpowers/specs/2026-05-14-teambrain-log-upload-extraction-design.md)
+  - 实现计划：[`docs/superpowers/plans/2026-05-14-teambrain-log-upload-extraction.md`](docs/superpowers/plans/2026-05-14-teambrain-log-upload-extraction.md)
