@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ParsedSession, ParsedMessage } from '../../types.js';
-import { projectEta } from '../signals/project-eta.js';
+import { projectEta } from '../project-eta.js';
 
 function mk(opts: {
   start: string; user?: string; cwd?: string; messages?: ParsedMessage[];

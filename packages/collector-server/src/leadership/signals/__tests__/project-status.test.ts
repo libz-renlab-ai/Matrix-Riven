@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ParsedSession, ParsedMessage } from '../../types.js';
-import { classifyProject, getRecentFiles } from '../signals/project-status.js';
+import { classifyProject, getRecentFiles } from '../project-status.js';
 
 function mk(opts: {
   start: string; user?: string; cwd?: string; messages?: ParsedMessage[];
