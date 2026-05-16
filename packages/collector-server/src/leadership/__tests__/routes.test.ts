@@ -228,28 +228,55 @@ describe('TTL cache', () => {
   });
 });
 
-describe('HTML placeholder routes', () => {
-  it('GET /overview returns 200 text/html', async () => {
+describe('HTML routes', () => {
+  it('GET /overview returns 200 text/html with real renderer output', async () => {
     const res = await fetch(`${baseUrl}/overview`);
     expect(res.status).toBe(200);
     const ct = res.headers.get('content-type');
     expect(ct).toContain('text/html');
     const text = await res.text();
-    expect(text).toContain('placeholder');
+    expect(text).toContain('<!DOCTYPE html>');
+    expect(text).toContain('lh-kpi-card');
   });
 
-  it('GET /members/:id returns 200 text/html', async () => {
-    const res = await fetch(`${baseUrl}/members/someuser`);
+  it('GET /members/:id returns 200 text/html for known member', async () => {
+    const res = await fetch(`${baseUrl}/members/alice2026`);
     expect(res.status).toBe(200);
     const ct = res.headers.get('content-type');
     expect(ct).toContain('text/html');
+    const text = await res.text();
+    expect(text).toContain('<!DOCTYPE html>');
+    expect(text).toContain('lh-kpi-card');
   });
 
-  it('GET /projects/:name returns 200 text/html', async () => {
-    const res = await fetch(`${baseUrl}/projects/someproject`);
+  it('GET /members/:id returns 404 text/html for unknown member', async () => {
+    const res = await fetch(`${baseUrl}/members/unknown-user-xyz`);
+    expect(res.status).toBe(404);
+    const ct = res.headers.get('content-type');
+    expect(ct).toContain('text/html');
+    const text = await res.text();
+    expect(text).toContain('<!DOCTYPE html>');
+    expect(text).toContain('不存在');
+  });
+
+  it('GET /projects/:name returns 200 text/html for known project', async () => {
+    const res = await fetch(`${baseUrl}/projects/${encodeURIComponent(PROJECT_A)}`);
     expect(res.status).toBe(200);
     const ct = res.headers.get('content-type');
     expect(ct).toContain('text/html');
+    const text = await res.text();
+    expect(text).toContain('<!DOCTYPE html>');
+    expect(text).toContain('lh-kpi-card');
+  });
+
+  it('GET /projects/:name returns 404 text/html for unknown project', async () => {
+    const res = await fetch(`${baseUrl}/projects/nonexistent-project-xyz`);
+    expect(res.status).toBe(404);
+    const ct = res.headers.get('content-type');
+    expect(ct).toContain('text/html');
+    const text = await res.text();
+    expect(text).toContain('<!DOCTYPE html>');
+    expect(text).toContain('不存在');
   });
 
   it('non-leadership route is NOT handled (returns false)', async () => {

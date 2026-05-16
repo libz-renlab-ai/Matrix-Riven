@@ -24,6 +24,10 @@ import {
   buildMemberDetail,
   buildProjectDetail,
 } from './aggregator.js';
+import { renderOverview } from './views/overview.html.js';
+import { renderMemberDetail } from './views/member-detail.html.js';
+import { renderProjectDetail } from './views/project-detail.html.js';
+import { LEADERSHIP_CSS } from './views/styles.css.js';
 
 // ── public interface ──────────────────────────────────────────────────────────
 
@@ -164,14 +168,35 @@ export function handleLeadershipRequest(
     return true;
   }
 
-  // ── HTML placeholder routes ─────────────────────────────────────────────────
+  // ── HTML routes ─────────────────────────────────────────────────────────────
 
   if (pathname === '/overview') {
     if (req.method !== 'GET') {
       sendJson(res, 405, { error: 'method_not_allowed' });
       return true;
     }
-    sendHtml(res, 200, '<p>placeholder — to be filled in Tasks 17-20</p>');
+    const rangeStr = query.get('range') ?? undefined;
+    const nowDate = now();
+    const range = parseRange(rangeStr, nowDate);
+    const cacheKey = `html|${pathname}|${range.label}`;
+    const cached = deps.cache.get(cacheKey);
+    if (cached !== undefined) {
+      sendHtml(res, 200, cached as string);
+      return true;
+    }
+    try {
+      const snap = buildOverviewSnapshot({
+        collectorDir: deps.collectorDir,
+        range,
+        now: nowDate,
+        mainProjects: deps.mainProjects,
+      });
+      const html = renderOverview(snap);
+      deps.cache.set(cacheKey, html);
+      sendHtml(res, 200, html);
+    } catch {
+      sendHtml(res, 500, render404('Overview (server error)'));
+    }
     return true;
   }
 
@@ -181,8 +206,39 @@ export function handleLeadershipRequest(
       sendJson(res, 405, { error: 'method_not_allowed' });
       return true;
     }
-    const id = decodeURIComponent(membersHtmlMatch[1]!);
-    sendHtml(res, 200, `<p>placeholder — member ${escapeHtml(id)}</p>`);
+    const localPart = decodeURIComponent(membersHtmlMatch[1]!);
+    const rangeStr = query.get('range') ?? undefined;
+    const nowDate = now();
+    const range = parseRange(rangeStr, nowDate);
+    const cacheKey = `html|${pathname}|${range.label}`;
+    const cached = deps.cache.get(cacheKey);
+    if (cached !== undefined) {
+      sendHtml(res, 200, cached as string);
+      return true;
+    }
+    const email = resolveEmailByLocalPart(deps.collectorDir, localPart);
+    if (!email) {
+      sendHtml(res, 404, render404(`成员 ${localPart}`));
+      return true;
+    }
+    try {
+      const detail = buildMemberDetail({
+        collectorDir: deps.collectorDir,
+        email,
+        range,
+        now: nowDate,
+        mainProjects: deps.mainProjects,
+      });
+      if (!detail) {
+        sendHtml(res, 404, render404(`成员 ${localPart}`));
+        return true;
+      }
+      const html = renderMemberDetail(detail);
+      deps.cache.set(cacheKey, html);
+      sendHtml(res, 200, html);
+    } catch {
+      sendHtml(res, 500, render404(`成员 ${localPart} (server error)`));
+    }
     return true;
   }
 
@@ -192,8 +248,33 @@ export function handleLeadershipRequest(
       sendJson(res, 405, { error: 'method_not_allowed' });
       return true;
     }
-    const name = decodeURIComponent(projectsHtmlMatch[1]!);
-    sendHtml(res, 200, `<p>placeholder — project ${escapeHtml(name)}</p>`);
+    const projectName = decodeURIComponent(projectsHtmlMatch[1]!);
+    const rangeStr = query.get('range') ?? undefined;
+    const nowDate = now();
+    const range = parseRange(rangeStr, nowDate);
+    const cacheKey = `html|${pathname}|${range.label}`;
+    const cached = deps.cache.get(cacheKey);
+    if (cached !== undefined) {
+      sendHtml(res, 200, cached as string);
+      return true;
+    }
+    try {
+      const detail = buildProjectDetail({
+        collectorDir: deps.collectorDir,
+        projectName,
+        range,
+        now: nowDate,
+      });
+      if (!detail) {
+        sendHtml(res, 404, render404(`项目 ${projectName}`));
+        return true;
+      }
+      const html = renderProjectDetail(detail);
+      deps.cache.set(cacheKey, html);
+      sendHtml(res, 200, html);
+    } catch {
+      sendHtml(res, 500, render404(`项目 ${projectName} (server error)`));
+    }
     return true;
   }
 
@@ -224,6 +305,10 @@ function escapeHtml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function render404(what: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>404</title><style>${LEADERSHIP_CSS}</style></head><body><div class="lh-container"><div class="lh-empty">${escapeHtml(what)} 不存在<br><a href="/overview">← Overview</a></div></div></body></html>`;
 }
 
 /**
