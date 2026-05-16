@@ -44,6 +44,10 @@ import { detectSensitiveText, redactSensitiveText } from '@matrix-riven/shared';
 // Leadership overview (Task 8) — GET /api/overview wires these two together.
 import { scanForOverview } from './overview/disk-scan.js';
 import { buildOverview } from './overview/aggregator.js';
+// Task 15 — Leadership API + HTML routes (replaces legacy /api/overview in the
+// dispatch order so the new aggregator + cache wins over the old disk-scan path).
+import { TtlCache } from './leadership/cache.js';
+import { handleLeadershipRequest } from './leadership/routes.js';
 
 /** Cap raw POST body to bound memory + reject obvious DoS payloads. */
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -592,7 +596,21 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
     readEnvWithLegacy(process.env, 'RIVEN_AUTH_TOKEN', 'BPP_AUTH_TOKEN') ??
     '';
 
+  // Task 15 — shared TTL cache for all leadership endpoints (30s TTL keeps the
+  // dashboard snappy under polling while bounding disk-scan frequency).
+  const leadershipCache = new TtlCache<unknown>(30_000);
+  const leadershipDeps = {
+    collectorDir: outputDir,
+    cache: leadershipCache,
+    now,
+  };
+
   const requestHandler = (req: IncomingMessage, res: ServerResponse): void => {
+    // Task 15 — Leadership API + HTML routes take precedence over the legacy
+    // GET handler so the new aggregator wins over /api/overview etc.
+    if (req.method === 'GET' && handleLeadershipRequest(req, res, leadershipDeps)) {
+      return;
+    }
     if (req.method === 'GET') {
       handleGet(req, res, outputDir, now);
       return;

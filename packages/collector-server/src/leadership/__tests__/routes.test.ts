@@ -1,0 +1,262 @@
+/**
+ * Integration tests for leadership route handlers.
+ * Spins up a real http.Server with a mock collector dir.
+ */
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { gzipSync } from 'node:zlib';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { TtlCache } from '../cache.js';
+import { handleLeadershipRequest, type LeadershipRouteDeps } from '../routes.js';
+
+// ── fixture writer ────────────────────────────────────────────────────────────
+
+function writeEnvelope(
+  dir: string,
+  email: string,
+  date: string,
+  sid: string,
+  opts: { projectName: string; cwd: string },
+): void {
+  const jsonl = JSON.stringify({
+    type: 'user',
+    timestamp: '2026-05-14T10:00:00Z',
+    message: { role: 'user', content: 'hi' },
+  });
+  const gz = gzipSync(Buffer.from(jsonl)).toString('base64');
+  const env = {
+    schema_version: 1,
+    envelope: {
+      id: sid,
+      user_id: email,
+      machine_id: 'm',
+      session_id: sid,
+      cwd: opts.cwd,
+      project_name: opts.projectName,
+      captured_at: '2026-05-14T10:00:00Z',
+      source: 'stop-hook',
+      host: { os: 'l', arch: 'x', hostname: 'h' },
+      riven_version: '0',
+      consented_at: null,
+      payload_size: jsonl.length,
+      transcript_path: '',
+    },
+    transcript: { compression: 'gzip+base64', content: gz },
+  };
+  const filePath = join(dir, email, date);
+  mkdirSync(filePath, { recursive: true });
+  writeFileSync(join(filePath, `${sid}.json`), JSON.stringify(env));
+}
+
+// ── test server setup ─────────────────────────────────────────────────────────
+
+const collectorDir = join(tmpdir(), `riven-routes-test-${randomUUID()}`);
+const EMAIL_A = 'alice2026@example.com';
+const EMAIL_B = 'bob2026@example.com';
+const PROJECT_A = 'project-alpha';
+const PROJECT_B = 'project-beta';
+
+let server: Server;
+let baseUrl: string;
+let cache: TtlCache<unknown>;
+
+// Fixed "now" so cache TTL and date range are deterministic
+const FIXED_NOW = new Date('2026-05-16T12:00:00Z');
+
+beforeAll(async () => {
+  // Write fixture sessions
+  writeEnvelope(collectorDir, EMAIL_A, '2026-05-14', 'sess-a1', {
+    projectName: PROJECT_A,
+    cwd: `/home/alice/projects/${PROJECT_A}`,
+  });
+  writeEnvelope(collectorDir, EMAIL_A, '2026-05-15', 'sess-a2', {
+    projectName: PROJECT_A,
+    cwd: `/home/alice/projects/${PROJECT_A}`,
+  });
+  writeEnvelope(collectorDir, EMAIL_B, '2026-05-14', 'sess-b1', {
+    projectName: PROJECT_B,
+    cwd: `/home/bob/projects/${PROJECT_B}`,
+  });
+
+  cache = new TtlCache<unknown>(60_000); // 60s TTL
+
+  const deps: LeadershipRouteDeps = {
+    collectorDir,
+    cache,
+    now: () => FIXED_NOW,
+  };
+
+  await new Promise<void>((resolve, reject) => {
+    server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      const handled = handleLeadershipRequest(req, res, deps);
+      if (!handled) {
+        res.statusCode = 404;
+        res.end('not handled');
+      }
+    });
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      if (!addr || typeof addr === 'string') {
+        reject(new Error('server failed to bind'));
+        return;
+      }
+      baseUrl = `http://127.0.0.1:${addr.port}`;
+      resolve();
+    });
+  });
+});
+
+afterAll(async () => {
+  await new Promise<void>((resolve, reject) =>
+    server.close((err) => (err ? reject(err) : resolve())),
+  );
+});
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+async function getJson(path: string): Promise<{ status: number; body: unknown; contentType: string | null }> {
+  const res = await fetch(`${baseUrl}${path}`);
+  const contentType = res.headers.get('content-type');
+  const body = await res.json();
+  return { status: res.status, body, contentType };
+}
+
+// ── tests ─────────────────────────────────────────────────────────────────────
+
+describe('GET /api/overview', () => {
+  it('returns 200 with JSON content-type', async () => {
+    const { status, contentType } = await getJson('/api/overview');
+    expect(status).toBe(200);
+    expect(contentType).toContain('application/json');
+  });
+
+  it('response has kpis, members, projects arrays', async () => {
+    const { body } = await getJson('/api/overview');
+    const snap = body as Record<string, unknown>;
+    expect(Array.isArray(snap.members)).toBe(true);
+    expect(Array.isArray(snap.projects)).toBe(true);
+    expect(snap.kpis).toBeTruthy();
+  });
+
+  it('accepts ?range=30d without error', async () => {
+    const { status } = await getJson('/api/overview?range=30d');
+    expect(status).toBe(200);
+  });
+
+  it('accepts ?range=today without error', async () => {
+    const { status } = await getJson('/api/overview?range=today');
+    expect(status).toBe(200);
+  });
+
+  it('accepts ?range=24h without error', async () => {
+    const { status } = await getJson('/api/overview?range=24h');
+    expect(status).toBe(200);
+  });
+});
+
+describe('GET /api/members/:emailLocalPart', () => {
+  it('returns 200 for known local-part (alice)', async () => {
+    const { status, body } = await getJson('/api/members/alice2026');
+    expect(status).toBe(200);
+    const snap = body as Record<string, unknown>;
+    expect(snap.detail).toBeTruthy();
+  });
+
+  it('returns 200 for known local-part (bob)', async () => {
+    const { status, body } = await getJson('/api/members/bob2026');
+    expect(status).toBe(200);
+    const snap = body as Record<string, unknown>;
+    expect(snap).toHaveProperty('email');
+    expect(snap.detail).toBeTruthy();
+  });
+
+  it('returns 404 for unknown local-part', async () => {
+    const { status, body } = await getJson('/api/members/unknown-user-xyz');
+    expect(status).toBe(404);
+    const err = body as Record<string, unknown>;
+    expect(err.error).toBe('not_found');
+  });
+
+  it('response has JSON content-type on 404', async () => {
+    const { contentType } = await getJson('/api/members/nobody');
+    expect(contentType).toContain('application/json');
+  });
+});
+
+describe('GET /api/projects/:name', () => {
+  it('returns 200 for known project', async () => {
+    const { status, body } = await getJson(`/api/projects/${encodeURIComponent(PROJECT_A)}`);
+    expect(status).toBe(200);
+    const snap = body as Record<string, unknown>;
+    expect(snap.detail).toBeTruthy();
+  });
+
+  it('returns 200 for another known project', async () => {
+    const { status, body } = await getJson(`/api/projects/${encodeURIComponent(PROJECT_B)}`);
+    expect(status).toBe(200);
+    const snap = body as Record<string, unknown>;
+    expect(snap).toHaveProperty('name');
+  });
+
+  it('returns 404 for unknown project', async () => {
+    const { status, body } = await getJson('/api/projects/nonexistent-project-xyz');
+    expect(status).toBe(404);
+    const err = body as Record<string, unknown>;
+    expect(err.error).toBe('not_found');
+  });
+
+  it('URL-decodes project name with spaces/slashes', async () => {
+    // Just verify it handles encoded names without crashing; returns 404 since the project doesn't exist
+    const { status } = await getJson('/api/projects/some%20project%20name');
+    expect([200, 404]).toContain(status);
+  });
+});
+
+describe('TTL cache', () => {
+  it('second identical /api/overview request returns the same computedAt (cache hit)', async () => {
+    // Clear cache and re-fetch twice
+    cache.clear();
+    const { body: body1 } = await getJson('/api/overview?range=7d');
+    const { body: body2 } = await getJson('/api/overview?range=7d');
+    const snap1 = body1 as Record<string, unknown>;
+    const snap2 = body2 as Record<string, unknown>;
+    expect(snap1.computedAt).toBe(snap2.computedAt);
+  });
+});
+
+describe('HTML placeholder routes', () => {
+  it('GET /overview returns 200 text/html', async () => {
+    const res = await fetch(`${baseUrl}/overview`);
+    expect(res.status).toBe(200);
+    const ct = res.headers.get('content-type');
+    expect(ct).toContain('text/html');
+    const text = await res.text();
+    expect(text).toContain('placeholder');
+  });
+
+  it('GET /members/:id returns 200 text/html', async () => {
+    const res = await fetch(`${baseUrl}/members/someuser`);
+    expect(res.status).toBe(200);
+    const ct = res.headers.get('content-type');
+    expect(ct).toContain('text/html');
+  });
+
+  it('GET /projects/:name returns 200 text/html', async () => {
+    const res = await fetch(`${baseUrl}/projects/someproject`);
+    expect(res.status).toBe(200);
+    const ct = res.headers.get('content-type');
+    expect(ct).toContain('text/html');
+  });
+
+  it('non-leadership route is NOT handled (returns false)', async () => {
+    // The test server returns "not handled" (404) for unhandled routes
+    const res = await fetch(`${baseUrl}/some-other-route`);
+    expect(res.status).toBe(404);
+    const text = await res.text();
+    expect(text).toBe('not handled');
+  });
+});
