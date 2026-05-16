@@ -157,7 +157,7 @@ describe('computeHeatmap7x24', () => {
     expect(result).toHaveLength(7);
     result.forEach(row => expect(row).toHaveLength(24));
     // offset = floor((now - start) / dayMs) = floor(22h / 24h) = 0  => row 6
-    expect(result[6][9]).toBe(500); // 300 input + 200 output
+    expect(result[6]?.[9]).toBe(500); // 300 input + 200 output
   });
 
   it('accumulates tokens from multiple sessions in same cell', () => {
@@ -166,7 +166,7 @@ describe('computeHeatmap7x24', () => {
     const s2 = mkSession({ start: '2026-05-14T01:30:00Z', tokens: { input: 200, output: 100 } });
     const result = computeHeatmap7x24([s1, s2], now);
     // both at 2026-05-14T01:xx:00Z = 09:xx CST => same cell [6][9]
-    expect(result[6][9]).toBe(450);
+    expect(result[6]?.[9]).toBe(450);
   });
 
   it('excludes sessions outside the 7-day window', () => {

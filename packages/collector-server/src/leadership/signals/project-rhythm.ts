@@ -52,7 +52,8 @@ export function computeHeatmap7x24(sessions: ParsedSession[], now: Date): number
     const rowIdx = 6 - offsetDays;
     const cstDate = new Date(cstTime);
     const hr = cstDate.getUTCHours();
-    rows[rowIdx][hr] += s.tokens.input + s.tokens.output;
+    const row = rows[rowIdx];
+    if (row) row[hr] = (row[hr] ?? 0) + s.tokens.input + s.tokens.output;
   }
   return rows;
 }
