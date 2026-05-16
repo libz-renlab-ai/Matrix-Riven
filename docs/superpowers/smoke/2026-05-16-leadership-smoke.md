@@ -37,3 +37,15 @@ files takes ~14s which is within expected range for a first uncached read.
 
 Note: warm cache at 80ms is slightly above the ≤50ms budget from the plan; this is an
 inheritable fix for Task 22 (performance budget script) but does not constitute a blocking failure.
+
+## Perf budget (2026-05-16)
+
+- Cold: 12669ms (target <2000)  ❌ over budget
+- Warm p50: 2ms (target <50) ✅ under budget
+- Warm p95: 54ms
+
+**Verdict:** Budget exceeded. Cold scan reads the full 281 MB snapshot per request when the cache misses. Two follow-ups for a future task (NOT in this plan):
+1. Persist an index file at `<collectorDir>/.leadership-index.json` updated on POST /v1/cc-sessions and invalidated periodically.
+2. Or extend the TTL cache to also retain the parsed `ParsedSession[]` array so re-aggregation skips re-parsing the JSONL files.
+
+For demo on this snapshot, the 30s TTL keeps subsequent fetches fast (~2ms p50). Acceptable for human-paced refresh; not for high-frequency polling.
