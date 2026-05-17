@@ -197,23 +197,28 @@ v0.2.0 把运行时命名空间从 `teamagent` / `TEAMAGENT_*` 改成了 `riven`
 
 ---
 
-## Overview tab（领导视图）
+## Leadership 看板（已重写：v0.3 起为默认入口）
 
-Dashboard 默认开在 **Browse** tab——transcript 文件浏览，跟以前一样。
+> **本节描述 v0.3 之后的实际 UI**。原来基于 4 panel（Cost / Productivity / Projects / Quality）的 Overview tab 已被替换成 v7 spatial design 的整页仪表盘——hero + KPI 卡 + Attention + Members + Projects + Highlights + Collab + slideover。入口在 `GET /` 或 `GET /overview`。
 
-切到 **Overview** tab 看团队聚合视图（单日）：
+看板布局（自上而下）：
 
-- 💰 **Cost** — 今日团队总花费 + 每人花费排行 + 模型选用分布
-- ⚡ **Productivity** — 每人 turn 数 / tool 失败率 / 平均会话时长 / OVER_200K 次数
-- 📦 **Projects** — 团队在哪些项目（cwd）/ 分支上花时间最多
-- ⚠️ **Quality** — 敏感字段被脱敏次数 / tool 失败热点 / 失控会话
+- **Hero** — 一句话标题（基于 attention / high-output 计数）+ 可选 T5 三行日报 briefBox
+- **KPI 行** — 需关注 / 高产出 / 今日消耗 (USD) / 整体节奏，每张卡都有真 sparkline
+- **需要你看一眼** — 卡住 / 求助 / 闲置 / 单点依赖 / 沉睡项目；点击展开 slideover
+- **团队** — 4 张成员卡：今日会话 · 焦点项目 · LLM 周报或推断性 fallback narrative
+- **项目** — 4 张项目卡：phase / 健康分 / ETA / bus-factor / 近期文件
+- **近期关键进展** — commit / push / PR / release，自动用 T1 narrative 替换原始 shell
+- **协作热点** — 同文件多人触碰
 
-任意 panel 里点用户名 → 跳回 Browse tab + 自动选中该用户，看会话原文。
+切到 `/people` / `/projects` 看全量列表。Slideover 通过点击成员/项目卡片自动打开，显示该实体的近况 + prompt 演变 + 项目分布。
 
-数据 API：`GET /api/overview?date=YYYY-MM-DD`（默认今天 UTC）。返回 JSON 见 [`docs/superpowers/specs/2026-05-15-leadership-overview-design.md`](docs/superpowers/specs/2026-05-15-leadership-overview-design.md) §5.3。
+数据 API：`GET /api/overview[?range=today|24h|7d|30d]`（默认 7d）。完整端点列表见上一节"API + HTML 端点"。
 
-> **权限说明**：和其它 `/api/*` 一样，当前没加 token gate，假设公司内网受限。
-> 如果要把它暴露到不受控网络，先按 §7.3 加 auth 再 deploy。
+**权限说明（v0.3 起重写）：**
+- 默认 `HOST=127.0.0.1`（loopback）——本地起服务时不会自动暴露到 LAN。
+- 配 `RIVEN_AUTH_TOKEN` 后，`POST /v1/cc-sessions` **以及** 所有领导路由（`/overview` / `/api/*`）都要求 `Authorization: Bearer <token>`。Public landing / sources / demo 仍可匿名访问。
+- 要在 LAN 上 demo：`HOST=0.0.0.0 RIVEN_AUTH_TOKEN=$(openssl rand -hex 32)`。两者必须同时配，否则 bin-prod-server 在 stderr 打 WARNING。
 
 ---
 

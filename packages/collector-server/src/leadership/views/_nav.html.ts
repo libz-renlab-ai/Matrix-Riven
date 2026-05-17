@@ -8,7 +8,7 @@
  * the meta strip shows a live dot + range label + the current viewer avatar.
  */
 
-export type ActiveTab = 'overview' | 'people' | 'projects' | 'activity' | 'insights';
+export type ActiveTab = 'overview' | 'people' | 'projects' | 'retro' | 'activity' | 'insights';
 
 interface TabSpec {
   id: ActiveTab;
@@ -20,6 +20,7 @@ const TABS: readonly TabSpec[] = [
   { id: 'overview', label: 'Overview', href: '/overview' },
   { id: 'people', label: 'People', href: '/people' },
   { id: 'projects', label: 'Projects', href: '/projects' },
+  { id: 'retro', label: 'Retro', href: '/retro' },
   { id: 'activity', label: 'Activity', href: '/activity' },
   { id: 'insights', label: 'Insights', href: '/insights' },
 ];

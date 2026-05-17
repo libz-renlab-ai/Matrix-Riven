@@ -27,7 +27,7 @@ const FEATURES: LandingFeature[] = [
   },
   {
     icon: '◍',
-    title: '16 个信号检测器',
+    title: '17 个信号检测器',
     copy: '活跃 / 专注 / 节奏 / 卡住 / 求助 / 风险动作 / 协作热区 / 沉睡项目 / 单点依赖 / 学习面 ……',
     proof: '不是关键词检索，是结构化检测器；每个都有单元测试',
   },
@@ -102,7 +102,7 @@ export function renderLanding(opts: { hasAuth: boolean }): string {
 <div class="lc-page">
   <section class="lc-hero">
     <h1>不再看一堆 <em>0 会话 · 推进新功能 · ↘ 近期已收尾</em>。<br>看每个人在做什么、谁卡住了、今天团队真正进展到哪。</h1>
-    <p class="lead">Matrix-Riven 不是又一个 Notion 看板。它直接读你团队的 Claude Code transcript，跑 16 个信号检测器 + 五层 LLM 叙事，每 30 秒给你一份会说人话的仪表盘——而且诚实地告诉你数据多新、花了多少钱、谁该挪一下。</p>
+    <p class="lead">Matrix-Riven 不是又一个 Notion 看板。它直接读你团队的 Claude Code transcript，跑 17 个信号检测器 + 五层 LLM 叙事，每 30 秒给你一份会说人话的仪表盘——而且诚实地告诉你数据多新、花了多少钱、谁该挪一下。</p>
     <div class="lc-cta">${ctaPrimary}</div>
   </section>
 
@@ -114,6 +114,7 @@ export function renderLanding(opts: { hasAuth: boolean }): string {
     <div>Matrix-Riven · Leadership Edition · v0.1</div>
     <div>
       <a href="/overview">实时看板</a> ·
+      <a href="/retro">本周回顾</a> ·
       <a href="/sources">数据来源</a> ·
       <a href="/api/llm/status">LLM Status</a>
     </div>

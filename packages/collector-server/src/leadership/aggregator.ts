@@ -1298,20 +1298,36 @@ export function buildMemberDetail(input: {
     .map((s): SessionSummary => {
       const firstUser = s.messages.find((m) => m.role === 'user');
       const text = firstUser?.text ?? '';
-      // P-A3: enumerate every non-empty user prompt for the L2 expand UI.
+      // P-A3: enumerate up to the first 12 non-empty user prompts. We
+      // intentionally cap at 12 and drop the `.full` payload here because
+      // a single member endpoint was shipping 1.1 MB on real data — the
+      // slide-over only renders 6 rows anyway. Clients needing the full
+      // session text should hit the raw session via the `Browse` tab.
+      // (Reviewer-flagged 2026-05-18 launch audit P0.)
+      const PROMPT_CAP = 12;
+      const PROMPT_PREVIEW_BYTES = 200;
       const allPrompts = s.messages
         .filter((m) => m.role === 'user' && m.text.trim().length > 0)
+        .slice(0, PROMPT_CAP)
         .map((m) => ({
           ts: (m.ts ?? s.startTs).toISOString(),
-          preview: m.text.length > 200 ? m.text.slice(0, 200) : m.text,
-          full: m.text,
+          preview:
+            m.text.length > PROMPT_PREVIEW_BYTES
+              ? m.text.slice(0, PROMPT_PREVIEW_BYTES)
+              : m.text,
+          // `full` retained at 1× the preview budget so the UI can show a
+          // slightly longer expanded view without re-fetching, but we no
+          // longer carry tens of KB per prompt.
+          full: m.text.length > 800 ? m.text.slice(0, 800) + '…' : m.text,
         }));
       return {
         sessionId: s.envelope.sessionId,
         capturedAt: s.envelope.capturedAt,
         projectName: resolveProjectIdentity(s.envelope),
         totalTokens: s.tokens.input + s.tokens.output,
-        firstPromptPreview: text.length > 200 ? text.slice(0, 200) : text,
+        firstPromptPreview: text.length > PROMPT_PREVIEW_BYTES ? text.slice(0, PROMPT_PREVIEW_BYTES) : text,
+        // The full first prompt is the one place a leader might really
+        // want to read the original input verbatim; preserve it untruncated.
         firstPromptFull: text,
         allPrompts,
       };

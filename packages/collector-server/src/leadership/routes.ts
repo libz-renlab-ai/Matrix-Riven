@@ -30,6 +30,7 @@ import {
 import { renderOverview, renderStaleBanner } from './views/overview.html.js';
 import { renderLanding } from './views/_landing.html.js';
 import { renderSources } from './views/_sources.html.js';
+import { renderRetro } from './views/_retro.html.js';
 import { getDemoSnapshot } from './views/_demo-fixture.js';
 import {
   renderMemberSlideoverFragments,
@@ -124,8 +125,9 @@ export function handleLeadershipRequest(
     pathname === '/overview' ||
     pathname === '/people' ||
     pathname === '/projects' ||
-    pathname === '/highlights' ||
-    pathname === '/sessions' ||
+    pathname === '/activity' ||
+    pathname === '/insights' ||
+    pathname === '/retro' ||
     pathname.startsWith('/api/members/') ||
     pathname.startsWith('/api/projects/') ||
     pathname.startsWith('/members/') ||
@@ -419,6 +421,9 @@ export function handleLeadershipRequest(
     sendHtml(res, 200, renderStubTab('insights', 'Insights'));
     return true;
   }
+  if (pathname === '/retro' && req.method === 'GET') {
+    return renderRetroTab(req, res, deps, query, now);
+  }
 
   // P-B6: full-page detail routes retired. The drawer is now mounted in the
   // Overview shell and populated via /api/members/:id and /api/projects/:name.
@@ -585,6 +590,50 @@ function renderProjectsTab(
       : renderProjectsFragment(snap); // no limit → full list
     const banner = snap.staleness ? renderStaleBanner(snap.staleness) : '';
     const html = renderTabPage('projects', rangeToNavLabelLocal(range.label), banner + tightHero + body);
+    deps.cache.set(cacheKey, html);
+    sendHtml(res, 200, html);
+  } catch {
+    sendHtml(res, 500, renderOverviewError());
+  }
+  return true;
+}
+
+/**
+ * GET /retro — weekly retrospective view. Reuses the snapshot computed for
+ * /overview but selects different fields (delivered / concerns / standout /
+ * dormant). Default range forced to `7d` since "本周" is the editorial frame.
+ */
+function renderRetroTab(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: LeadershipRouteDeps,
+  query: URLSearchParams,
+  now: () => Date,
+): boolean {
+  if (req.method !== 'GET') {
+    sendJson(res, 405, { error: 'method_not_allowed' });
+    return true;
+  }
+  const range = parseRange(query.get('range') ?? '7d', now());
+  if (range === null) {
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+    return true;
+  }
+  const cacheKey = `html|/retro|${range.label}`;
+  const cached = deps.cache.get(cacheKey);
+  if (cached !== undefined) {
+    sendHtml(res, 200, cached as string);
+    return true;
+  }
+  try {
+    const snap = buildOverviewSnapshot({
+      collectorDir: deps.collectorDir,
+      range,
+      now: now(),
+      mainProjects: deps.mainProjects,
+      llmCache: deps.llmCache,
+    });
+    const html = renderRetro(snap);
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);
   } catch {
