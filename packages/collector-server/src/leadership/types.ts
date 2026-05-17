@@ -176,6 +176,18 @@ export interface KpiCards {
   projects: { active: number; maintaining: number; dormant: number };
 }
 
+export interface AttentionItem {
+  kind: 'member' | 'project';
+  refId: string;                // email (member) or project name
+  displayName: string;
+  initials: string;             // 2 chars for avatar
+  tag: string;                  // pill text, e.g., '闲置 11h'
+  tagSeverity: 'urgent' | 'normal' | 'calm';
+  line2: string;                // descriptive sentence; may contain inline <span class="mono">
+  time: string;                 // 'HH:MM' or arrow glyph
+  severity: number;             // 0-10 for sort desc
+}
+
 export interface OverviewSnapshot {
   schemaVersion: 1;
   range: { start: string; end: string; label: string };
@@ -184,6 +196,7 @@ export interface OverviewSnapshot {
   members: MemberSnapshot[];
   projects: ProjectSnapshot[];
   collaboration: CollabHit[];
+  attention: AttentionItem[];
 }
 
 // =====================================================================

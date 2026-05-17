@@ -22,6 +22,7 @@ function fixture(): OverviewSnapshot {
     collaboration: [
       { filePath: 'packages/shared/src/config.ts', members: ['liboze@x.com', 'liusy@x.com'], lastTouched: '2026-05-14T22:00:00.000Z' },
     ],
+    attention: [],
   };
 }
 

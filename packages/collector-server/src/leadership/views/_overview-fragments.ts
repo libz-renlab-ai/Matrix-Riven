@@ -11,7 +11,8 @@
  */
 
 import type { OverviewSnapshot, MemberSnapshot } from '../types.js';
-import { heroHeadline } from './_copy.js';
+import { heroHeadline, attentionLead } from './_copy.js';
+import { avatarColor } from './_helpers.js';
 
 export function renderHeroFragment(snap: OverviewSnapshot): string {
   const attentionCount = snap.kpis.attention.value;
@@ -88,4 +89,50 @@ export function renderKpisFragment(snap: OverviewSnapshot): string {
 function formatKilo(n: number): string {
   if (n < 1000) return String(n);
   return (Math.round(n / 100) / 10).toFixed(1) + 'k';
+}
+
+/**
+ * Attention editorial card (P-B4) — rendered between the KPI row and the
+ * member grid. Each row carries a `data-ref` attribute so the slideover
+ * (P-B6) can hook click-to-open. `line2` is emitted unescaped because the
+ * aggregator guarantees it is safe HTML (template-controlled, no user input).
+ */
+export function renderAttentionFragment(snap: OverviewSnapshot): string {
+  if (snap.attention.length === 0) {
+    return `<section id="attention" class="section fade-in"></section>`;
+  }
+  const lead = attentionLead(snap.attention.length);
+  const rows = snap.attention.map(a => `
+    <div class="att-row" data-ref="${escapeHtml(a.kind)}:${escapeHtml(a.refId)}" data-attention="${a.severity}">
+      <div class="att-avatar" style="background:${avatarColor(a.refId)}">${escapeHtml(a.initials)}</div>
+      <div class="att-body">
+        <div class="att-line1">
+          <strong>${escapeHtml(a.displayName)}</strong>
+          <span class="att-tag ${escapeHtml(a.tagSeverity)}">${escapeHtml(a.tag)}</span>
+        </div>
+        <div class="att-line2">${a.line2}</div>
+      </div>
+      <div class="att-time">${escapeHtml(a.time)}</div>
+      <div class="att-arrow">›</div>
+    </div>`).join('');
+  return `<section id="attention" class="section fade-in">
+    <div class="section-head">
+      <div class="section-title">需要你看一眼 <span class="section-count">${snap.attention.length}</span></div>
+    </div>
+    <div class="attention">
+      <div class="attention-head">
+        <div class="attention-icon">⚠</div>
+        <div class="attention-headline serif">${lead}</div>
+      </div>
+      <div class="attention-list">${rows}</div>
+    </div>
+  </section>`;
+}
+
+function escapeHtml(s: string): string {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }

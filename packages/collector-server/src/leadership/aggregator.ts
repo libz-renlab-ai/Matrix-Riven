@@ -14,6 +14,7 @@ import type {
   KpiCards,
   SessionSummary,
   DateRange,
+  AttentionItem,
 } from './types.js';
 import { computeActivity, computeFocus, computeRhythmDelta } from './signals/activity.js';
 import { detectLowActivity } from './signals/slacking.js';
@@ -78,6 +79,10 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
   // Collaboration
   const collaboration: CollabHit[] = detectCollabHits(inRange);
 
+  // Attention items (P-B4) — derived from member badges + project signals,
+  // sorted by severity desc so the editorial card can render row-by-row.
+  const attention: AttentionItem[] = deriveAttention(members, projects, input.now);
+
   // KPI cards
   const stuckCount = members.filter((m) => m.stateBadge === 'stuck').length;
   const helpCount = members.filter((m) => m.stateBadge === 'needs_help').length;
@@ -108,7 +113,74 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
     members,
     projects,
     collaboration,
+    attention,
   };
+}
+
+/**
+ * Derive an attention list from member badges + project signals.
+ * Output is sorted by severity DESC so the editorial card renders the most
+ * urgent rows first. line2 strings are template-controlled (no user input
+ * interpolated here) so the renderer is allowed to emit them unescaped — if
+ * future code adds user-controlled values, escape at the aggregator boundary.
+ */
+function deriveAttention(
+  members: MemberSnapshot[],
+  projects: ProjectSnapshot[],
+  _now: Date,
+): AttentionItem[] {
+  void _now;
+  const items: AttentionItem[] = [];
+
+  for (const m of members) {
+    const initials = m.displayName.slice(0, 2).toLowerCase();
+    if (m.stateBadge === 'stuck') {
+      items.push({
+        kind: 'member', refId: m.email, displayName: m.displayName, initials,
+        tag: '疑似卡住', tagSeverity: 'urgent',
+        line2: m.warnings[0] ?? `连续多次问同一类问题`,
+        time: '—', severity: 9,
+      });
+    }
+    if (m.stateBadge === 'needs_help') {
+      items.push({
+        kind: 'member', refId: m.email, displayName: m.displayName, initials,
+        tag: '求助', tagSeverity: 'urgent',
+        line2: m.warnings[0] ?? `多次失败 / 工具错误`,
+        time: '—', severity: 8,
+      });
+    }
+    if (m.stateBadge === 'low_activity') {
+      items.push({
+        kind: 'member', refId: m.email, displayName: m.displayName, initials,
+        tag: '闲置', tagSeverity: 'normal',
+        line2: `7 日活跃低于均值`,
+        time: '—', severity: 5,
+      });
+    }
+  }
+
+  for (const p of projects) {
+    const initials = p.name.slice(0, 2).toUpperCase();
+    if (p.busFactorWarning) {
+      items.push({
+        kind: 'project', refId: p.name, displayName: p.name, initials,
+        tag: '单点依赖', tagSeverity: 'calm',
+        line2: `顶贡献者份额 &gt; 70%`,
+        time: '—', severity: 4,
+      });
+    }
+    if (p.state === 'dormant' && p.contributors.length > 0) {
+      items.push({
+        kind: 'project', refId: p.name, displayName: p.name, initials,
+        tag: '沉睡', tagSeverity: 'calm',
+        line2: `48 小时无活动`,
+        time: '—', severity: 3,
+      });
+    }
+  }
+
+  return items.sort((a, b) => b.severity - a.severity);
 }
 
 function buildMemberSnapshotInner(

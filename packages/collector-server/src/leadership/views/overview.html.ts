@@ -11,7 +11,7 @@
 import type { OverviewSnapshot, MemberSnapshot, ProjectSnapshot, CollabHit } from '../types.js';
 import { LEADERSHIP_CSS, avatarColor, emailInitials } from './styles.css.js';
 import { renderNav } from './_nav.html.js';
-import { renderHeroFragment, renderKpisFragment } from './_overview-fragments.js';
+import { renderHeroFragment, renderKpisFragment, renderAttentionFragment } from './_overview-fragments.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -47,6 +47,7 @@ export function renderOverview(snapshot: OverviewSnapshot): string {
 ${renderNav('overview', { rangeLabel: navRangeLabel })}
 ${renderHeroFragment(snapshot)}
 ${renderKpisFragment(snapshot)}
+${renderAttentionFragment(snapshot)}
 <div class="lh-container">
   <div class="lh-topbar">
     <h1>团队 leadership 视图</h1>
