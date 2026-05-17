@@ -47,7 +47,6 @@ import { computeExtensionMix, computeTestRatio } from './signals/project-stack.j
 import { guessPhase } from './signals/project-phase.js';
 import { computeHealthScore, extractMilestones } from './signals/project-health.js';
 import { computeWebResearchShare, computeTrend7d, computeHeatmap7x24 } from './signals/project-rhythm.js';
-import { createHash } from 'node:crypto';
 import type { LlmCache } from './llm/cache.js';
 import type {
   T1Input,
@@ -56,6 +55,13 @@ import type {
   T4Input,
   T5Input,
 } from './llm/prompts/index.js';
+import {
+  t1CacheKey,
+  t2CacheKey,
+  t3CacheKey,
+  t4CacheKey,
+  t5CacheKey,
+} from './llm/cache-keys.js';
 
 // sumRedactions is imported but only used indirectly (available for callers).
 // Suppress TS unused-import by using it in a re-export.
@@ -350,89 +356,6 @@ function attachLlmFields(
       // Malformed cache value — silently skip so the template fallback renders.
     }
   }
-}
-
-// ---- cache-key generators (mirror llm/summarizer.ts) ------------------------
-
-/**
- * Stringify with object keys recursively sorted — exact mirror of the helper
- * in `llm/summarizer.ts`. Required so the keys we recompute here match the
- * keys the worker wrote.
- */
-function stableStringify(value: unknown): string {
-  if (value === null) return 'null';
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? JSON.stringify(value) : 'null';
-  }
-  if (typeof value === 'string' || typeof value === 'boolean') {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((v) => stableStringify(v)).join(',')}]`;
-  }
-  if (typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const keys = Object.keys(obj).sort();
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
-  }
-  return 'null';
-}
-
-function cacheKey(tier: string, payload: unknown): string {
-  const hash = createHash('sha1').update(stableStringify(payload)).digest('hex').slice(0, 16);
-  return `${tier}:${hash}`;
-}
-
-function t1CacheKey(x: T1Input): string {
-  // `changedFiles` order is incidental — sort to mirror summarizer behaviour.
-  const sortedFiles = [...x.changedFiles].sort();
-  return cacheKey('t1', {
-    id: x.id,
-    firstUserPrompt: x.firstUserPrompt,
-    changedFiles: sortedFiles,
-    toolCounts: x.toolCounts,
-    durationMin: x.durationMin,
-    errors: x.errors,
-  });
-}
-
-function t2CacheKey(x: T2Input): string {
-  return cacheKey('t2', {
-    email: x.email,
-    displayName: x.displayName,
-    state: x.state,
-    topFiles: [...x.topFiles].sort(),
-    sessionDigests: x.sessionDigests,
-  });
-}
-
-function t3CacheKey(x: T3Input): string {
-  return cacheKey('t3', {
-    project: x.project,
-    phase: x.phase,
-    contributors: [...x.contributors].sort(),
-    sessionDigests: x.sessionDigests,
-    recentCommits: x.recentCommits,
-  });
-}
-
-function t4CacheKey(x: T4Input): string {
-  return cacheKey('t4', {
-    refId: x.refId,
-    kind: x.kind,
-    displayName: x.displayName,
-    signal: x.signal,
-    evidence: x.evidence,
-  });
-}
-
-function t5CacheKey(x: T5Input): string {
-  return cacheKey('t5', {
-    date: x.date,
-    topHighlights: x.topHighlights,
-    attentionRewrites: x.attentionRewrites,
-    topProjects: x.topProjects,
-  });
 }
 
 /**

@@ -24,7 +24,6 @@
  * `docs/superpowers/plans/2026-05-17-llm-narrative.md` (§Wave 2 L-7).
  */
 
-import { createHash } from 'node:crypto';
 import type { LlmCache } from './cache.js';
 import { runLocalClaude } from './local-claude-client.js';
 import { redactForLLM } from './redact.js';
@@ -45,6 +44,13 @@ import {
   type T4Input,
   type T5Input,
 } from './prompts/index.js';
+import {
+  t1CacheKey,
+  t2CacheKey,
+  t3CacheKey,
+  t4CacheKey,
+  t5CacheKey,
+} from './cache-keys.js';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
@@ -57,44 +63,6 @@ export interface SummarizerContext {
   tier5Model?: string;
   /** Per-call timeout. Defaults 60000. */
   timeoutMs?: number;
-}
-
-// ---- deterministic JSON ------------------------------------------------------
-
-/**
- * Stringify with object keys recursively sorted. Arrays preserve order (item
- * order is semantically meaningful for most of our inputs except where
- * upstream callers don't promise it — e.g. `changedFiles`, where reorder
- * shouldn't bust the cache). For arrays whose order is incidental we sort
- * them at the call site before computing the key.
- */
-function stableStringify(value: unknown): string {
-  if (value === null) return 'null';
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? JSON.stringify(value) : 'null';
-  }
-  if (typeof value === 'string' || typeof value === 'boolean') {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    const parts: string[] = value.map((v) => stableStringify(v));
-    return `[${parts.join(',')}]`;
-  }
-  if (typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const keys = Object.keys(obj).sort();
-    const parts: string[] = keys.map(
-      (k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`,
-    );
-    return `{${parts.join(',')}}`;
-  }
-  // undefined / function / symbol — treat as null so the key stays stable.
-  return 'null';
-}
-
-function cacheKey(tier: string, payload: unknown): string {
-  const hash = createHash('sha1').update(stableStringify(payload)).digest('hex').slice(0, 16);
-  return `${tier}:${hash}`;
 }
 
 // ---- shared parse + warn helpers --------------------------------------------
@@ -176,19 +144,6 @@ function redactT5(x: T5Input): T5Input {
 
 // ---- T1 — session digests ----------------------------------------------------
 
-function t1Key(x: T1Input): string {
-  // `changedFiles` order is incidental — sort so reordering can't bust cache.
-  const sortedFiles = [...x.changedFiles].sort();
-  return cacheKey('t1', {
-    id: x.id,
-    firstUserPrompt: x.firstUserPrompt,
-    changedFiles: sortedFiles,
-    toolCounts: x.toolCounts,
-    durationMin: x.durationMin,
-    errors: x.errors,
-  });
-}
-
 export async function summarizeSessions(
   sessions: T1Input[],
   ctx: SummarizerContext,
@@ -196,7 +151,7 @@ export async function summarizeSessions(
   const hits = new Map<string, string>();
   const misses: Array<{ input: T1Input; key: string }> = [];
   for (const s of sessions) {
-    const key = t1Key(s);
+    const key = t1CacheKey(s);
     const cached = ctx.cache.get(key);
     if (cached !== undefined) {
       hits.set(s.id, cached);
@@ -247,16 +202,6 @@ export async function summarizeSessions(
 
 // ---- T2 — member-week digests -----------------------------------------------
 
-function t2Key(x: T2Input): string {
-  return cacheKey('t2', {
-    email: x.email,
-    displayName: x.displayName,
-    state: x.state,
-    topFiles: [...x.topFiles].sort(),
-    sessionDigests: x.sessionDigests,
-  });
-}
-
 export async function summarizeMembers(
   members: T2Input[],
   ctx: SummarizerContext,
@@ -264,7 +209,7 @@ export async function summarizeMembers(
   const hits = new Map<string, string>();
   const misses: Array<{ input: T2Input; key: string }> = [];
   for (const m of members) {
-    const key = t2Key(m);
+    const key = t2CacheKey(m);
     const cached = ctx.cache.get(key);
     if (cached !== undefined) {
       hits.set(m.email, cached);
@@ -316,16 +261,6 @@ export async function summarizeMembers(
 
 // ---- T3 — project-week digests ----------------------------------------------
 
-function t3Key(x: T3Input): string {
-  return cacheKey('t3', {
-    project: x.project,
-    phase: x.phase,
-    contributors: [...x.contributors].sort(),
-    sessionDigests: x.sessionDigests,
-    recentCommits: x.recentCommits,
-  });
-}
-
 export async function summarizeProjects(
   projects: T3Input[],
   ctx: SummarizerContext,
@@ -333,7 +268,7 @@ export async function summarizeProjects(
   const hits = new Map<string, string>();
   const misses: Array<{ input: T3Input; key: string }> = [];
   for (const p of projects) {
-    const key = t3Key(p);
+    const key = t3CacheKey(p);
     const cached = ctx.cache.get(key);
     if (cached !== undefined) {
       hits.set(p.project, cached);
@@ -385,16 +320,6 @@ export async function summarizeProjects(
 
 // ---- T4 — attention rewrites -------------------------------------------------
 
-function t4Key(x: T4Input): string {
-  return cacheKey('t4', {
-    refId: x.refId,
-    kind: x.kind,
-    displayName: x.displayName,
-    signal: x.signal,
-    evidence: x.evidence,
-  });
-}
-
 export async function summarizeAttention(
   items: T4Input[],
   ctx: SummarizerContext,
@@ -402,7 +327,7 @@ export async function summarizeAttention(
   const hits = new Map<string, string>();
   const misses: Array<{ input: T4Input; key: string }> = [];
   for (const it of items) {
-    const key = t4Key(it);
+    const key = t4CacheKey(it);
     const cached = ctx.cache.get(key);
     if (cached !== undefined) {
       hits.set(it.refId, cached);
@@ -452,20 +377,11 @@ export async function summarizeAttention(
 
 // ---- T5 — daily brief --------------------------------------------------------
 
-function t5Key(x: T5Input): string {
-  return cacheKey('t5', {
-    date: x.date,
-    topHighlights: x.topHighlights,
-    attentionRewrites: x.attentionRewrites,
-    topProjects: x.topProjects,
-  });
-}
-
 export async function summarizeDailyBrief(
   input: T5Input,
   ctx: SummarizerContext,
 ): Promise<string[]> {
-  const key = t5Key(input);
+  const key = t5CacheKey(input);
   const cached = ctx.cache.get(key);
   if (cached !== undefined) {
     try {
