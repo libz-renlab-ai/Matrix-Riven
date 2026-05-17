@@ -60,6 +60,9 @@ function makeDetail(overrides: Partial<MemberDetail> = {}): MemberDetail {
       { path: 'packages/collector-server/src/index.ts', edits: 14 },
       { path: 'packages/shared/src/types.ts', edits: 6 },
     ],
+    focus: { distinctCwdsToday: 2, avgSessionMinutes: 18 },
+    promptLengthSeries: [{ date: '2026-05-15', meanLen: 84 }],
+    newSurfaceCount: 1,
     ...overrides,
   };
 }

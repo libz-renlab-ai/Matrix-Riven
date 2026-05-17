@@ -39,6 +39,7 @@ function makeDetail(overrides: Partial<ProjectDetail> = {}): ProjectDetail {
       { path: 'src/index.ts', touches: 14 },
       { path: 'src/routes.ts', touches: 9 },
     ],
+    collabDensity: 0.4,
     ...overrides,
   };
 }
