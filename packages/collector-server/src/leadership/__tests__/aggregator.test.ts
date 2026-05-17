@@ -268,6 +268,105 @@ describe('deriveAttention (P-B4)', () => {
   });
 });
 
+describe('Phase 2 P2 — placeholder → real data (P-A2)', () => {
+  it('ProjectSnapshot exposes activeTodayPct + activeTodayCount', () => {
+    const snap = buildOverviewSnapshot({ sessions: FIXTURE, range: RANGE, now: NOW, collectorDir: '' });
+    for (const p of snap.projects) {
+      expect(typeof p.activeTodayPct).toBe('number');
+      expect(p.activeTodayPct).toBeGreaterThanOrEqual(0);
+      expect(p.activeTodayPct).toBeLessThanOrEqual(1);
+      expect(typeof p.activeTodayCount).toBe('number');
+      expect(p.activeTodayCount).toBeGreaterThanOrEqual(0);
+      expect(p.activeTodayCount).toBeLessThanOrEqual(p.contributors.length);
+    }
+  });
+
+  it('project-alpha has alice active today (1 of 1 contributors)', () => {
+    // FIXTURE puts alice in project-alpha with sessions inside the today
+    // window relative to NOW. So activeTodayCount == contributors.length.
+    const snap = buildOverviewSnapshot({ sessions: FIXTURE, range: RANGE, now: NOW, collectorDir: '' });
+    const alpha = snap.projects.find((p) => p.name === 'project-alpha')!;
+    expect(alpha.contributors.length).toBe(1);
+    expect(alpha.activeTodayCount).toBe(1);
+    expect(alpha.activeTodayPct).toBe(1);
+  });
+
+  it('kpis.pace has rhythmDelta + label in {升,稳,缓}', () => {
+    const snap = buildOverviewSnapshot({ sessions: FIXTURE, range: RANGE, now: NOW, collectorDir: '' });
+    expect(typeof snap.kpis.pace.rhythmDelta).toBe('number');
+    expect(['升', '稳', '缓']).toContain(snap.kpis.pace.label);
+  });
+
+  it('kpis.highOutput has count + avgDeltaPct numbers', () => {
+    const snap = buildOverviewSnapshot({ sessions: FIXTURE, range: RANGE, now: NOW, collectorDir: '' });
+    expect(typeof snap.kpis.highOutput.count).toBe('number');
+    expect(typeof snap.kpis.highOutput.avgDeltaPct).toBe('number');
+    // count must equal members with delta > 0.2
+    const expected = snap.members.filter((m) => m.deltaVs7dAvgPct > 0.2).length;
+    expect(snap.kpis.highOutput.count).toBe(expected);
+  });
+
+  it('kpis.todayCostUsd equals sum of member.today.costUsd', () => {
+    const snap = buildOverviewSnapshot({ sessions: FIXTURE, range: RANGE, now: NOW, collectorDir: '' });
+    const expected = snap.members.reduce((a, m) => a + m.today.costUsd, 0);
+    expect(snap.kpis.todayCostUsd).toBeCloseTo(expected, 2);
+  });
+
+  it('MemberSnapshot exposes lastSessionAt + line2-supporting fields', () => {
+    const snap = buildOverviewSnapshot({ sessions: FIXTURE, range: RANGE, now: NOW, collectorDir: '' });
+    for (const m of snap.members) {
+      expect(typeof m.lastSessionAt).toBe('string');
+      expect(typeof m.toolFailureRate).toBe('number');
+      expect(typeof m.riskyActionCount).toBe('number');
+      expect(typeof m.iterationDensity).toBe('number');
+      expect(typeof m.meanPromptLen).toBe('number');
+    }
+  });
+
+  it('low_activity attention line2 contains "小时" with real idle hours', () => {
+    const snap = buildOverviewSnapshot({
+      sessions: makeMixedFixture(),
+      range: RANGE,
+      now: NOW,
+      collectorDir: '',
+      mainProjects: ['main'],
+    });
+    const low = snap.attention.find((a) => a.kind === 'member' && a.tag === '闲置');
+    if (low) {
+      expect(low.line2).toMatch(/小时/);
+      expect(low.line2).not.toMatch(/7 日活跃低于均值$/);
+    }
+  });
+
+  it('stuck attention line2 contains "次 prompt" with real iteration density', () => {
+    const snap = buildOverviewSnapshot({
+      sessions: makeMixedFixture(),
+      range: RANGE,
+      now: NOW,
+      collectorDir: '',
+      mainProjects: ['main'],
+    });
+    const stuck = snap.attention.find((a) => a.kind === 'member' && a.tag === '疑似卡住');
+    if (stuck) {
+      expect(stuck.line2).toMatch(/次 prompt/);
+      expect(stuck.line2).toMatch(/均长 \d+ 字/);
+    }
+  });
+
+  it('busFactor attention line2 names the top contributor email + real percent', () => {
+    const snap = buildOverviewSnapshot({
+      sessions: makeFixtureWithBusFactorProject(),
+      range: RANGE,
+      now: NOW,
+      collectorDir: '',
+    });
+    const bf = snap.attention.find((a) => a.kind === 'project' && a.tag === '单点依赖');
+    expect(bf).toBeDefined();
+    expect(bf!.line2).toMatch(/whale@x\.com/);
+    expect(bf!.line2).toMatch(/占 \d+%/);
+  });
+});
+
 describe('Phase 2 wired signals (P-A1)', () => {
   it('MemberDetail exposes focus, promptLengthSeries, newSurfaceCount', () => {
     const result = buildMemberDetail({

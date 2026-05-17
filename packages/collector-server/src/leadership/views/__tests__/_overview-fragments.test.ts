@@ -11,6 +11,9 @@ function makeSnapshot(overrides: Partial<OverviewSnapshot> = {}): OverviewSnapsh
       teamActivity: { value: 147, deltaVsAvg: 0.1 },
       attention: { value: 2, deltaToday: 1, breakdown: { stuck: 1, needsHelp: 0, riskyAction: 1 } },
       projects: { active: 4, maintaining: 2, dormant: 1 },
+      pace: { rhythmDelta: 0, label: '稳' },
+      highOutput: { count: 0, avgDeltaPct: 0 },
+      todayCostUsd: 0,
     },
     members: [],
     projects: [],
@@ -50,6 +53,87 @@ describe('renderKpisFragment (P-B3)', () => {
   });
   it('wraps in <section id="kpis">', () => {
     expect(renderKpisFragment(snap)).toMatch(/^<section[^>]*id="kpis"/);
+  });
+});
+
+describe('renderKpisFragment — placeholder replacements (P2)', () => {
+  it('renders the real pace label (升/稳/缓) instead of "顺/稳"', () => {
+    const html = renderKpisFragment(makeSnapshot({
+      kpis: {
+        teamActivity: { value: 1, deltaVsAvg: 0 },
+        attention: { value: 0, deltaToday: 0, breakdown: { stuck: 0, needsHelp: 0, riskyAction: 0 } },
+        projects: { active: 1, maintaining: 0, dormant: 0 },
+        pace: { rhythmDelta: 0.42, label: '升' },
+        highOutput: { count: 2, avgDeltaPct: 0.35 },
+        todayCostUsd: 4.32,
+      },
+    }));
+    // pace card label — label sits in kpi-num followed by <span class="unit">
+    expect(html).toMatch(/kpi-pace[\s\S]*?kpi-num">升</);
+    // pace trend line shows real delta percent — no longer "多数项目按期"
+    expect(html).not.toContain('多数项目按期');
+    expect(html).toMatch(/42%/);
+  });
+
+  it('renders 缓 when rhythmDelta < -0.2', () => {
+    const html = renderKpisFragment(makeSnapshot({
+      kpis: {
+        teamActivity: { value: 1, deltaVsAvg: 0 },
+        attention: { value: 0, deltaToday: 0, breakdown: { stuck: 0, needsHelp: 0, riskyAction: 0 } },
+        projects: { active: 1, maintaining: 0, dormant: 0 },
+        pace: { rhythmDelta: -0.5, label: '缓' },
+        highOutput: { count: 0, avgDeltaPct: 0 },
+        todayCostUsd: 0,
+      },
+    }));
+    expect(html).toMatch(/kpi-pace[\s\S]*?kpi-num">缓</);
+  });
+
+  it('renders highOutput avg delta as "↑N% 平均" when count > 0', () => {
+    const html = renderKpisFragment(makeSnapshot({
+      kpis: {
+        teamActivity: { value: 1, deltaVsAvg: 0 },
+        attention: { value: 0, deltaToday: 0, breakdown: { stuck: 0, needsHelp: 0, riskyAction: 0 } },
+        projects: { active: 1, maintaining: 0, dormant: 0 },
+        pace: { rhythmDelta: 0, label: '稳' },
+        highOutput: { count: 3, avgDeltaPct: 0.4 },
+        todayCostUsd: 0,
+      },
+    }));
+    expect(html).toMatch(/↑40%/);
+    expect(html).toContain('平均');
+    expect(html).not.toContain('对比 7 日均值</span></div>\n      <svg');
+  });
+
+  it('renders "无" when highOutput.count === 0', () => {
+    const html = renderKpisFragment(makeSnapshot({
+      kpis: {
+        teamActivity: { value: 1, deltaVsAvg: 0 },
+        attention: { value: 0, deltaToday: 0, breakdown: { stuck: 0, needsHelp: 0, riskyAction: 0 } },
+        projects: { active: 1, maintaining: 0, dormant: 0 },
+        pace: { rhythmDelta: 0, label: '稳' },
+        highOutput: { count: 0, avgDeltaPct: 0 },
+        todayCostUsd: 0,
+      },
+    }));
+    // good card (count=0) → trend says "无"
+    expect(html).toMatch(/kpi-good[\s\S]*?<span>无<\/span>/);
+  });
+
+  it('spend card shows real $ from todayCostUsd, not ¥k tokens', () => {
+    const html = renderKpisFragment(makeSnapshot({
+      kpis: {
+        teamActivity: { value: 1, deltaVsAvg: 0 },
+        attention: { value: 0, deltaToday: 0, breakdown: { stuck: 0, needsHelp: 0, riskyAction: 0 } },
+        projects: { active: 1, maintaining: 0, dormant: 0 },
+        pace: { rhythmDelta: 0, label: '稳' },
+        highOutput: { count: 0, avgDeltaPct: 0 },
+        todayCostUsd: 4.32,
+      },
+    }));
+    expect(html).toContain('$4.32');
+    expect(html).toContain('今日消耗');
+    expect(html).not.toMatch(/¥/);
   });
 });
 
@@ -191,6 +275,7 @@ describe('renderProjectsFragment (P-B5)', () => {
           { email: 'a@x.com', sharePct: 0.5 }, { email: 'b@x.com', sharePct: 0.3 },
         ], busFactorWarning: false, trend7d: [1,1,2,2,3,3,4], phaseGuess: 'implement',
         healthScore: 7, etaDays: 5, etaConfidence: 'low' as const,
+        activeTodayPct: 0.5, activeTodayCount: 1,
       })),
     });
   }
@@ -204,6 +289,36 @@ describe('renderProjectsFragment (P-B5)', () => {
     const html = renderProjectsFragment(snapWithProjects(2));
     expect((html.match(/class="proj-bar"/g) ?? []).length).toBe(2);
     expect((html.match(/class="proj-people-stack"/g) ?? []).length).toBe(2);
+  });
+
+  it('progress label shows "N / M 人在做" not raw "X%"', () => {
+    const html = renderProjectsFragment(makeSnapshot({
+      projects: [{
+        name: 'mr', state: 'active', contributors: [
+          { email: 'a@x.com', sharePct: 0.5 },
+          { email: 'b@x.com', sharePct: 0.3 },
+          { email: 'c@x.com', sharePct: 0.2 },
+        ], busFactorWarning: false, trend7d: [1,1,2,2,3,3,4], phaseGuess: 'implement',
+        healthScore: 7, etaDays: 5, etaConfidence: 'low',
+        activeTodayPct: 2 / 3, activeTodayCount: 2,
+      }],
+    }));
+    expect(html).toContain('2 / 3 人在做');
+    // The progress label should no longer end in just "%"
+    expect(html).not.toMatch(/class="proj-progress-label tnum">\d+%</);
+  });
+
+  it('progress bar width tracks activeTodayPct, not trend7d', () => {
+    const html = renderProjectsFragment(makeSnapshot({
+      projects: [{
+        name: 'mr', state: 'active', contributors: [
+          { email: 'a@x.com', sharePct: 1 },
+        ], busFactorWarning: false, trend7d: [10, 10, 10, 10, 10, 10, 10], phaseGuess: 'implement',
+        healthScore: 7, etaDays: 5, etaConfidence: 'low',
+        activeTodayPct: 1, activeTodayCount: 1,
+      }],
+    }));
+    expect(html).toContain('width:100%');
   });
 });
 
@@ -235,6 +350,7 @@ describe('top-N cap + see-all footer (P-B7)', () => {
           { email: 'a@x.com', sharePct: 0.5 },
         ], busFactorWarning: false, trend7d: [1,2,3,4,5,6,7], phaseGuess: 'implement' as const,
         healthScore: 7, etaDays: 5, etaConfidence: 'low' as const,
+        activeTodayPct: 1, activeTodayCount: 1,
       })),
     });
   }

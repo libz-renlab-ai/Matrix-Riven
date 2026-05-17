@@ -36,6 +36,27 @@ function classifyHighOutput(members: MemberSnapshot[]): number {
 }
 
 export function renderKpisFragment(snap: OverviewSnapshot): string {
+  // High-output trend line: show real average delta among the members the
+  // card counts. Falls back to "无" when zero high-output members so the
+  // viewer doesn't see a misleading "↑".
+  const ho = snap.kpis.highOutput ?? { count: classifyHighOutput(snap.members), avgDeltaPct: 0 };
+  const hoTrend = ho.count === 0
+    ? '<span>无</span>'
+    : `<span class="up">↑${Math.round(ho.avgDeltaPct * 100)}%</span><span>平均</span>`;
+
+  // Pace card: real rhythm classification (升/稳/缓) from team-wide
+  // computeRhythmDelta. Trend line shows the % delta to back up the label.
+  const pace = snap.kpis.pace ?? { rhythmDelta: 0, label: '稳' as const };
+  const deltaPct = Math.round(pace.rhythmDelta * 100);
+  const paceTrend = deltaPct === 0
+    ? '<span>与 7 日均值持平</span>'
+    : deltaPct > 0
+      ? `<span class="up">↑${deltaPct}%</span><span>对比 7 日均值</span>`
+      : `<span>↓${Math.abs(deltaPct)}%</span><span>对比 7 日均值</span>`;
+
+  // Spend card: real $ today (sum of member.today.costUsd). Label is
+  // "今日消耗" because the underlying field is per-today, not per-week.
+  const todayUsd = snap.kpis.todayCostUsd ?? snap.members.reduce((a, m) => a + (m?.today?.costUsd ?? 0), 0);
   const cards: { cls: string; label: string; num: string; unit: string; trend: string; color: string; path: string }[] = [
     {
       cls: 'kpi-warn',
@@ -51,27 +72,27 @@ export function renderKpisFragment(snap: OverviewSnapshot): string {
     {
       cls: 'kpi-good',
       label: '高产出',
-      num: String(classifyHighOutput(snap.members)),
+      num: String(ho.count),
       unit: '人',
-      trend: '<span class="up">↑</span><span>对比 7 日均值</span>',
+      trend: hoTrend,
       color: '#6F8B5E',
       path: 'M0 16 Q 12 14, 20 10 T 40 8 T 64 4',
     },
     {
       cls: 'kpi-spend',
-      label: '本周消耗',
-      num: `¥${formatKilo(snap.members.reduce((a, m) => a + (m?.today?.tokens ?? 0), 0))}`,
+      label: '今日消耗',
+      num: `$${formatCostUsd(todayUsd)}`,
       unit: '',
-      trend: '<span>按预算节奏</span>',
+      trend: '<span>实际成本</span>',
       color: '#8A9AAA',
       path: 'M0 12 Q 12 14, 20 10 T 40 12 T 64 10',
     },
     {
       cls: 'kpi-pace',
       label: '整体节奏',
-      num: snap.kpis.attention.value === 0 ? '顺' : '稳',
-      unit: '健',
-      trend: '<span>多数项目按期</span>',
+      num: pace.label,
+      unit: '',
+      trend: paceTrend,
       color: '#45433E',
       path: 'M0 12 Q 12 11, 20 13 T 40 11 T 64 12',
     },
@@ -84,6 +105,18 @@ export function renderKpisFragment(snap: OverviewSnapshot): string {
       <svg class="kpi-spark" viewBox="0 0 64 22"><path d="${c.path}" stroke="${c.color}" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
     </div>`).join('');
   return `<section id="kpis" class="kpis fade-in">${html}</section>`;
+}
+
+/**
+ * Format a USD value for the spend card. Sub-100 shows two decimals
+ * (e.g., "$4.32"); >= 1000 uses k-suffix (e.g., "$1.2k"). In between we
+ * round to whole dollars so the card stays tight.
+ */
+function formatCostUsd(n: number): string {
+  if (!isFinite(n) || n <= 0) return '0.00';
+  if (n < 100) return n.toFixed(2);
+  if (n < 1000) return Math.round(n).toString();
+  return (Math.round(n / 100) / 10).toFixed(1) + 'k';
 }
 
 function formatKilo(n: number): string {
@@ -249,12 +282,14 @@ export function renderProjectsFragment(snap: OverviewSnapshot, opts: FragmentOpt
   const projects = opts.limit != null ? snap.projects.slice(0, opts.limit) : snap.projects;
   const rows = projects.map(p => {
     const initials = p.name.slice(0, 2).toUpperCase();
-    // Placeholder progress: OverviewSnapshot has no real progress field yet.
-    // Use 7-day trend sum / (recent file count, or trend length * 10 fallback)
-    // clamped to [0, 100]. Replace once aggregator exposes a real progress signal.
+    // Bar = today's active contributor ratio (real data from aggregator).
+    // Label is "N / M 人在做" — leadership-friendly: at a glance you see how
+    // many of the project's people actually touched it today.
+    const totalContributors = p.contributors.length;
+    const activeCount = p.activeTodayCount ?? 0;
+    const pct = (p.activeTodayPct ?? 0) * 100;
+    const progress = Math.max(0, Math.min(100, Math.round(pct)));
     const sumTrend = p.trend7d.reduce((a, b) => a + b, 0);
-    const total = (p.detail?.recentFiles.length ?? p.trend7d.length * 10) || 1;
-    const progress = Math.min(100, Math.round((sumTrend / total) * 100));
     const avatars = p.contributors.slice(0, 3)
       .map(c => `<div class="av-sm" style="background:${avatarColor(c.email)}">${escapeHtml(c.email.slice(0, 2).toLowerCase())}</div>`)
       .join('');
@@ -269,7 +304,7 @@ export function renderProjectsFragment(snap: OverviewSnapshot, opts: FragmentOpt
       </div>
       <div>
         <div class="proj-bar"><div class="proj-bar-fill" style="width:${progress}%"></div></div>
-        <div class="proj-progress-label tnum">${progress}%</div>
+        <div class="proj-progress-label tnum">${activeCount} / ${totalContributors} 人在做</div>
       </div>
       <div class="proj-people"><div class="proj-people-stack">${avatars}</div>${extra}</div>
       <div class="proj-eta ${etaClass}">${escapeHtml(eta)}</div>

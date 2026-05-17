@@ -75,6 +75,8 @@ function makeProject(): ProjectSnapshot {
     healthScore: 7,
     etaDays: 5,
     etaConfidence: 'low',
+    activeTodayPct: 0.5,
+    activeTodayCount: 1,
   };
 }
 

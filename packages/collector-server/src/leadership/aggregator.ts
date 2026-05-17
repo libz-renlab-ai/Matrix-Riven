@@ -81,7 +81,28 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
 
   // Attention items (P-B4) — derived from member badges + project signals,
   // sorted by severity desc so the editorial card can render row-by-row.
-  const attention: AttentionItem[] = deriveAttention(members, projects, input.now);
+  // We pass byProject so dormant rows can interpolate real "X days since
+  // last activity" rather than the old "48 小时无活动" template.
+  const attention: AttentionItem[] = deriveAttention(members, projects, input.now, byProject);
+
+  // Team-wide pace: today vs prior-7-day daily-average tokens.
+  // Uses the same computeRhythmDelta helper that powers per-member delta,
+  // but applied to the whole team so the dashboard card reflects real motion.
+  const sevenDayWindowStart = new Date(input.now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const todayTeamSessions = filterToday(inRange, input.now);
+  const past7TeamSessions = inRange.filter((s) => s.startTs < sevenDayWindowStart);
+  const rhythmDelta = computeRhythmDelta(todayTeamSessions, past7TeamSessions);
+  const paceLabel: '升' | '稳' | '缓' =
+    rhythmDelta > 0.2 ? '升' : rhythmDelta < -0.2 ? '缓' : '稳';
+
+  // High-output members + their mean delta — replaces hardcoded "↑" trend line.
+  const highOutputMembers = members.filter((m) => m.deltaVs7dAvgPct > 0.2);
+  const avgHighOutputDelta = highOutputMembers.length === 0
+    ? 0
+    : highOutputMembers.reduce((a, m) => a + m.deltaVs7dAvgPct, 0) / highOutputMembers.length;
+
+  // Today $ cost — sum across all members' today.costUsd
+  const todayCostUsd = members.reduce((a, m) => a + (m?.today?.costUsd ?? 0), 0);
 
   // KPI cards
   const stuckCount = members.filter((m) => m.stateBadge === 'stuck').length;
@@ -99,6 +120,9 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
       maintaining: projects.filter((p) => p.state === 'maintaining').length,
       dormant: projects.filter((p) => p.state === 'dormant').length,
     },
+    pace: { rhythmDelta, label: paceLabel },
+    highOutput: { count: highOutputMembers.length, avgDeltaPct: avgHighOutputDelta },
+    todayCostUsd: Math.round(todayCostUsd * 100) / 100,
   };
 
   return {
@@ -120,41 +144,54 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
 /**
  * Derive an attention list from member badges + project signals.
  * Output is sorted by severity DESC so the editorial card renders the most
- * urgent rows first. line2 strings are template-controlled (no user input
- * interpolated here) so the renderer is allowed to emit them unescaped — if
- * future code adds user-controlled values, escape at the aggregator boundary.
+ * urgent rows first. line2 strings now interpolate real per-member /
+ * per-project values (iteration density, idle hours, contributor email, etc.)
+ * Email values are escaped before embedding — anything else interpolated is
+ * a number or controlled string, safe to emit unescaped by the renderer.
  */
 function deriveAttention(
   members: MemberSnapshot[],
   projects: ProjectSnapshot[],
-  _now: Date,
+  now: Date,
+  projectSessionsByName?: Map<string, ParsedSession[]>,
 ): AttentionItem[] {
-  void _now;
   const items: AttentionItem[] = [];
 
   for (const m of members) {
     const initials = m.displayName.slice(0, 2).toLowerCase();
     if (m.stateBadge === 'stuck') {
+      const dens = m.iterationDensity ?? 0;
+      const len = m.meanPromptLen ?? 0;
       items.push({
         kind: 'member', refId: m.email, displayName: m.displayName, initials,
         tag: '疑似卡住', tagSeverity: 'urgent',
-        line2: m.warnings[0] ?? `连续多次问同一类问题`,
+        line2: `最近 ${dens.toFixed(1)} 次 prompt · 均长 ${len} 字`,
         time: '—', severity: 9,
       });
     }
     if (m.stateBadge === 'needs_help') {
+      const failPct = ((m.toolFailureRate ?? 0) * 100).toFixed(0);
+      const risky = m.riskyActionCount ?? 0;
       items.push({
         kind: 'member', refId: m.email, displayName: m.displayName, initials,
         tag: '求助', tagSeverity: 'urgent',
-        line2: m.warnings[0] ?? `多次失败 / 工具错误`,
+        line2: `工具失败率 ${failPct}% · ${risky} 次风险动作`,
         time: '—', severity: 8,
       });
     }
     if (m.stateBadge === 'low_activity') {
+      let line2 = `近期活动低于均值`;
+      if (m.lastSessionAt) {
+        const last = new Date(m.lastSessionAt);
+        const idleHours = Math.max(0, Math.round((now.getTime() - last.getTime()) / 3_600_000));
+        const hh = last.getUTCHours().toString().padStart(2, '0');
+        const mm = last.getUTCMinutes().toString().padStart(2, '0');
+        line2 = `未活跃 ${idleHours} 小时 · 上次会话 ${hh}:${mm}`;
+      }
       items.push({
         kind: 'member', refId: m.email, displayName: m.displayName, initials,
         tag: '闲置', tagSeverity: 'normal',
-        line2: `7 日活跃低于均值`,
+        line2,
         time: '—', severity: 5,
       });
     }
@@ -162,25 +199,49 @@ function deriveAttention(
 
   for (const p of projects) {
     const initials = p.name.slice(0, 2).toUpperCase();
-    if (p.busFactorWarning) {
+    if (p.busFactorWarning && p.contributors[0]) {
+      const top = p.contributors[0];
+      const pct = Math.round(top.sharePct * 100);
       items.push({
         kind: 'project', refId: p.name, displayName: p.name, initials,
         tag: '单点依赖', tagSeverity: 'calm',
-        line2: `顶贡献者份额 &gt; 70%`,
+        line2: `顶贡献者 ${escapeHtmlEmail(top.email)} 占 ${pct}%`,
         time: '—', severity: 4,
       });
     }
     if (p.state === 'dormant' && p.contributors.length > 0) {
+      let line2 = `近期无活动`;
+      const sessions = projectSessionsByName?.get(p.name);
+      if (sessions && sessions.length > 0) {
+        let latest = sessions[0]!.startTs;
+        for (const s of sessions) if (s.startTs > latest) latest = s.startTs;
+        const days = Math.max(0, Math.floor((now.getTime() - latest.getTime()) / 86_400_000));
+        line2 = `上次活动 ${days} 天前`;
+      }
       items.push({
         kind: 'project', refId: p.name, displayName: p.name, initials,
         tag: '沉睡', tagSeverity: 'calm',
-        line2: `48 小时无活动`,
+        line2,
         time: '—', severity: 3,
       });
     }
   }
 
   return items.sort((a, b) => b.severity - a.severity);
+}
+
+/**
+ * Escape an email for safe embedding in HTML emitted unescaped by the
+ * attention renderer. Emails almost never contain `<`/`>`, but a malformed
+ * envelope could; we encode `&<>` defensively here so line2 stays trusted.
+ */
+function escapeHtmlEmail(s: string): string {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function buildMemberSnapshotInner(
@@ -248,6 +309,30 @@ function buildMemberSnapshotInner(
   let topMax = 0;
   for (const [p, c] of projectCounts) if (c > topMax) { topMax = c; topProject = p; }
 
+  // Last session timestamp — used by deriveAttention to compute real idle hours
+  // for low_activity members. Picks the maximum startTs across this member's sessions.
+  let lastSessionAt: string | undefined;
+  if (memberSessions.length > 0) {
+    let latest = memberSessions[0]!.startTs;
+    for (const s of memberSessions) if (s.startTs > latest) latest = s.startTs;
+    lastSessionAt = latest.toISOString();
+  }
+
+  // Pre-compute fields that deriveAttention's line2 strings need so it doesn't
+  // have to re-iterate session data per member.
+  const iterationDensity = computeIterationDensity(memberSessions);
+  let userMsgChars = 0;
+  let userMsgCount = 0;
+  for (const s of memberSessions) {
+    for (const m of s.messages) {
+      if (m.role === 'user') {
+        userMsgChars += m.text.length;
+        userMsgCount += 1;
+      }
+    }
+  }
+  const meanPromptLen = userMsgCount === 0 ? 0 : Math.round(userMsgChars / userMsgCount);
+
   return {
     email,
     displayName: display,
@@ -262,6 +347,11 @@ function buildMemberSnapshotInner(
     deltaVs7dAvgPct,
     warnings,
     topProject,
+    lastSessionAt,
+    toolFailureRate: failRate,
+    riskyActionCount: risky.length,
+    iterationDensity,
+    meanPromptLen,
   };
 }
 
@@ -273,6 +363,18 @@ function buildProjectSnapshotInner(name: string, projectSessions: ParsedSession[
   const phaseGuess = guessPhase(projectSessions);
   const healthScore = computeHealthScore(projectSessions);
   const eta = projectEta(projectSessions, now);
+
+  // Active-today ratio = (contributors with ≥1 session in last 24h) / total contributors.
+  // Replaces the placeholder "sum(trend7d) / recentFiles" heuristic in the
+  // project row's progress bar.
+  const todayProjectSessions = filterToday(projectSessions, now);
+  const activeToday = new Set<string>();
+  for (const s of todayProjectSessions) activeToday.add(s.envelope.userId);
+  const activeTodayCount = activeToday.size;
+  const activeTodayPct = contributors.length === 0
+    ? 0
+    : Math.round((activeTodayCount / contributors.length) * 1000) / 1000;
+
   return {
     name,
     state,
@@ -283,6 +385,8 @@ function buildProjectSnapshotInner(name: string, projectSessions: ParsedSession[
     healthScore,
     etaDays: eta.etaDays,
     etaConfidence: eta.confidence,
+    activeTodayPct,
+    activeTodayCount,
   };
 }
 

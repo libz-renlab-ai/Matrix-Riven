@@ -80,6 +80,16 @@ export interface MemberSnapshot {
   deltaVs7dAvgPct: number;       // (-1, +∞)
   warnings: string[];            // short strings shown next to the avatar
   topProject?: string;           // most-active project today; undefined if none
+  /** ISO timestamp of the member's most-recent session.startTs, if any. */
+  lastSessionAt?: string;
+  /** Tool failure rate over the range (0–1). Used for needs_help line2. */
+  toolFailureRate?: number;
+  /** Number of risky actions detected in the range. */
+  riskyActionCount?: number;
+  /** Iteration density over the range (used for stuck line2). */
+  iterationDensity?: number;
+  /** Mean prompt length over the range (used for stuck line2). */
+  meanPromptLen?: number;
   // Detail-page-only fields below; aggregator includes them for /api/members/:id
   detail?: MemberDetail;
 }
@@ -141,6 +151,10 @@ export interface ProjectSnapshot {
   healthScore: number;           // 0-10
   etaDays: number | null;        // null = insufficient data
   etaConfidence: 'low';          // always 'low' per spec
+  /** Fraction of contributors who had ≥1 session in the last 24h (0–1). */
+  activeTodayPct: number;
+  /** Count of contributors who had ≥1 session in the last 24h. */
+  activeTodayCount: number;
   detail?: ProjectDetail;
 }
 
@@ -174,6 +188,12 @@ export interface KpiCards {
   teamActivity: { value: number; deltaVsAvg: number };
   attention: { value: number; deltaToday: number; breakdown: { stuck: number; needsHelp: number; riskyAction: number } };
   projects: { active: number; maintaining: number; dormant: number };
+  /** Team-wide rhythm: today vs 7-day-prior daily average (token-based). */
+  pace: { rhythmDelta: number; label: '升' | '稳' | '缓' };
+  /** Members whose deltaVs7dAvgPct > 0.2 today, plus their mean delta %. */
+  highOutput: { count: number; avgDeltaPct: number };
+  /** Total USD cost across members for today (sum of member.today.costUsd). */
+  todayCostUsd: number;
 }
 
 export interface AttentionItem {
