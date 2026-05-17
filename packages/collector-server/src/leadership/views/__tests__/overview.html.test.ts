@@ -36,33 +36,41 @@ describe('renderOverview', () => {
     expect(html).not.toContain('<script src=');  // no external scripts
   });
 
-  it('includes all member display names', () => {
+  it('includes all member display names inside v7 member tiles', () => {
     const html = renderOverview(fixture());
+    expect(html).toContain('class="member-tile"');
     expect(html).toContain('>liboze<');
     expect(html).toContain('>liusy<');
   });
 
-  it('mounts the v7 hero and KPI fragments', () => {
+  it('mounts the v7 hero, KPI, members and projects fragments', () => {
     const html = renderOverview(fixture());
     expect(html).toMatch(/id="hero"/);
     expect(html).toMatch(/id="kpis"/);
+    expect(html).toMatch(/id="members"/);
+    expect(html).toMatch(/id="projects"/);
+    expect(html).toContain('class="member-tile"');
+    expect(html).toContain('class="proj-row"');
     // The attention KPI value (fixture: 3) shows on the kpi-num
     expect(html).toMatch(/class="kpi-num"[^>]*>\s*3/);
   });
 
-  it('shows ETA disclaimer when etaDays is set', () => {
+  it('wires the client refresh script (sort handlers + openSO stub)', () => {
     const html = renderOverview(fixture());
-    expect(html).toMatch(/5 天.{0,20}按节奏估算/);
+    expect(html).toContain('window.openSO');
+    expect(html).toContain('data-sort');
   });
 
-  it('shows empty state when members list is empty', () => {
+  it('shows empty state inside the v7 members section when members list is empty', () => {
     const html = renderOverview({ ...fixture(), members: [] });
+    expect(html).toMatch(/id="members"/);
     expect(html).toMatch(/没有成员活动/);
   });
 
-  it('renders project links with URL-encoded names', () => {
-    const html = renderOverview({ ...fixture(), projects: [{ ...fixture().projects[0]!, name: 'My Project' }] });
-    expect(html).toContain('href="/projects/My%20Project"');
+  it('shows empty state inside the v7 projects section when projects list is empty', () => {
+    const html = renderOverview({ ...fixture(), projects: [] });
+    expect(html).toMatch(/id="projects"/);
+    expect(html).toMatch(/没有项目活动/);
   });
 
   it('shows collaboration section when hits exist', () => {

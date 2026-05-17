@@ -136,3 +136,121 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+// ---------------------------------------------------------------------------
+// P-B5: v7 member tiles + project rows
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a numeric trend series into an SVG path for a tile-sized sparkline.
+ * Viewbox is 48 × 16 (matches `.mt-spark` in `_css.ts`). Returns a flat
+ * baseline when the trend is empty so the SVG still renders something visible.
+ */
+export function sparkFromTrend(trend: number[]): string {
+  if (trend.length === 0) return 'M0 8 L48 8';
+  const max = Math.max(...trend, 1);
+  const pts = trend.map((v, i) => {
+    const x = trend.length === 1 ? 24 : (i / (trend.length - 1)) * 48;
+    const y = 14 - (v / max) * 12;
+    return `${x.toFixed(1)} ${y.toFixed(1)}`;
+  });
+  return 'M' + pts.join(' L');
+}
+
+function memberSubLabel(m: MemberSnapshot): string {
+  if (m.deltaVs7dAvgPct > 0.2) return `高产出 ↑${Math.round(m.deltaVs7dAvgPct * 100)}%`;
+  if (m.stateBadge === 'low_activity') return `闲置`;
+  return `${m.today.sessions} 会话`;
+}
+
+function memberStatus(m: MemberSnapshot): 'active' | 'idle' | 'warn' {
+  if (m.stateBadge === 'low_activity') return 'idle';
+  if (m.stateBadge === 'stuck' || m.stateBadge === 'needs_help') return 'warn';
+  return 'active';
+}
+
+function attentionScore(m: MemberSnapshot): number {
+  if (m.stateBadge === 'stuck') return 9;
+  if (m.stateBadge === 'needs_help') return 8;
+  if (m.stateBadge === 'low_activity') return 5;
+  return 0;
+}
+
+export function renderMembersFragment(snap: OverviewSnapshot): string {
+  const tiles = snap.members.map(m => {
+    const initials = m.displayName.slice(0, 2).toLowerCase();
+    const status = memberStatus(m);
+    const path = sparkFromTrend(m.trend7d);
+    const sparkColor = status === 'idle' ? '#C8924B' : '#6F8B5E';
+    const color = avatarColor(m.email);
+    return `
+      <div class="member-tile" data-ref="member:${escapeHtml(m.email)}" data-attention="${attentionScore(m)}" data-activity="${m.today.sessions}" data-alpha="${escapeHtml(m.displayName)}" onclick="window.openSO('member', '${escapeHtml(m.email)}')">
+        <div class="mt-head">
+          <div class="mt-avatar" style="background:${color}">${escapeHtml(initials)}<div class="mt-status ${status}"></div></div>
+          <div><div class="mt-name">${escapeHtml(m.displayName)}</div><div class="mt-sub">${escapeHtml(memberSubLabel(m))}</div></div>
+        </div>
+        <div class="mt-where">
+          <span class="where-label">在做</span>
+          <span class="where-val">${escapeHtml(m.topProject ?? '—')}</span>
+        </div>
+        <div class="mt-stats">
+          <div><div class="mt-stat-num">${m.today.sessions}</div><div class="mt-stat-label">会话</div></div>
+          <div><div class="mt-stat-num">¥${formatKilo(m.today.tokens)}</div><div class="mt-stat-label">消耗</div></div>
+          <div><div class="mt-stat-num">${m.warnings.length === 0 ? '—' : m.warnings.length}</div><div class="mt-stat-label">警告</div></div>
+        </div>
+        <svg class="mt-spark" viewBox="0 0 48 16"><path d="${path}" stroke="${sparkColor}" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>
+      </div>`;
+  }).join('');
+
+  return `<section id="members" class="section fade-in">
+    <div class="section-head">
+      <div class="section-title">团队 <span class="section-count">${snap.members.length}</span></div>
+      <div class="sort-toggle">
+        <button data-sort="attention" class="active">需关注</button>
+        <button data-sort="activity">活跃</button>
+        <button data-sort="alpha">字母</button>
+      </div>
+    </div>
+    <div class="members">${tiles}</div>
+  </section>`;
+}
+
+export function renderProjectsFragment(snap: OverviewSnapshot): string {
+  const rows = snap.projects.map(p => {
+    const initials = p.name.slice(0, 2).toUpperCase();
+    const sumTrend = p.trend7d.reduce((a, b) => a + b, 0);
+    const total = (p.detail?.recentFiles.length ?? p.trend7d.length * 10) || 1;
+    const progress = Math.min(100, Math.round((sumTrend / total) * 100));
+    const avatars = p.contributors.slice(0, 3)
+      .map(c => `<div class="av-sm" style="background:${avatarColor(c.email)}">${escapeHtml(c.email.slice(0, 2).toLowerCase())}</div>`)
+      .join('');
+    const extra = p.contributors.length > 3
+      ? `<div class="proj-people-extra">+${p.contributors.length - 3}</div>`
+      : '';
+    const eta = p.etaDays != null ? `${p.etaDays}d` : '—';
+    const etaClass = p.etaDays != null && p.etaDays > 14 ? 'slip' : '';
+    return `<div class="proj-row" data-ref="project:${escapeHtml(p.name)}" data-attention="${p.busFactorWarning ? 4 : 0}" data-activity="${sumTrend}" data-alpha="${escapeHtml(p.name)}" onclick="window.openSO('project', '${escapeHtml(p.name)}')">
+      <div>
+        <div class="proj-name"><div class="proj-icon">${escapeHtml(initials)}</div><div>${escapeHtml(p.name)}<div class="proj-sub">${escapeHtml(p.phaseGuess)} · ${escapeHtml(p.state)}</div></div></div>
+      </div>
+      <div>
+        <div class="proj-bar"><div class="proj-bar-fill" style="width:${progress}%"></div></div>
+        <div class="proj-progress-label tnum">${progress}%</div>
+      </div>
+      <div class="proj-people"><div class="proj-people-stack">${avatars}</div>${extra}</div>
+      <div class="proj-eta ${etaClass}">${escapeHtml(eta)}</div>
+      <div class="proj-arrow">›</div>
+    </div>`;
+  }).join('');
+  return `<section id="projects" class="section fade-in">
+    <div class="section-head">
+      <div class="section-title">项目 <span class="section-count">${snap.projects.length}</span></div>
+      <div class="sort-toggle">
+        <button data-sort="attention" class="active">需关注</button>
+        <button data-sort="activity">活跃</button>
+        <button data-sort="alpha">字母</button>
+      </div>
+    </div>
+    <div class="projects-list">${rows}</div>
+  </section>`;
+}

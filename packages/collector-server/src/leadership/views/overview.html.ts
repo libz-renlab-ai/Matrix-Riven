@@ -8,10 +8,11 @@
  * XSS hygiene: every user-controlled string passes through escapeHtml().
  */
 
-import type { OverviewSnapshot, MemberSnapshot, ProjectSnapshot, CollabHit } from '../types.js';
-import { LEADERSHIP_CSS, avatarColor, emailInitials } from './styles.css.js';
+import type { OverviewSnapshot, CollabHit } from '../types.js';
+import { LEADERSHIP_CSS } from './styles.css.js';
 import { renderNav } from './_nav.html.js';
-import { renderHeroFragment, renderKpisFragment, renderAttentionFragment } from './_overview-fragments.js';
+import { renderHeroFragment, renderKpisFragment, renderAttentionFragment, renderMembersFragment, renderProjectsFragment } from './_overview-fragments.js';
+import { CLIENT_REFRESH_SCRIPT } from './_refresh.js.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -20,13 +21,13 @@ import { renderHeroFragment, renderKpisFragment, renderAttentionFragment } from 
 export function renderOverview(snapshot: OverviewSnapshot): string {
   const { members, projects, collaboration, range, computedAt } = snapshot;
 
-  const membersHtml = members.length === 0
-    ? `<div class="lh-empty">这个窗口内没有成员活动</div>`
-    : members.map(m => renderMemberCard(m)).join('');
+  const membersSection = members.length === 0
+    ? `<section id="members" class="section fade-in"><div class="lh-empty">这个窗口内没有成员活动</div></section>`
+    : renderMembersFragment(snapshot);
 
-  const projectsHtml = projects.length === 0
-    ? `<div class="lh-empty">这个窗口内没有项目活动</div>`
-    : projects.map(p => renderProjectCard(p)).join('');
+  const projectsSection = projects.length === 0
+    ? `<section id="projects" class="section fade-in"><div class="lh-empty">这个窗口内没有项目活动</div></section>`
+    : renderProjectsFragment(snapshot);
 
   const collabHtml = collaboration.length === 0
     ? ''
@@ -48,6 +49,8 @@ ${renderNav('overview', { rangeLabel: navRangeLabel })}
 ${renderHeroFragment(snapshot)}
 ${renderKpisFragment(snapshot)}
 ${renderAttentionFragment(snapshot)}
+${membersSection}
+${projectsSection}
 <div class="lh-container">
   <div class="lh-topbar">
     <h1>团队 leadership 视图</h1>
@@ -56,14 +59,10 @@ ${renderAttentionFragment(snapshot)}
       <span class="lh-refresh-tag">🔄 30s</span>
     </div>
   </div>
-  <div class="lh-section-h">成员（${members.length}）</div>
-  <div class="lh-member-list">${membersHtml}</div>
-  <div class="lh-section-h">项目（${projects.length}）</div>
-  <div class="lh-project-list">${projectsHtml}</div>
   ${collabHtml}
 </div>
 </div>
-<script>${REFRESH_SCRIPT}</script>
+<script>${CLIENT_REFRESH_SCRIPT}</script>
 </body>
 </html>`;
 }
@@ -93,40 +92,8 @@ export function escapeHtml(s: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Card renderers
+// Collaboration card (Phase-1 contract — kept until P-B7 surfaces collab in v7)
 // ---------------------------------------------------------------------------
-
-function renderMemberCard(m: MemberSnapshot): string {
-  const color = avatarColor(m.email);
-  const initials = emailInitials(m.email);
-  const badgeClass = badgeClassFor(m.stateBadge);
-  const badgeText = badgeTextFor(m.stateBadge);
-  const trend = m.trend7d.length > 0 ? renderSparkline(m.trend7d) : '';
-  return `<a class="lh-member-card" href="/members/${encodeURIComponent(m.displayName)}" title="${escapeHtml(m.email)}">
-    <div class="lh-avatar" style="background:${color}">${escapeHtml(initials)}</div>
-    <div class="lh-member-info">
-      <div class="lh-member-name">${escapeHtml(m.displayName)}</div>
-      <div class="lh-member-meta">${m.today.sessions} sessions${m.topProject ? ' · ' + escapeHtml(m.topProject) : ''}${m.warnings.length ? ' · ' + escapeHtml(m.warnings.join(' · ')) : ''}</div>
-    </div>
-    ${trend}
-    <span class="lh-badge ${badgeClass}">${escapeHtml(badgeText)}</span>
-  </a>`;
-}
-
-function renderProjectCard(p: ProjectSnapshot): string {
-  const trend = p.trend7d.length > 0 ? renderSparkline(p.trend7d) : '';
-  const eta = p.etaDays == null ? '' : `<span class="lh-eta-note">≈ ${p.etaDays} 天（按节奏估算）</span>`;
-  const busWarn = p.busFactorWarning ? `<span class="lh-badge stuck" title="单人风险">单人</span>` : '';
-  return `<a class="lh-project-card" href="/projects/${encodeURIComponent(p.name)}">
-    <div class="lh-member-info">
-      <div class="lh-member-name">${escapeHtml(p.name)}</div>
-      <div class="lh-member-meta">${p.contributors.length} 人 · 阶段:${escapeHtml(p.phaseGuess)} · 健康 ${p.healthScore}/10 ${eta}</div>
-    </div>
-    ${trend}
-    <span class="lh-badge ${stateClass(p.state)}">${escapeHtml(stateLabel(p.state))}</span>
-    ${busWarn}
-  </a>`;
-}
 
 function renderCollabCard(c: CollabHit): string {
   return `<div class="lh-collab-card">
@@ -136,76 +103,3 @@ function renderCollabCard(c: CollabHit): string {
     </div>
   </div>`;
 }
-
-// ---------------------------------------------------------------------------
-// Sparkline helper
-// ---------------------------------------------------------------------------
-
-function renderSparkline(values: number[]): string {
-  if (values.length === 0) return '';
-  const max = Math.max(...values, 1);
-  const bars = values.map(v => `<span style="height:${Math.round((v / max) * 100)}%"></span>`).join('');
-  return `<span class="lh-sparkline">${bars}</span>`;
-}
-
-// ---------------------------------------------------------------------------
-// Badge / state helpers
-// ---------------------------------------------------------------------------
-
-function badgeClassFor(s: string): string {
-  return s === 'active' ? 'ok'
-    : s === 'stuck' ? 'stuck'
-    : s === 'needs_help' ? 'help'
-    : s === 'quiet' ? 'quiet'
-    : 'low';
-}
-
-function badgeTextFor(s: string): string {
-  return s === 'active' ? '活跃'
-    : s === 'stuck' ? '卡点'
-    : s === 'needs_help' ? '求助'
-    : s === 'quiet' ? '安静'
-    : '低活跃';
-}
-
-function stateClass(s: string): string {
-  return s === 'active' ? 'ok'
-    : s === 'maintaining' ? 'low'
-    : s === 'revived' ? 'ok'
-    : 'quiet';
-}
-
-function stateLabel(s: string): string {
-  return s === 'active' ? '活跃'
-    : s === 'maintaining' ? '维护'
-    : s === 'revived' ? '复活'
-    : '沉睡';
-}
-
-// ---------------------------------------------------------------------------
-// Client-side refresh script (no external deps, ES5-compatible)
-// ---------------------------------------------------------------------------
-
-const REFRESH_SCRIPT = `
-(function(){
-  function getRange(){
-    var p = new URLSearchParams(window.location.search);
-    return p.get('range') || '7d';
-  }
-  function update(){
-    fetch('/api/overview?range=' + encodeURIComponent(getRange()))
-      .then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); })
-      .then(function(snap){
-        // Refresh KPI numbers in place
-        var ta = document.querySelector('[data-kpi=teamActivity]');
-        if (ta) ta.textContent = snap.kpis.teamActivity.value;
-        var at = document.querySelector('[data-kpi=attention]');
-        if (at) at.textContent = snap.kpis.attention.value;
-        var pj = document.querySelector('[data-kpi=projects]');
-        if (pj) pj.textContent = snap.kpis.projects.active + snap.kpis.projects.maintaining;
-      })
-      .catch(function(){});
-  }
-  setInterval(update, 30000);
-})();
-`;
