@@ -40,7 +40,9 @@ export function parseEnvelopeBuffer(buf: Buffer): ParsedSession | null {
     machineId: str(envBlock.machine_id, 'unknown'),
     sessionId: str(envBlock.session_id, 'unknown'),
     cwd: str(envBlock.cwd, ''),
-    projectName: str(envBlock.project_name, '') || cwdLastSegment(str(envBlock.cwd, '')),
+    projectName:
+      (typeof envBlock.project_name === 'string' && envBlock.project_name.trim()) ||
+      deriveProjectName(str(envBlock.cwd, '')),
     capturedAt: str(envBlock.captured_at, new Date(0).toISOString()),
     rivenVersion: str(envBlock.riven_version, 'unknown'),
     consentedAt: envBlock.consented_at == null ? null : String(envBlock.consented_at),
@@ -171,9 +173,37 @@ function str(v: unknown, fallback: string): string {
 function numOrUndef(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
-function cwdLastSegment(cwd: string): string {
-  const parts = cwd.split(/[/\\]/).filter(Boolean);
-  return parts[parts.length - 1] ?? 'unknown';
+
+/**
+ * Common last-path segments that should NOT be treated as project names.
+ * When cwd ends in one of these, walk back toward root to find a real name.
+ * Case-insensitive — all entries lower-cased; lookups lower-case the segment.
+ */
+const COMMON_LAST_SEGMENTS = new Set([
+  'src', 'dist', 'test', 'tests', '__tests__',
+  'node_modules', '.claude', '.git', 'build', 'out', 'target',
+  'lib', 'bin', 'public', 'static',
+]);
+
+/**
+ * Derive a project name from a cwd path when envelope.project_name is missing.
+ * Walks from the last segment back toward root, skipping common build/test
+ * directories that would otherwise collide many unrelated projects on the
+ * same name (e.g. every "src" subfolder becoming a "src" project).
+ *
+ * Edge cases:
+ *   - empty cwd → 'unknown'
+ *   - single-segment cwd → that segment
+ *   - all segments are common → last segment as last resort
+ *   - handles both POSIX `/` and Windows `\` separators
+ */
+export function deriveProjectName(cwd: string): string {
+  const parts = cwd.replace(/\\/g, '/').split('/').filter(p => p.length > 0);
+  if (parts.length === 0) return 'unknown';
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (!COMMON_LAST_SEGMENTS.has(parts[i]!.toLowerCase())) return parts[i]!;
+  }
+  return parts[parts.length - 1]!;
 }
 
 export interface ScanOptions {
@@ -308,7 +338,7 @@ export function parseRawJsonlBuffer(
     lastTs = d;
   }
 
-  const projectName = cwd ? cwd.split(/[/\\]/).filter(Boolean).pop() ?? 'unknown' : 'unknown';
+  const projectName = cwd ? deriveProjectName(cwd) : 'unknown';
 
   const envelope: ParsedEnvelope = {
     id: sessionId,

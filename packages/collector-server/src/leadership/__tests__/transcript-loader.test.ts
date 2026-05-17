@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { gzipSync } from 'node:zlib';
-import { parseEnvelopeBuffer } from '../transcript-loader.js';
+import { parseEnvelopeBuffer, deriveProjectName } from '../transcript-loader.js';
 
 function buildEnvelope(transcriptLines: string[]): Buffer {
   const jsonl = transcriptLines.join('\n');
@@ -97,5 +97,29 @@ describe('parseEnvelopeBuffer', () => {
     expect(p.startTs.toISOString()).toBe('2026-05-13T10:00:00.000Z');
     expect(p.endTs.toISOString()).toBe('2026-05-13T10:05:00.000Z');
     expect(p.durationMs).toBe(5 * 60 * 1000);
+  });
+});
+
+describe('deriveProjectName common-name collapse', () => {
+  const cases: [string, string][] = [
+    ['/home/u/Matrix-Riven/packages/collector-server/src', 'collector-server'],
+    ['C:\\u\\Matrix-Riven\\packages\\shared\\dist', 'shared'],
+    ['/home/u/Matrix-Riven/packages/collector-server/__tests__', 'collector-server'],
+    ['/home/u/proj/node_modules', 'proj'],
+    ['/single', 'single'],
+    ['/a/.git', 'a'],
+    ['/x/y/build', 'y'],
+    ['/x/y/test', 'y'],
+  ];
+  for (const [cwd, expected] of cases) {
+    it(`${cwd} → ${expected}`, () => {
+      expect(deriveProjectName(cwd)).toBe(expected);
+    });
+  }
+  it('compound: when both last and 2nd-to-last are common, walks further back', () => {
+    expect(deriveProjectName('/u/Matrix-Riven/packages/dist/src')).toBe('packages');
+  });
+  it('all-common path: keeps last segment as last resort', () => {
+    expect(deriveProjectName('/src/dist')).toBe('dist');
   });
 });
