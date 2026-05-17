@@ -391,3 +391,50 @@ describe('Overview HTML mounts slideover shell (P-B6)', () => {
     }
   });
 });
+
+// ── P-C1: ETag + per-section HTML fragments in overview API ──────────────────
+
+describe('GET /api/overview ETag + _html fragments (P-C1)', () => {
+  it('returns _html with 5 keys: hero, kpis, attention, members, projects', async () => {
+    const res = await fetch(`${baseUrl}/api/overview`);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    const html = data._html as Record<string, unknown> | undefined;
+    expect(html).toBeDefined();
+    expect(typeof html!.hero).toBe('string');
+    expect(typeof html!.kpis).toBe('string');
+    expect(typeof html!.attention).toBe('string');
+    expect(typeof html!.members).toBe('string');
+    expect(typeof html!.projects).toBe('string');
+  });
+
+  it('returns an ETag header in stable format', async () => {
+    const res = await fetch(`${baseUrl}/api/overview`);
+    const etag = res.headers.get('etag');
+    expect(etag).toMatch(/^"[a-f0-9]{16}"$/);
+  });
+
+  it('returns 304 when If-None-Match matches current ETag', async () => {
+    const first = await fetch(`${baseUrl}/api/overview`);
+    const etag = first.headers.get('etag');
+    expect(etag).toBeTruthy();
+    // Consume the first response body to avoid leaking the socket.
+    await first.text();
+    const second = await fetch(`${baseUrl}/api/overview`, {
+      headers: { 'if-none-match': etag! },
+    });
+    expect(second.status).toBe(304);
+    const body = await second.text();
+    expect(body).toBe('');
+    expect(second.headers.get('etag')).toBe(etag);
+  });
+
+  it('returns fresh body when If-None-Match does not match', async () => {
+    const res = await fetch(`${baseUrl}/api/overview`, {
+      headers: { 'if-none-match': '"deadbeefdeadbeef"' },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body.length).toBeGreaterThan(0);
+  });
+});

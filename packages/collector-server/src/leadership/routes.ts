@@ -17,6 +17,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import type { TtlCache } from './cache.js';
 import type { DateRange } from './types.js';
 import {
@@ -29,6 +30,13 @@ import {
   renderMemberSlideoverFragments,
   renderProjectSlideoverFragments,
 } from './views/_slideover.html.js';
+import {
+  renderHeroFragment,
+  renderKpisFragment,
+  renderAttentionFragment,
+  renderMembersFragment,
+  renderProjectsFragment,
+} from './views/_overview-fragments.js';
 import { renderNav, type ActiveTab } from './views/_nav.html.js';
 import { LEADERSHIP_CSS } from './views/styles.css.js';
 
@@ -72,23 +80,44 @@ export function handleLeadershipRequest(
     const nowDate = now();
     const range = parseRange(rangeStr, nowDate);
     const cacheKey = `/api/overview|${range.label}`;
-    const cached = deps.cache.get(cacheKey);
-    if (cached !== undefined) {
-      sendJson(res, 200, cached);
+    // P-C1: cache holds the *enriched* payload + a pre-computed ETag, so
+    // repeated polls within the same TTL window return both an identical
+    // body and an identical ETag (so any client honouring If-None-Match
+    // gets a 304 on the second hit).
+    let entry = deps.cache.get(cacheKey) as
+      | { body: Record<string, unknown>; etag: string }
+      | undefined;
+    if (entry === undefined) {
+      try {
+        const snap = buildOverviewSnapshot({
+          collectorDir: deps.collectorDir,
+          range,
+          now: nowDate,
+          mainProjects: deps.mainProjects,
+        });
+        const _html = {
+          hero: renderHeroFragment(snap),
+          kpis: renderKpisFragment(snap),
+          attention: renderAttentionFragment(snap),
+          members: renderMembersFragment(snap),
+          projects: renderProjectsFragment(snap),
+        };
+        const body = { ...snap, _html } as Record<string, unknown>;
+        entry = { body, etag: etagFor(body) };
+        deps.cache.set(cacheKey, entry);
+      } catch {
+        sendJson(res, 500, { error: 'internal' });
+        return true;
+      }
+    }
+    const ifNoneMatch = req.headers['if-none-match'];
+    if (typeof ifNoneMatch === 'string' && ifNoneMatch === entry.etag) {
+      res.statusCode = 304;
+      res.setHeader('etag', entry.etag);
+      res.end();
       return true;
     }
-    try {
-      const snap = buildOverviewSnapshot({
-        collectorDir: deps.collectorDir,
-        range,
-        now: nowDate,
-        mainProjects: deps.mainProjects,
-      });
-      deps.cache.set(cacheKey, snap);
-      sendJson(res, 200, snap);
-    } catch {
-      sendJson(res, 500, { error: 'internal' });
-    }
+    sendJsonWithEtag(res, 200, entry.body, entry.etag);
     return true;
   }
 
@@ -316,6 +345,28 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.setHeader('content-type', 'application/json; charset=utf-8');
   res.setHeader('content-length', Buffer.byteLength(json));
   res.end(json);
+}
+
+function sendJsonWithEtag(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  etag: string,
+): void {
+  const json = JSON.stringify(body);
+  res.statusCode = status;
+  res.setHeader('content-type', 'application/json; charset=utf-8');
+  res.setHeader('content-length', Buffer.byteLength(json));
+  res.setHeader('etag', etag);
+  res.end(json);
+}
+
+/**
+ * P-C1: 16-char SHA-1 hex digest wrapped in double quotes — stable, opaque,
+ * and round-trips cleanly through `If-None-Match`.
+ */
+function etagFor(obj: unknown): string {
+  return '"' + createHash('sha1').update(JSON.stringify(obj)).digest('hex').slice(0, 16) + '"';
 }
 
 function sendHtml(res: ServerResponse, status: number, html: string): void {
