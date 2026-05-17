@@ -438,3 +438,58 @@ describe('GET /api/overview ETag + _html fragments (P-C1)', () => {
     expect(body.length).toBeGreaterThan(0);
   });
 });
+
+// ── P-C3: Detail endpoints ETag + 304 (slide-over live polling) ──────────────
+
+describe('Detail endpoints ETag + 304 (P-C3)', () => {
+  it('GET /api/members/<id> returns an ETag header in stable format', async () => {
+    const res = await fetch(`${baseUrl}/api/members/alice2026`);
+    expect(res.status).toBe(200);
+    const etag = res.headers.get('etag');
+    expect(etag).toMatch(/^"[a-f0-9]{16}"$/);
+  });
+
+  it('GET /api/members/<id> returns 304 on If-None-Match match', async () => {
+    const first = await fetch(`${baseUrl}/api/members/alice2026`);
+    const etag = first.headers.get('etag');
+    expect(etag).toBeTruthy();
+    await first.text();
+    const second = await fetch(`${baseUrl}/api/members/alice2026`, {
+      headers: { 'if-none-match': etag! },
+    });
+    expect(second.status).toBe(304);
+    const body = await second.text();
+    expect(body).toBe('');
+    expect(second.headers.get('etag')).toBe(etag);
+  });
+
+  it('GET /api/members/<id> returns fresh body when ETag does not match', async () => {
+    const res = await fetch(`${baseUrl}/api/members/alice2026`, {
+      headers: { 'if-none-match': '"deadbeefdeadbeef"' },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body.length).toBeGreaterThan(0);
+  });
+
+  it('GET /api/projects/<name> returns an ETag header in stable format', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(PROJECT_A)}`);
+    expect(res.status).toBe(200);
+    const etag = res.headers.get('etag');
+    expect(etag).toMatch(/^"[a-f0-9]{16}"$/);
+  });
+
+  it('GET /api/projects/<name> returns 304 on If-None-Match match', async () => {
+    const first = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(PROJECT_A)}`);
+    const etag = first.headers.get('etag');
+    expect(etag).toBeTruthy();
+    await first.text();
+    const second = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(PROJECT_A)}`, {
+      headers: { 'if-none-match': etag! },
+    });
+    expect(second.status).toBe(304);
+    const body = await second.text();
+    expect(body).toBe('');
+    expect(second.headers.get('etag')).toBe(etag);
+  });
+});

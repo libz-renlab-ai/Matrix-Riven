@@ -133,38 +133,50 @@ export function handleLeadershipRequest(
     const nowDate = now();
     const range = parseRange(rangeStr, nowDate);
     const cacheKey = `/api/members/${localPart}|${range.label}`;
-    const cached = deps.cache.get(cacheKey);
-    if (cached !== undefined) {
-      sendJson(res, 200, cached);
-      return true;
-    }
-    // Resolve local-part → full email by scanning collector dir
-    const email = resolveEmailByLocalPart(deps.collectorDir, localPart);
-    if (!email) {
-      sendJson(res, 404, { error: 'not_found' });
-      return true;
-    }
-    try {
-      const detail = buildMemberDetail({
-        collectorDir: deps.collectorDir,
-        email,
-        range,
-        now: nowDate,
-        mainProjects: deps.mainProjects,
-      });
-      if (!detail) {
+    // P-C3: cache holds the *enriched* payload + a pre-computed ETag so that
+    // the slide-over live-polling loop (which fires every 30 s while the
+    // drawer is open) returns a fast 304 on identical hits.
+    let entry = deps.cache.get(cacheKey) as
+      | { body: Record<string, unknown>; etag: string }
+      | undefined;
+    if (entry === undefined) {
+      // Resolve local-part → full email by scanning collector dir
+      const email = resolveEmailByLocalPart(deps.collectorDir, localPart);
+      if (!email) {
         sendJson(res, 404, { error: 'not_found' });
         return true;
       }
-      // P-B6: enrich the API response with pre-rendered slide-over fragments
-      // so the client can swap them in without a second round-trip.
-      const _html = renderMemberSlideoverFragments(detail, detail.detail);
-      const payload = { ...detail, _html };
-      deps.cache.set(cacheKey, payload);
-      sendJson(res, 200, payload);
-    } catch {
-      sendJson(res, 500, { error: 'internal' });
+      try {
+        const detail = buildMemberDetail({
+          collectorDir: deps.collectorDir,
+          email,
+          range,
+          now: nowDate,
+          mainProjects: deps.mainProjects,
+        });
+        if (!detail) {
+          sendJson(res, 404, { error: 'not_found' });
+          return true;
+        }
+        // P-B6: enrich the API response with pre-rendered slide-over fragments
+        // so the client can swap them in without a second round-trip.
+        const _html = renderMemberSlideoverFragments(detail, detail.detail);
+        const body = { ...detail, _html } as Record<string, unknown>;
+        entry = { body, etag: etagFor(body) };
+        deps.cache.set(cacheKey, entry);
+      } catch {
+        sendJson(res, 500, { error: 'internal' });
+        return true;
+      }
     }
+    const ifNoneMatch = req.headers['if-none-match'];
+    if (typeof ifNoneMatch === 'string' && ifNoneMatch === entry.etag) {
+      res.statusCode = 304;
+      res.setHeader('etag', entry.etag);
+      res.end();
+      return true;
+    }
+    sendJsonWithEtag(res, 200, entry.body, entry.etag);
     return true;
   }
 
@@ -180,30 +192,40 @@ export function handleLeadershipRequest(
     const nowDate = now();
     const range = parseRange(rangeStr, nowDate);
     const cacheKey = `/api/projects/${projectName}|${range.label}`;
-    const cached = deps.cache.get(cacheKey);
-    if (cached !== undefined) {
-      sendJson(res, 200, cached);
-      return true;
-    }
-    try {
-      const detail = buildProjectDetail({
-        collectorDir: deps.collectorDir,
-        projectName,
-        range,
-        now: nowDate,
-      });
-      if (!detail) {
-        sendJson(res, 404, { error: 'not_found' });
+    // P-C3: same enriched-payload + ETag cache shape as the member endpoint.
+    let entry = deps.cache.get(cacheKey) as
+      | { body: Record<string, unknown>; etag: string }
+      | undefined;
+    if (entry === undefined) {
+      try {
+        const detail = buildProjectDetail({
+          collectorDir: deps.collectorDir,
+          projectName,
+          range,
+          now: nowDate,
+        });
+        if (!detail) {
+          sendJson(res, 404, { error: 'not_found' });
+          return true;
+        }
+        // P-B6: enrich the API response with pre-rendered slide-over fragments.
+        const _html = renderProjectSlideoverFragments(detail, detail.detail);
+        const body = { ...detail, _html } as Record<string, unknown>;
+        entry = { body, etag: etagFor(body) };
+        deps.cache.set(cacheKey, entry);
+      } catch {
+        sendJson(res, 500, { error: 'internal' });
         return true;
       }
-      // P-B6: enrich the API response with pre-rendered slide-over fragments.
-      const _html = renderProjectSlideoverFragments(detail, detail.detail);
-      const payload = { ...detail, _html };
-      deps.cache.set(cacheKey, payload);
-      sendJson(res, 200, payload);
-    } catch {
-      sendJson(res, 500, { error: 'internal' });
     }
+    const ifNoneMatch = req.headers['if-none-match'];
+    if (typeof ifNoneMatch === 'string' && ifNoneMatch === entry.etag) {
+      res.statusCode = 304;
+      res.setHeader('etag', entry.etag);
+      res.end();
+      return true;
+    }
+    sendJsonWithEtag(res, 200, entry.body, entry.etag);
     return true;
   }
 

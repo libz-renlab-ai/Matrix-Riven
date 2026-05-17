@@ -72,3 +72,28 @@ describe('overview live polling (P-C2)', () => {
     expect(CLIENT_REFRESH_SCRIPT).toContain('pulse');
   });
 });
+
+describe('slide-over live polling (P-C3)', () => {
+  it('starts soInterval when openSO is called', () => {
+    expect(CLIENT_REFRESH_SCRIPT).toContain('soInterval = setInterval');
+  });
+  it('cancels soInterval on closeSO', () => {
+    expect(CLIENT_REFRESH_SCRIPT).toContain('clearInterval(soInterval)');
+  });
+  it('defines pollSO and tracks soEtag for If-None-Match', () => {
+    expect(CLIENT_REFRESH_SCRIPT).toMatch(/pollSO|pollSlideover/);
+    expect(CLIENT_REFRESH_SCRIPT).toContain('soEtag');
+  });
+  it('pollSO swaps 4 drawer fragment slots by id', () => {
+    for (const slot of ['so-callout', 'so-stats', 'so-evolve', 'so-projects']) {
+      expect(CLIENT_REFRESH_SCRIPT).toContain(`'${slot}'`);
+    }
+  });
+  it('pollSO short-circuits on 304', () => {
+    // After P-C3 the slide-over polling loop also short-circuits on 304,
+    // and the existing P-C2 overview poll already contains a `status === 304`
+    // check — so the literal must appear at least twice in the script.
+    const matches = CLIENT_REFRESH_SCRIPT.match(/status\s*===\s*304/g) ?? [];
+    expect(matches.length).toBeGreaterThanOrEqual(2);
+  });
+});

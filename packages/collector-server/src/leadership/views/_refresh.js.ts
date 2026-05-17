@@ -55,28 +55,83 @@ export const CLIENT_REFRESH_SCRIPT = `
     });
   });
 
-  // ── P-B6: slide-over open / close ──────────────────────────────────────────
-  // soInterval is intentionally declared here (and cleared on close) so that
-  // P-C3 can later swap in setInterval(refetch, 30000) without touching the
-  // open/close contract.
+  // ── P-B6 / P-C3: slide-over open / close + live polling ──────────────────
+  // openSO records (kind, id), paints an optimistic loading state, then
+  // delegates to pollSO for the initial fetch AND arms a 30 s interval that
+  // keeps re-fetching while the drawer is open. closeSO clears the interval
+  // and resets all slide-over state.
   var soInterval = null;
   var soKind = null;
   var soId = null;
+  var soEtag = null;
 
   function swap(id, html) {
     var el = document.getElementById(id);
     if (el && typeof html === 'string') el.innerHTML = html;
   }
 
-  window.openSO = function (kind, id) {
+  async function pollSO() {
+    if (!soKind || !soId) return;
+    var base = soKind === 'member' ? '/api/members/' : '/api/projects/';
+    var url = base + encodeURIComponent(soId);
+    var headers = { accept: 'application/json' };
+    if (soEtag) headers['if-none-match'] = soEtag;
+    try {
+      var resp = await fetch(url, { headers: headers });
+      // 304 → server says nothing changed; leave the drawer untouched.
+      if (resp.status === 304) return;
+      if (!resp.ok) {
+        // Only paint the error state on the first fetch (when we have no
+        // ETag yet) so a transient mid-poll failure doesn't blow away a
+        // working drawer.
+        if (!soEtag) {
+          swap('so-callout', '<div class="so-callout"><div class="so-callout-text serif">加载失败 — 请稍后重试</div></div>');
+        }
+        return;
+      }
+      soEtag = resp.headers.get('etag');
+      var data = await resp.json();
+      if (!data) return;
+      // Head fields
+      var nameEl = document.getElementById('so-name');
+      var metaEl = document.getElementById('so-meta');
+      var avatarEl = document.getElementById('so-avatar');
+      var label = data.displayName || data.name || soId;
+      if (nameEl) nameEl.textContent = label;
+      if (metaEl) {
+        var metaText = '';
+        if (data.warnings && data.warnings.length) metaText = data.warnings[0];
+        else if (data.phaseGuess) metaText = String(data.phaseGuess) + ' · 健康分 ' + data.healthScore + '/10';
+        metaEl.textContent = metaText;
+      }
+      if (avatarEl) avatarEl.textContent = String(label).slice(0, 2).toLowerCase();
+      // 4 fragment slots
+      var slots = ['so-callout', 'so-stats', 'so-evolve', 'so-projects'];
+      var keys = ['callout', 'stats', 'evolve', 'projects'];
+      if (data._html) {
+        for (var i = 0; i < slots.length; i++) {
+          swap(slots[i], data._html[keys[i]] || '');
+        }
+      }
+    } catch (e) {
+      if (!soEtag) {
+        swap('so-callout', '<div class="so-callout"><div class="so-callout-text serif">加载失败 — 请稍后重试</div></div>');
+      }
+    }
+  }
+
+  window.openSO = async function (kind, id) {
     var scrim = document.getElementById('scrim');
     var so = document.getElementById('so');
     if (!scrim || !so) return;
     scrim.classList.add('open');
     so.classList.add('open');
     document.body.style.overflow = 'hidden';
+    // Reset live-polling state for a fresh fetch loop.
     soKind = kind;
     soId = id;
+    soEtag = null;
+    if (soInterval) { clearInterval(soInterval); soInterval = null; }
     // Optimistic loading state — clear stale content while the fetch runs.
     swap('so-callout', '<div class="so-callout"><div class="so-callout-text serif">加载中…</div></div>');
     swap('so-stats', '');
@@ -88,36 +143,9 @@ export const CLIENT_REFRESH_SCRIPT = `
     if (nameEl) nameEl.textContent = id;
     if (metaEl) metaEl.textContent = '';
     if (avatarEl) avatarEl.textContent = String(id).slice(0, 2).toLowerCase();
-    var base = kind === 'member' ? '/api/members/' : '/api/projects/';
-    var url = base + encodeURIComponent(id);
-    fetch(url, { headers: { accept: 'application/json' } })
-      .then(function (resp) {
-        if (!resp.ok) throw new Error('fetch failed: ' + resp.status);
-        return resp.json();
-      })
-      .then(function (data) {
-        if (!data) return;
-        if (nameEl) nameEl.textContent = data.displayName || data.name || id;
-        if (metaEl) {
-          var metaText = '';
-          if (data.warnings && data.warnings.length) metaText = data.warnings[0];
-          else if (data.phaseGuess) metaText = String(data.phaseGuess) + ' · 健康分 ' + data.healthScore + '/10';
-          metaEl.textContent = metaText;
-        }
-        if (avatarEl) {
-          var label = data.displayName || data.name || id;
-          avatarEl.textContent = String(label).slice(0, 2).toLowerCase();
-        }
-        var slots = ['callout', 'stats', 'evolve', 'projects'];
-        if (data._html) {
-          for (var i = 0; i < slots.length; i++) {
-            swap('so-' + slots[i], data._html[slots[i]] || '');
-          }
-        }
-      })
-      .catch(function () {
-        swap('so-callout', '<div class="so-callout"><div class="so-callout-text serif">加载失败 — 请稍后重试</div></div>');
-      });
+    // Immediate first paint, then arm 30 s live polling.
+    await pollSO();
+    soInterval = setInterval(pollSO, 30000);
   };
 
   window.closeSO = function () {
@@ -126,9 +154,10 @@ export const CLIENT_REFRESH_SCRIPT = `
     if (scrim) scrim.classList.remove('open');
     if (so) so.classList.remove('open');
     document.body.style.overflow = '';
+    if (soInterval) { clearInterval(soInterval); soInterval = null; }
     soKind = null;
     soId = null;
-    if (soInterval) { clearInterval(soInterval); soInterval = null; }
+    soEtag = null;
   };
 
   document.addEventListener('keydown', function (e) {
