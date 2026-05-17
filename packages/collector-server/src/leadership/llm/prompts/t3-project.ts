@@ -33,7 +33,7 @@ export function buildT3Prompt(inputs: T3Input[]): BuiltPrompt {
   };
   return {
     system: SYSTEM,
-    user: JSON.stringify(payload),
+    user: `Return STRICT JSON {"results":[{"project","line1","line2"}]} only. No prose. Batch:\n${JSON.stringify(payload)}`,
     model: T3_MODEL,
   };
 }

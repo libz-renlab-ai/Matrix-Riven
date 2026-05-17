@@ -16,6 +16,9 @@
  *      resolution behaves identically on Windows and POSIX.
  */
 import { spawn } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 export interface LocalClaudeRequest {
   systemPrompt: string;
@@ -71,14 +74,35 @@ export async function runLocalClaude(req: LocalClaudeRequest): Promise<LocalClau
 function runOnce(req: LocalClaudeRequest): Promise<LocalClaudeResponse> {
   const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const startedAt = Date.now();
+
+  // The system prompt is written to a one-shot temp file and passed via
+  // `--system-prompt-file`. Two reasons:
+  //   1. Windows `shell:true` + an inline `--system-prompt "<multi-line text>"`
+  //      mangles newlines / quotes inside the prompt — they terminate the cmd
+  //      command early, silently dropping `--output-format json` and other
+  //      flags. With a file path argument no quoting matters.
+  //   2. A multi-kilobyte prompt would push the command line past Windows'
+  //      8191-char `cmd.exe` cap.
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'mr-llm-'));
+  const promptFile = join(tmpRoot, 'system.txt');
+  writeFileSync(promptFile, req.systemPrompt, 'utf8');
+
   const args: string[] = [
     '-p',
     '--tools',
     '',
-    '--system-prompt',
-    req.systemPrompt,
+    '--system-prompt-file',
+    promptFile,
     '--no-session-persistence',
     '--disable-slash-commands',
+    // Only load project-level settings. Combined with cwd=tmpRoot (no
+    // .claude/) this means NO hooks, NO CLAUDE.md, NO auto-memory — the
+    // model sees exactly our system prompt + user prompt and nothing else.
+    // Without this, the user's `~/.claude/settings.json` UserPromptSubmit
+    // hooks prepend chat-style preambles ("English translation: …",
+    // memory recall, etc.) that derail the model from producing JSON.
+    '--setting-sources',
+    'project',
     '--output-format',
     'json',
     '--model',
@@ -91,7 +115,11 @@ function runOnce(req: LocalClaudeRequest): Promise<LocalClaudeResponse> {
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
-    const child = spawn('claude', args, { shell: true });
+    // Spawn from the OS temp dir, NOT the matrix-riven project. Otherwise the
+    // child inherits this repo's `.claude/settings.json` hooks (UserPromptSubmit
+    // translators, viki/superpowers memory recall, etc.) which prepend stray
+    // chat-style preambles to the model input and pollute the output JSON.
+    const child = spawn('claude', args, { shell: true, cwd: tmpRoot });
 
     const timer = setTimeout(() => {
       if (settled) return;
@@ -107,6 +135,11 @@ function runOnce(req: LocalClaudeRequest): Promise<LocalClaudeResponse> {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      try {
+        rmSync(tmpRoot, { recursive: true, force: true });
+      } catch {
+        // best-effort — the OS cleans up tmpdir eventually
+      }
       resolve(res);
     };
 

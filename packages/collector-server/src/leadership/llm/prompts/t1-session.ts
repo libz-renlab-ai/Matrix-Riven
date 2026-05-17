@@ -35,7 +35,7 @@ export function buildT1Prompt(inputs: T1Input[]): BuiltPrompt {
   };
   return {
     system: SYSTEM,
-    user: JSON.stringify(payload),
+    user: `Return STRICT JSON {"results":[{"id","line"}]} only. No prose. Batch:\n${JSON.stringify(payload)}`,
     model: T1_MODEL,
   };
 }

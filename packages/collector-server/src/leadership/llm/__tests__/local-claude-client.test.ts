@@ -113,19 +113,30 @@ describe('runLocalClaude', () => {
 
     expect(registry.spawnCalls.length).toBe(1);
     const h = registry.spawnCalls[0]!;
-    expect(h.args.args).toEqual([
-      '-p',
-      '--tools',
-      '',
-      '--system-prompt',
-      'sys',
+    // The system prompt is written to a temp file and passed as
+    // `--system-prompt-file <path>`. The path is host-specific; assert the
+    // surrounding flags exactly and the file flag's *shape*.
+    const args = h.args.args as string[];
+    const idx = args.indexOf('--system-prompt-file');
+    expect(idx).toBeGreaterThan(0);
+    const promptFile = args[idx + 1]!;
+    expect(promptFile).toMatch(/mr-llm-[^/\\]+[/\\]system\.txt$/);
+    const before = args.slice(0, idx);
+    const after = args.slice(idx + 2);
+    expect(before).toEqual(['-p', '--tools', '']);
+    expect(after).toEqual([
       '--no-session-persistence',
       '--disable-slash-commands',
+      '--setting-sources',
+      'project',
       '--output-format',
       'json',
       '--model',
       'claude-haiku-4-5-20251001',
     ]);
+    // The system prompt's content must live in the temp file.
+    const fs = await import('node:fs');
+    expect(fs.readFileSync(promptFile, 'utf8')).toBe('sys');
     // Stdin received the user prompt and was closed.
     expect(h.stdinChunks.join('')).toBe('hello world');
     expect(h.stdinEnded).toBe(true);

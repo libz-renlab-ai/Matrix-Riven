@@ -33,7 +33,7 @@ export function buildT2Prompt(inputs: T2Input[]): BuiltPrompt {
   };
   return {
     system: SYSTEM,
-    user: JSON.stringify(payload),
+    user: `Return STRICT JSON {"results":[{"email","line1","line2"}]} only. No prose. Batch:\n${JSON.stringify(payload)}`,
     model: T2_MODEL,
   };
 }

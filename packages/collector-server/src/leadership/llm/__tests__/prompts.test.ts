@@ -91,8 +91,13 @@ function assertShape(out: { system: string; user: string; model: string }) {
   expect(out.model.length).toBeGreaterThan(0);
   expect(out.system).toContain('JSON');
   expect(out.system.length).toBeLessThan(SYSTEM_CAP);
-  // User payload must be valid JSON
-  expect(() => JSON.parse(out.user)).not.toThrow();
+  // User payload starts with an imperative directive, then a JSON object on
+  // the line after the first newline. Slice past the directive and confirm
+  // the JSON tail still parses.
+  const nl = out.user.indexOf('\n');
+  expect(nl).toBeGreaterThan(0);
+  const jsonTail = out.user.slice(nl + 1);
+  expect(() => JSON.parse(jsonTail)).not.toThrow();
 }
 
 describe('buildT1Prompt', () => {

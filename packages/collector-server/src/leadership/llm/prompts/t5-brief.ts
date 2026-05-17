@@ -34,7 +34,7 @@ export function buildT5Prompt(input: T5Input): BuiltPrompt {
   };
   return {
     system: SYSTEM,
-    user: JSON.stringify(payload),
+    user: `Return STRICT JSON {"briefLines":["…","…","…"]} only. No prose. Input:\n${JSON.stringify(payload)}`,
     model: T5_MODEL,
   };
 }

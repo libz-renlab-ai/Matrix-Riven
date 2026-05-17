@@ -33,7 +33,7 @@ export function buildT4Prompt(inputs: T4Input[]): BuiltPrompt {
   };
   return {
     system: SYSTEM,
-    user: JSON.stringify(payload),
+    user: `Return STRICT JSON {"results":[{"refId","line"}]} only. No prose. Batch:\n${JSON.stringify(payload)}`,
     model: T4_MODEL,
   };
 }
