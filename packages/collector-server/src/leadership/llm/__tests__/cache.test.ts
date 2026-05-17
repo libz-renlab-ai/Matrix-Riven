@@ -144,6 +144,56 @@ describe('LlmCache', () => {
     expect(c.stats().bytes).toBeGreaterThan(0);
   });
 
+  it('evicts oldest entries when size crosses maxBytes', async () => {
+    const file = join(dir, `${randomUUID()}.jsonl`);
+    // Tiny cap so 3 entries push the file over and force eviction.
+    const c = new LlmCache(file, { maxBytes: 500, evictTargetBytes: 250 });
+    await c.load();
+    // Deterministic ts ordering — `Date.now()` ties on fast machines.
+    let t = 1_700_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(t);
+    await c.put('a', 'x'.repeat(150), 0.0);
+    vi.setSystemTime((t += 1000));
+    await c.put('b', 'x'.repeat(150), 0.0);
+    vi.setSystemTime((t += 1000));
+    // This one triggers the eviction.
+    await c.put('c', 'x'.repeat(150), 0.0);
+
+    // 'a' is the oldest — must be gone. 'b' may also be evicted depending on
+    // exact size math; 'c' (most recent) must survive.
+    expect(c.get('c')).toBe('x'.repeat(150));
+    expect(c.get('a')).toBeUndefined();
+    // File size stays under the cap after the rewrite.
+    const sz = (await stat(file)).size;
+    expect(sz).toBeLessThanOrEqual(500);
+    // In-mem and on-disk agree (compaction wrote out the live entries).
+    const raw = await readFile(file, 'utf8');
+    const lines = raw.split('\n').filter(Boolean);
+    expect(lines.length).toBe(c.stats().entries);
+  });
+
+  it('reload after eviction sees the compacted view', async () => {
+    const file = join(dir, `${randomUUID()}.jsonl`);
+    const a = new LlmCache(file, { maxBytes: 500, evictTargetBytes: 250 });
+    await a.load();
+    let t = 1_700_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(t);
+    await a.put('old', 'x'.repeat(150), 0.0);
+    vi.setSystemTime((t += 1000));
+    await a.put('mid', 'x'.repeat(150), 0.0);
+    vi.setSystemTime((t += 1000));
+    await a.put('new', 'x'.repeat(150), 0.0);
+
+    // Reopen — the on-disk file should already be compacted.
+    const b = new LlmCache(file, { maxBytes: 500, evictTargetBytes: 250 });
+    await b.load();
+    expect(b.get('old')).toBeUndefined();
+    expect(b.get('new')).toBe('x'.repeat(150));
+    expect(b.stats().bytes).toBe(a.stats().bytes);
+  });
+
   it('appends a newline-terminated JSON line per put', async () => {
     const file = join(dir, `${randomUUID()}.jsonl`);
     const c = new LlmCache(file);

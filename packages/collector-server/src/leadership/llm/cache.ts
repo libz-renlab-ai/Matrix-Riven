@@ -13,9 +13,19 @@
  * `docs/superpowers/specs/2026-05-17-llm-narrative-design.md`.
  */
 
-import { mkdir, readFile, appendFile } from 'node:fs/promises';
+import { mkdir, readFile, appendFile, writeFile, rename } from 'node:fs/promises';
 import { statSync } from 'node:fs';
 import { dirname } from 'node:path';
+
+/**
+ * Soft on-disk cap for the JSONL cache file. When `put()` would push the file
+ * past this size we drop oldest-ts entries until usage is back under
+ * `EVICTION_TARGET_BYTES`, then rewrite the file from the in-mem Map so the
+ * file size matches what's actually live. Per spec §Cache file
+ * (`docs/superpowers/specs/2026-05-17-llm-narrative-design.md`).
+ */
+const MAX_BYTES = 50 * 1024 * 1024; // 50 MB
+const EVICTION_TARGET_BYTES = Math.floor(MAX_BYTES * 0.8); // shrink to 40 MB to avoid thrashing
 
 export interface CacheEntry {
   key: string;
@@ -35,9 +45,17 @@ export class LlmCache {
   private readonly mem = new Map<string, CacheEntry>();
   private writeLock: Promise<void> = Promise.resolve();
   private loaded = false;
+  /** Running estimate of the file size in bytes. Initialised in `load()` and updated incrementally in `put()`. */
+  private fileSizeBytes = 0;
+  /** Optional override for the eviction cap — used by tests so a 50MB ceiling doesn't make every assertion 50MB long. */
+  private readonly maxBytes: number;
+  /** Optional override for the post-eviction target size; mirrors `maxBytes`. */
+  private readonly evictTargetBytes: number;
 
-  constructor(filePath: string) {
+  constructor(filePath: string, opts: { maxBytes?: number; evictTargetBytes?: number } = {}) {
     this.filePath = filePath;
+    this.maxBytes = opts.maxBytes ?? MAX_BYTES;
+    this.evictTargetBytes = opts.evictTargetBytes ?? Math.floor(this.maxBytes * 0.8);
   }
 
   /** Read JSONL file into in-mem Map. Missing file → empty. */
@@ -50,6 +68,7 @@ export class LlmCache {
     } catch (err: unknown) {
       if (isENOENT(err)) {
         this.loaded = true;
+        this.fileSizeBytes = 0;
         return;
       }
       throw err;
@@ -61,6 +80,7 @@ export class LlmCache {
         this.mem.set(entry.key, entry); // last-write-wins
       }
     }
+    this.fileSizeBytes = Buffer.byteLength(raw, 'utf8');
     this.loaded = true;
   }
 
@@ -73,18 +93,63 @@ export class LlmCache {
    * Append a new entry to the JSONL file and update the in-mem Map.
    * Serialized via internal write lock to prevent torn writes across
    * overlapping concurrent calls.
+   *
+   * When the appended line would push the file past the 50 MB soft cap, we
+   * evict oldest-`ts` entries from the in-mem Map until usage is back under
+   * `evictTargetBytes` and rewrite the file atomically. This is a coarse
+   * approximation of LRU using write-time rather than read-time, but the
+   * cache is keyed by content-hash so a "freshly written" entry is also
+   * "most relevant" — re-evicting it would just round-trip the cost.
    */
   async put(key: string, value: string, costUsd: number): Promise<void> {
     const entry: CacheEntry = { key, value, costUsd, ts: Date.now() };
     const line = JSON.stringify(entry) + '\n';
+    const lineBytes = Buffer.byteLength(line, 'utf8');
 
-    // Chain onto the write lock so appends are sequential.
+    // Chain onto the write lock so appends + evictions are sequential.
     const prev = this.writeLock;
     this.writeLock = prev
       .catch(() => undefined) // don't let one failure poison the chain
-      .then(() => appendFile(this.filePath, line, 'utf8'));
+      .then(async () => {
+        // Update the Map first so eviction sees the new entry as a candidate
+        // for "most recent" and won't immediately drop it.
+        this.mem.set(key, entry);
+        if (this.fileSizeBytes + lineBytes <= this.maxBytes) {
+          await appendFile(this.filePath, line, 'utf8');
+          this.fileSizeBytes += lineBytes;
+          return;
+        }
+        // Over the cap — evict oldest entries down to evictTargetBytes, then
+        // rewrite the file from the in-mem Map. The new entry is included in
+        // the rewrite, so no separate append is needed.
+        await this.evictAndCompact();
+      });
     await this.writeLock;
-    this.mem.set(key, entry);
+  }
+
+  /**
+   * Drop oldest-`ts` entries from the in-mem Map until the projected file
+   * size is under `evictTargetBytes`, then rewrite the JSONL file atomically
+   * (write to `<file>.tmp`, then rename) so the on-disk view never appears
+   * truncated mid-eviction.
+   */
+  private async evictAndCompact(): Promise<void> {
+    const all = [...this.mem.values()].sort((a, b) => a.ts - b.ts);
+    // Compute serialized size per entry so we can shrink toward the target.
+    const sizes = all.map((e) => Buffer.byteLength(JSON.stringify(e) + '\n', 'utf8'));
+    let total = sizes.reduce((sum, n) => sum + n, 0);
+    let dropIdx = 0;
+    while (total > this.evictTargetBytes && dropIdx < all.length - 1) {
+      total -= sizes[dropIdx]!;
+      this.mem.delete(all[dropIdx]!.key);
+      dropIdx++;
+    }
+    const kept = all.slice(dropIdx);
+    const body = kept.map((e) => JSON.stringify(e)).join('\n') + (kept.length > 0 ? '\n' : '');
+    const tmp = `${this.filePath}.tmp`;
+    await writeFile(tmp, body, 'utf8');
+    await rename(tmp, this.filePath);
+    this.fileSizeBytes = Buffer.byteLength(body, 'utf8');
   }
 
   /**
