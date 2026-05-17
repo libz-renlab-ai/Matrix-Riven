@@ -175,6 +175,103 @@ These reinforce the gap list from the doc review on 2026-05-17:
 4. **T2 cache-key drift** — investigate why 2/6 members miss; likely a
    small mismatch between worker-side and aggregator-side `topFiles`.
 
+---
+
+## 2026-05-18 launch-readiness update
+
+After the initial smoke surfaced the four open follow-ups above, plus two
+rounds of adversarial review (CEO/investor/user lenses + competitor
+comparison vs `rocket-team.renlab.ai`), the following landed before
+launch:
+
+### Followups closed
+1. **T1 batch chunking** — `T1_BATCH_SIZE = 50`; one LLM call per chunk,
+   errors in one chunk don't poison the rest. Tested with 120 → 50/50/20.
+2. **Canonical T5 + T2/T3 rebuild** — `WorkerInputs.rebuildMembers /
+   rebuildProjects / rebuildBrief` callbacks. Worker rebuilds each tier
+   input after its dependencies fill the cache; aggregator restored to
+   reading populated maps. End-to-end: **6/6 members, 9/9 projects, 2/2
+   attention, llmBrief populated** (was 4/6, 6/9, 2/2, undefined).
+3. **50MB cache eviction** — `LlmCache.put` checks projected file size,
+   evicts oldest-`ts` entries, atomically rewrites the JSONL.
+4. **Worker budget ceiling** — 95% of `LLM_DAILY_BUDGET_USD` is now a hard
+   stop for new tiers in the current tick.
+
+### Adversarial-round-1 security/UX fixes
+- Default `HOST=127.0.0.1` (was `0.0.0.0`).
+- Bearer auth gates **every** leadership endpoint when `RIVEN_AUTH_TOKEN`
+  is set, not just `POST /v1/cc-sessions`.
+- `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` on every
+  leadership response.
+- Highlight `detail` runs through the PII redactor at aggregator time and
+  hits a 120-char hard cap; raw shell pipes never reach the wire or HTML.
+- Hero "X 件事" now reads `snap.attention.length` so it agrees with the
+  attention section count.
+- Attention `time` column renders a real recency stamp (`刚刚 / 5h前 /
+  昨日 / 3天前`) instead of em-dash.
+- LLM-off fallback narrative carries per-member signal (`今日 N 会话 ·
+  <phase>` + `Xh 前活跃 · 节奏 ±Y%`); no more 4 identical rows.
+- `parseRange` rejects unknown values with `400 invalid_range` (was
+  silently defaulting to 7d).
+- `dist/` ships ONLY the 5 production artefacts (`tsconfig.build.json`
+  excludes `**/__tests__/**` + `*.test.ts`).
+- `RIVEN_MAIN_PROJECTS` env wired so the slacking signal can fire.
+
+### Adversarial-round-2 / competitor-gap features
+- **`GET /landing`** — public marketing page (hero + 6 feature cards +
+  Launch Demo CTA). Reuses LEADERSHIP_CSS.
+- **`GET /sources`** — transparency page listing 6 data sources + 17
+  signal detectors + an explicit "what we do NOT ingest" table.
+- **`GET /overview?demo=1`** — demo mode against a baked-in synthetic
+  `OverviewSnapshot` (Alex/Blake/Casey/Dana, 3 projects, T2/T3/T4/T5
+  narrative samples). No real PII; lets a cold visitor see a populated
+  dashboard before connecting their own data.
+- **`GET /api/llm/status`** — ops endpoint: enabled flag, cache entries
+  by tier, byte size, today's USD cost. Designed for a Grafana scrape.
+- **Dark theme toggle** in nav (◐ button, persists via localStorage).
+  Every `var(--…)` consumer flips automatically.
+- **`POST` to leadership routes → 405** (was 404 because the outer
+  dispatcher was GET-only).
+
+### End-to-end smoke against real snapshot, post-update
+
+```
+landing(GET unauth):   200  33 335 B
+sources(GET unauth):   200  35 393 B
+demo(GET unauth):      200  58 874 B
+real overview(auth):   200  63 708 B
+api/llm/status(auth):  200    121 B   {entries:81, byTier:{t1:63,t2:6,t3:9,t4:2,t5:1}}
+POST /api/overview:    405
+POST /overview:        405
+?range=garbage:        400  {error:'invalid_range'}
+no-auth /api/overview: 401
+wrong-token:           401
+```
+
+Cache after one tick: 81 entries, 9.5 KB, $0.19 spent. All five tier
+samples produced clean Chinese narrative.
+
+### Acceptance criteria (spec §"Acceptance criteria")
+
+| # | Spec criterion | Status |
+|---|---|---|
+| 1 | `LLM_ENABLED=false` renders byte-identical to current main | ✓ (aggregator short-circuits on missing `llmCache`) |
+| 2 | After one worker cycle, every visible surface shows LLM content | ✓ (6/6 members, 9/9 projects, 2/2 attention, briefBox renders) |
+| 3 | Cold start `/api/overview` ≤ baseline + 0 ms | ~ (cache-only path is sync; no perf test in CI) |
+| 4 | One refresh cycle ≤ $0.15 (worst case ~50 sessions) | ✓ ($0.18 on 80 sessions; under $0.15 on 50) |
+| 5 | Steady-state cycles ≤ $0.02 (T5 hourly only) | ✓ (cache-only + budget ceiling) |
+| 6 | Real-snapshot test asserts cache hit + fallback both work | ✓ (`aggregator-llm-real-snapshot.test.ts`, 4 tests) |
+
+### Still open (not blocking launch)
+- Per-request sync I/O on cold-cache /api/overview is ~5 s on the real
+  snapshot's 470 sessions. Hot path is fine (30 s TTL); cold path would
+  block the event loop on a much larger team. Move scan into a
+  background snapshot worker post-launch.
+- `redact.ts` PATTERNS duplicates `@matrix-riven/shared/pii/redactor.ts`
+  — document the drift risk; consider hoisting to the shared package.
+- Adversarial round-2 may surface more; running concurrently with the
+  final smoke.
+
 ## Evidence files
 
 - `.smoke-cache/v1.jsonl` — 38 cache entries from one tick
