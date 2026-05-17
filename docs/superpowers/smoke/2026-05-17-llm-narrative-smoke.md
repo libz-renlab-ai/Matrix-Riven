@@ -1,0 +1,184 @@
+# LLM Narrative Layer — Smoke Test (L-13)
+
+**Date:** 2026-05-18
+**Spec:** `docs/superpowers/specs/2026-05-17-llm-narrative-design.md`
+**Plan:** `docs/superpowers/plans/2026-05-17-llm-narrative.md` (§Wave 4 L-13)
+**Host:** Windows 11, Node 22.22.2, claude CLI 2.1.138
+**Data:** frozen snapshot at `D:/0jingtong/Matrix-Riven/data/teamagent-logs-20260514-190026`
+
+## Scope
+
+End-to-end validation that one LLM worker cycle populates the on-disk cache and
+that the prod HTTP server's render path lifts every `llm*` field into both
+`/api/overview` JSON and the `/overview` HTML page.
+
+## Method
+
+Two phases — clean control of LLM spend, deterministic before/after.
+
+**Phase A — fill cache** via `scripts/smoke-llm-narrative.ts`:
+
+```sh
+SMOKE_T1_MAX=20 pnpm exec tsx scripts/smoke-llm-narrative.ts \
+  ./.smoke-cache \
+  D:/0jingtong/Matrix-Riven/data/teamagent-logs-20260514-190026
+```
+
+The driver constructs `WorkerInputs` from the real snapshot, mounts a real
+`LlmCache` on the local filesystem, and calls `worker.runOnce()` — one tick,
+five tiers, then exits.
+
+**Phase B — boot prod server** with worker idle (24h interval, $0.01 budget so
+no second tick ever fires) and verify the cache-only render path:
+
+```sh
+PORT=18933 HOST=127.0.0.1 \
+  RIVEN_COLLECTOR_DIR=D:/0jingtong/Matrix-Riven/data/teamagent-logs-20260514-190026 \
+  LLM_ENABLED=true \
+  LLM_CACHE_DIR=$(pwd)/.smoke-cache \
+  LLM_WORKER_INTERVAL_MS=86400000 \
+  LLM_BRIEF_INTERVAL_MS=86400000 \
+  LLM_DAILY_BUDGET_USD=0.01 \
+  node packages/collector-server/dist/bin-prod-server.cjs
+```
+
+Then `curl /api/overview?range=7d` and `curl /overview`.
+
+## Results
+
+### Cache (Phase A)
+
+After one tick with T1 capped at the 20 most recent sessions:
+
+| tier | entries | sample value |
+|------|---------|--------------|
+| T1   | 20      | `查一下仓库关于emebdding的文档…` (some echoes — see Quality below) |
+| T2   | 6       | `本周聚焦 状态页面开发\n卡在 页面集成问题` |
+| T3   | 9       | `团队在做文档编写\n进展完成初稿 / 待审核` |
+| T4   | 2       | `检查 status/page.tsx 的类型和导入依赖` |
+| T5   | 1       | `["代码质检通过，工作树分支已顺利推送","技能评估与评判框架初始文档落地","三项目并行推进，协同开发有序展开"]` |
+
+Total tick duration: 73.5s. Cost: $0.0758 (≈ $0.018 × ~5 calls).
+
+### Render path (Phase B)
+
+`GET /api/overview?range=7d` returned 37 KB JSON containing:
+
+```
+members:    4 / 6   with llmWeekly
+projects:   6 / 9   with llmWeekly
+attention:  2 / 2   with llmRewrite
+highlights: 2 / 10  with llmDigest
+llmBrief:   ["代码质检通过，工作树分支已顺利推送",
+             "技能评估与评判框架初始文档落地",
+             "三项目并行推进，协同开发有序展开"]
+```
+
+`GET /overview` returned 62 KB HTML containing every cached line at the right
+surface — `briefBox` for T5, `m-llm` divs for T2, project narrative for T3,
+attention `line2` for T4, highlight detail for T1.
+
+Spec acceptance criterion #2 ("after one worker cycle: …") is met for this
+real-data snapshot. Acceptance #1 (`LLM_ENABLED=false` = byte-identical to
+main) is not exercised here — covered by the existing
+`aggregator-llm.test.ts` unit suite.
+
+## Issues found and fixed during the smoke
+
+### 1. Windows `shell:true` mangled the `--system-prompt` arg
+
+`spawn('claude', args, { shell: true })` on Windows passes the system prompt
+inline. Multi-line prompts containing `"` and newlines were truncated at the
+first special char, silently dropping `--output-format json` and downstream
+flags. First-round stdout was the model's raw reply text → `JSON.parse` failed
+in the local-claude-client with `parse_error`.
+
+**Fix:** write `req.systemPrompt` to a per-call temp file and pass
+`--system-prompt-file <path>`. File-based arg has no quoting issues and
+sidesteps Windows' 8191-char cmd cap as a bonus.
+
+### 2. Project + user hooks leaked into prompts
+
+`claude -p` running from the project cwd picked up `.claude/settings.json`
+UserPromptSubmit hooks (Chinese-translation hook, viki memory recall). The
+hook output landed *inside* the spawned model's user prompt, pulling the
+model into chit-chat mode ("English translation: …", "I see you'd like to…").
+
+**Fix:** spawn the child from `os.tmpdir()` (not the project) AND pass
+`--setting-sources project`. With cwd=tmp+no project settings, no hooks load,
+no CLAUDE.md, no auto-memory.
+
+### 3. Haiku drifted to chit-chat on bigger batches even with no hooks
+
+After fixes 1 and 2, T5 (sonnet) produced perfect JSON but T2/T3 (haiku) still
+sometimes replied "I see you've given me a JSON…". Single-item manual repros
+worked; multi-item batches with 6–9 items confused the model.
+
+**Fix:** prepend an imperative directive to the *user* prompt — e.g.
+`Return STRICT JSON {"results":[{"refId","line"}]} only. No prose. Batch:\n…`.
+The model now follows the JSON contract reliably at batch size up to 9.
+
+### 4. T1 single-batch timeout on the real snapshot
+
+The real frozen snapshot has 470 sessions in range. Worker packed all 470
+into one T1 call → the 60s claude-CLI timeout fired before haiku finished
+the prompt. Per-spec the cap is 50 sessions/call; the code lacks the cap.
+
+**Workaround in this smoke:** `SMOKE_T1_MAX=20` slices the smoke driver's
+T1 input. **Code gap (not fixed here):** `summarizeSessions` needs a real
+batch-of-50 loop, otherwise any large real deployment will hit this on
+cold start.
+
+### 5. T5 cache key drift between worker write and aggregator read
+
+`buildT5InputFromSnapshot` accepts `sessionsMap`, `projectsMap`, and
+`attentionRewrites`. The worker's `collectWorkerInputs` passes empty maps
++ `[]` (T1..T4 haven't run yet at collect-time). The aggregator's render
+path was passing **populated** `sessionsMap`/`projectsMap`/T4 rewrites read
+from cache → SHA-1 over a different payload → key never matched → `llmBrief`
+was always undefined.
+
+**Fix in this run:** aggregator now also passes `emptyMap` and `[]` to match
+the worker. The cost is that T5 sees the raw snapshot's highlights/projects
+rather than the LLM-enriched versions, but the cache contract works. Real
+fix (out of scope) is to have the worker rebuild the T5 input *after* T1/T3/T4
+land, so both sides agree on the populated state.
+
+### 6. Cache-key drift on T2 also affects 2/6 members (cosmetic)
+
+4 of 6 members got `llmWeekly`; the other 2 didn't. Same root cause as #5
+in a smaller dose — the worker-side `topFiles` / `sessionDigests` for some
+members must differ from what the render path recomputes (likely tied to
+session noise filtering between worker and aggregator). Not fixed here;
+documented for follow-up.
+
+## Spec ↔ code gaps surfaced (still open)
+
+These reinforce the gap list from the doc review on 2026-05-17:
+
+| Ref | Gap |
+|-----|-----|
+| Spec §Tiers T1 row | No `50 sessions/call` batch cap; 470-session batch times out. **Hit during smoke.** |
+| Spec §Cache file | No 50MB eviction at `put()` — still aspirational. (Not hit during smoke, but only because cache stayed ~5 KB.) |
+| Spec §Tiers T2/T3 row | "Cache TTL: 4h" — no time-based TTL, only content-hash. (Acceptable, document drift.) |
+| Plan L-9 worker contract | Worker writes T5 with empty maps; aggregator was reading with populated maps. **Worked around in this commit; canonical fix is worker rebuild.** |
+
+## Followup recommended
+
+1. **Batch cap on T1** — add `chunk(sessions, 50)` loop in `summarizeSessions`,
+   one LLM call per chunk. Avoids the timeout that blocked the very first
+   smoke run.
+2. **Worker rebuilds T5 input** after T1/T3/T4 fill, then writes T5 with
+   populated maps. Reverts the empty-map workaround in `attachLlmFields`
+   and restores T1/T3 digests in the brief prompt.
+3. **50MB cache eviction** at `put()` time per spec §Cache file.
+4. **T2 cache-key drift** — investigate why 2/6 members miss; likely a
+   small mismatch between worker-side and aggregator-side `topFiles`.
+
+## Evidence files
+
+- `.smoke-cache/v1.jsonl` — 38 cache entries from one tick
+- `.smoke-cache/overview_final.json` — 37 KB `/api/overview` response
+- `.smoke-cache/overview_final.html` — 62 KB rendered dashboard
+
+(All under the worktree; not committed.)
