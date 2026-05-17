@@ -137,3 +137,42 @@ describe('buildProjectDetail', () => {
     expect(result).toBeNull();
   });
 });
+
+describe('Phase 2 wired signals (P-A1)', () => {
+  it('MemberDetail exposes focus, promptLengthSeries, newSurfaceCount', () => {
+    const result = buildMemberDetail({
+      email: 'alice@example.com',
+      sessions: FIXTURE,
+      range: RANGE,
+      now: NOW,
+      collectorDir: '',
+    });
+    expect(result).not.toBeNull();
+    const detail = result!.detail;
+    expect(detail.focus).toEqual({
+      distinctCwdsToday: expect.any(Number),
+      avgSessionMinutes: expect.any(Number),
+    });
+    expect(Array.isArray(detail.promptLengthSeries)).toBe(true);
+    for (const point of detail.promptLengthSeries) {
+      expect(typeof point.date).toBe('string');
+      expect(typeof point.meanLen).toBe('number');
+    }
+    expect(typeof detail.newSurfaceCount).toBe('number');
+    expect(detail.newSurfaceCount).toBeGreaterThanOrEqual(0);
+  });
+
+  it('ProjectDetail exposes collabDensity in [0, 1]', () => {
+    const result = buildProjectDetail({
+      projectName: 'project-alpha',
+      sessions: FIXTURE,
+      range: RANGE,
+      now: NOW,
+      collectorDir: '',
+    });
+    expect(result).not.toBeNull();
+    expect(typeof result!.detail.collabDensity).toBe('number');
+    expect(result!.detail.collabDensity).toBeGreaterThanOrEqual(0);
+    expect(result!.detail.collabDensity).toBeLessThanOrEqual(1);
+  });
+});

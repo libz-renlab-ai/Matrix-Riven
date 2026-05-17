@@ -95,6 +95,12 @@ export interface MemberDetail {
   sessions: SessionSummary[];
   heatmap7x24: number[][];       // 7 rows × 24 cols; tokens
   topFiles: { path: string; edits: number }[];
+  /** Focus metrics — distinct cwds today + mean session length. */
+  focus: { distinctCwdsToday: number; avgSessionMinutes: number };
+  /** Daily mean user-prompt length over the range (oldest-first). */
+  promptLengthSeries: { date: string; meanLen: number }[];
+  /** New file extensions explored in the range vs the 7-day-prior window. */
+  newSurfaceCount: number;
 }
 
 export interface RiskyAction {
@@ -141,6 +147,8 @@ export interface ProjectDetail {
   webResearchShare: number;
   heatmap7x24: number[][];
   recentFiles: { path: string; touches: number }[];
+  /** 0–1 — fraction of edited files touched by ≥ 2 contributors. */
+  collabDensity: number;
 }
 
 export interface Milestone {

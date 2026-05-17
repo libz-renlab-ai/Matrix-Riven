@@ -15,7 +15,7 @@ import type {
   SessionSummary,
   DateRange,
 } from './types.js';
-import { computeActivity, computeRhythmDelta } from './signals/activity.js';
+import { computeActivity, computeFocus, computeRhythmDelta } from './signals/activity.js';
 import { detectLowActivity } from './signals/slacking.js';
 import { detectBlocker } from './signals/blockers.js';
 import { detectHelpNeeded } from './signals/help-needed.js';
@@ -24,13 +24,18 @@ import {
   computeToolFailureRate,
   countContextOverflow,
   computeIterationDensity,
+  promptLengthSeries,
 } from './signals/quality.js';
 import { extractRiskyActions, sumRedactions } from './signals/risk.js';
 import { computeCostUsd, computeModelMix } from './signals/cost.js';
-import { computeWebResearch } from './signals/learning.js';
+import { computeWebResearch, computeNewSurfaceCount } from './signals/learning.js';
 import { classifyProject, getRecentFiles } from './signals/project-status.js';
 import { projectEta } from './signals/project-eta.js';
-import { computeContributors, hasBusFactorWarning } from './signals/project-collab.js';
+import {
+  computeCollabDensity,
+  computeContributors,
+  hasBusFactorWarning,
+} from './signals/project-collab.js';
 import { computeExtensionMix, computeTestRatio } from './signals/project-stack.js';
 import { guessPhase } from './signals/project-phase.js';
 import { computeHealthScore, extractMilestones } from './signals/project-health.js';
@@ -238,6 +243,21 @@ export function buildMemberDetail(input: {
   const modelMix = computeModelMix(memberSessions);
   const webResearchCount = computeWebResearch(memberSessions);
 
+  // P-A1: previously-unused signals now wired into the snapshot.
+  const todayMemberSessions = filterToday(memberSessions, input.now);
+  const focus = computeFocus(todayMemberSessions);
+  const prLenSeries = promptLengthSeries(memberSessions);
+  // "Historical" = same member's sessions in the 7-day window preceding range.start.
+  const historyWindowMs = 7 * 24 * 60 * 60 * 1000;
+  const historicalStart = new Date(input.range.start.getTime() - historyWindowMs);
+  const historicalMemberSessions = all.filter(
+    (s) =>
+      s.envelope.userId === input.email &&
+      s.startTs >= historicalStart &&
+      s.startTs < input.range.start,
+  );
+  const newSurfaceCount = computeNewSurfaceCount(memberSessions, historicalMemberSessions);
+
   // Collaborators — files shared with others via collab hits
   const collabHits = detectCollabHits(inRange);
   const collaborators = new Map<string, Set<string>>();
@@ -300,6 +320,9 @@ export function buildMemberDetail(input: {
     sessions: sessionsList,
     heatmap7x24,
     topFiles,
+    focus,
+    promptLengthSeries: prLenSeries,
+    newSurfaceCount,
   };
 
   return { ...base, detail };
@@ -342,6 +365,8 @@ export function buildProjectDetail(input: {
     .sort((a, b) => b[1] - a[1])
     .map(([path, touches]) => ({ path, touches }));
 
+  const collabDensity = computeCollabDensity(projectSessions);
+
   const detail: ProjectDetail = {
     todayFiles,
     weekFiles,
@@ -351,6 +376,7 @@ export function buildProjectDetail(input: {
     webResearchShare,
     heatmap7x24,
     recentFiles,
+    collabDensity,
   };
 
   return { ...base, detail };
