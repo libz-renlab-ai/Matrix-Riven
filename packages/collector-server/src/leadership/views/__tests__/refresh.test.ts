@@ -44,3 +44,31 @@ describe('CLIENT_REFRESH_SCRIPT slide-over wiring (P-B6)', () => {
     expect(CLIENT_REFRESH_SCRIPT).toContain('clearInterval(soInterval)');
   });
 });
+
+describe('overview live polling (P-C2)', () => {
+  it('schedules setInterval at 30s', () => {
+    expect(CLIENT_REFRESH_SCRIPT).toContain('setInterval');
+    expect(CLIENT_REFRESH_SCRIPT).toContain('30000');
+  });
+  it('sends If-None-Match header with current ETag', () => {
+    expect(CLIENT_REFRESH_SCRIPT).toContain("'if-none-match'");
+    expect(CLIENT_REFRESH_SCRIPT.toLowerCase()).toContain('if-none-match');
+  });
+  it('handles 304 by short-circuiting (no body parse)', () => {
+    expect(CLIENT_REFRESH_SCRIPT).toMatch(/status\s*===\s*304/);
+  });
+  it('swaps 5 fragments via outerHTML', () => {
+    for (const id of ['hero', 'kpis', 'attention', 'members', 'projects']) {
+      expect(CLIENT_REFRESH_SCRIPT).toContain(`getElementById('${id}')`);
+    }
+    expect(CLIENT_REFRESH_SCRIPT).toContain('outerHTML');
+  });
+  it('reads/writes lastKpis from localStorage for delta badges', () => {
+    expect(CLIENT_REFRESH_SCRIPT).toContain('localStorage');
+    expect(CLIENT_REFRESH_SCRIPT).toContain('lh.lastKpis');
+  });
+  it('pulses live-dot after successful refresh', () => {
+    expect(CLIENT_REFRESH_SCRIPT).toContain('live-dot');
+    expect(CLIENT_REFRESH_SCRIPT).toContain('pulse');
+  });
+});

@@ -8,6 +8,12 @@
  *       Body scroll is locked while the drawer is open. The `soInterval` var
  *       is reserved here so P-C3 can plug in 30 s polling without touching
  *       the open/close contract.
+ * P-C2: 30 s overview polling. `pollOverview()` fetches `/api/overview`
+ *       with `If-None-Match: <last etag>`. On 304 → pulse live-dot only.
+ *       On 200 → swap 5 fragments (hero/kpis/attention/members/projects)
+ *       via `outerHTML`, compute KPI deltas vs `localStorage['lh.lastKpis']`
+ *       and render ±N badges that fade after 4–5 s. The current KPI snapshot
+ *       is persisted back to localStorage so next-load can diff.
  *
  * The script is wrapped in an IIFE and is ES5-compatible (no arrow fns, no
  * const/let, no template literals at runtime — the surrounding TS template
@@ -120,5 +126,80 @@ export const CLIENT_REFRESH_SCRIPT = `
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') window.closeSO();
   });
+
+  // ── P-C2: Overview live polling (ETag + fragment swap) ────────────────────
+  var overviewEtag = null;
+  var lastKpis = null;
+  try {
+    var raw = localStorage.getItem('lh.lastKpis');
+    if (raw) lastKpis = JSON.parse(raw);
+  } catch (e) { /* ignore quota / parse errors */ }
+
+  function flashLiveDot() {
+    var dot = document.querySelector('.live-dot');
+    if (!dot) return;
+    dot.classList.add('pulse');
+    setTimeout(function () { dot.classList.remove('pulse'); }, 1500);
+  }
+
+  function showKpiDeltas(prev, curr) {
+    if (!prev || !curr) return;
+    var fields = [
+      { key: 'attention', selector: '.kpi.kpi-warn .kpi-num' },
+      { key: 'teamActivity', selector: '.kpi.kpi-good .kpi-num' }
+    ];
+    for (var f = 0; f < fields.length; f++) {
+      var spec = fields[f];
+      var prevVal = (prev[spec.key] && prev[spec.key].value) | 0;
+      var currVal = (curr[spec.key] && curr[spec.key].value) | 0;
+      var delta = currVal - prevVal;
+      if (delta === 0) continue;
+      var card = document.querySelector(spec.selector);
+      if (!card) continue;
+      var badge = document.createElement('span');
+      badge.className = 'kpi-badge ' + (delta > 0 ? 'up' : 'down');
+      badge.textContent = (delta > 0 ? '↑' : '↓') + Math.abs(delta);
+      badge.style.cssText = 'margin-left:8px;font-size:12px;color:' + (delta > 0 ? 'var(--accent-ink)' : 'var(--danger)') + ';opacity:1;transition:opacity .8s ease;';
+      card.appendChild(badge);
+      (function (b) {
+        setTimeout(function () { b.style.opacity = '0'; }, 4000);
+        setTimeout(function () { if (b && b.parentNode) b.parentNode.removeChild(b); }, 5000);
+      })(badge);
+    }
+  }
+
+  async function pollOverview() {
+    try {
+      var headers = overviewEtag ? { 'if-none-match': overviewEtag } : {};
+      var resp = await fetch('/api/overview', { headers: headers });
+      if (resp.status === 304) {
+        flashLiveDot();
+        return;
+      }
+      if (!resp.ok) return;
+      overviewEtag = resp.headers.get('etag');
+      var snap = await resp.json();
+      var slots = ['hero', 'kpis', 'attention', 'members', 'projects'];
+      for (var i = 0; i < slots.length; i++) {
+        var slot = slots[i];
+        var el = slot === 'hero' ? document.getElementById('hero')
+              : slot === 'kpis' ? document.getElementById('kpis')
+              : slot === 'attention' ? document.getElementById('attention')
+              : slot === 'members' ? document.getElementById('members')
+              : document.getElementById('projects');
+        if (el && snap && snap._html && snap._html[slot]) {
+          el.outerHTML = snap._html[slot];
+        }
+      }
+      if (snap && snap.kpis) {
+        showKpiDeltas(lastKpis, snap.kpis);
+        lastKpis = snap.kpis;
+        try { localStorage.setItem('lh.lastKpis', JSON.stringify(snap.kpis)); } catch (e) { /* ignore */ }
+      }
+      flashLiveDot();
+    } catch (e) { /* swallow network / parse errors */ }
+  }
+
+  setInterval(pollOverview, 30000);
 })();
 `;
