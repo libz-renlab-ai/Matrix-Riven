@@ -30,7 +30,7 @@ export function renderHeroFragment(snap: OverviewSnapshot): string {
   const headline = heroHeadline({ attentionCount, highOutputCount });
   const d = new Date(snap.computedAt);
   const date = `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
-  return `<header id="hero" class="hero fade-in">
+  const header = `<header id="hero" class="hero fade-in">
     <div>
       <h1 class="serif">${headline}</h1>
       <div class="sub">${date} · 数据每 30 秒刷新</div>
@@ -39,6 +39,19 @@ export function renderHeroFragment(snap: OverviewSnapshot): string {
       <div><strong>${snap.members.length}</strong> 位成员 · <strong>${snap.projects.length}</strong> 个项目</div>
     </div>
   </header>`;
+  // T5 daily brief: a 3-line LLM-authored briefBox dropped immediately below
+  // the hero greeting. Optional — when the LLM tier is disabled or the cache
+  // misses, `llmBrief` is undefined and we render only the header (existing
+  // byte-identical behavior). We tolerate any non-empty array but only render
+  // the first three lines, matching the T5 contract.
+  const brief = snap.llmBrief;
+  if (!brief || brief.length === 0) return header;
+  const lineStyle = "font-family:'Newsreader',serif;font-size:15px;line-height:1.6;color:var(--ink-1);";
+  const lines = brief.slice(0, 3)
+    .map(l => `<div class="brief-line" style="${lineStyle}">${escapeHtml(l)}</div>`)
+    .join('');
+  const briefBox = `<div class="brief-box fade-in" aria-label="leader daily brief" style="margin-top:12px;padding:14px 16px;background:var(--surface);border-left:3px solid var(--accent-ink);border-radius:var(--r-lg);box-shadow:var(--shadow-1);">${lines}</div>`;
+  return header + briefBox;
 }
 
 function classifyHighOutput(members: MemberSnapshot[]): number {
@@ -158,7 +171,13 @@ export function renderAttentionFragment(snap: OverviewSnapshot, opts: FragmentOp
   const totalAll = snap.attention.length;
   const items = opts.limit != null ? snap.attention.slice(0, opts.limit) : snap.attention;
   const lead = attentionLead(totalAll);
-  const rows = items.map(a => `
+  const rows = items.map(a => {
+    // T4 rewrite path: LLM string is plain text → must be escaped to be safe.
+    // Legacy template path: `line2` is aggregator-controlled and may contain
+    // trusted inline markup (e.g., `<span class="mono">api/x.ts</span>`), so
+    // it is intentionally emitted unescaped — preserving the pre-LLM contract.
+    const line2Html = a.llmRewrite ? escapeHtml(a.llmRewrite) : a.line2;
+    return `
     <div class="att-row" data-ref="${escapeHtml(a.kind)}:${escapeHtml(a.refId)}" data-attention="${a.severity}">
       <div class="att-avatar" style="background:${avatarColor(a.refId)}">${escapeHtml(a.initials)}</div>
       <div class="att-body">
@@ -166,11 +185,12 @@ export function renderAttentionFragment(snap: OverviewSnapshot, opts: FragmentOp
           <strong>${escapeHtml(a.displayName)}</strong>
           <span class="att-tag ${escapeHtml(a.tagSeverity)}">${escapeHtml(a.tag)}</span>
         </div>
-        <div class="att-line2">${a.line2}</div>
+        <div class="att-line2">${line2Html}</div>
       </div>
       <div class="att-time">${escapeHtml(a.time)}</div>
       <div class="att-arrow">›</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   const footer = renderSeeAllFooter(items.length, totalAll, '项', '/people?focus=attention');
   return `<section id="attention" class="section fade-in">
     <div class="section-head">
@@ -278,6 +298,22 @@ export function renderMembersFragment(snap: OverviewSnapshot, opts: FragmentOpts
     const failure = m.toolFailureRate ?? 0;
     const memberHealth = Math.max(0, Math.min(10, (1 - failure) * 10));
     const dotColor = healthDotColor(memberHealth);
+    // T2 weekly digest: when present, the two LLM-authored sentences replace
+    // the phase+trend template pair. Both lines are escaped (the LLM string
+    // is plain text). Template fallback rendered below when `llmWeekly` is
+    // absent or empty — byte-identical to the pre-LLM contract.
+    const llmLines = m.llmWeekly ? m.llmWeekly.split('\n') : [];
+    let narrative: string;
+    if (llmLines.length > 0 && llmLines[0]) {
+      const l1 = `<div>${escapeHtml(llmLines[0]!)}</div>`;
+      const l2 = llmLines[1]
+        ? `<div style="color:var(--ink-3);font-size:12px;">${escapeHtml(llmLines[1]!)}</div>`
+        : '';
+      narrative = `<div class="m-llm" style="font-family:'Newsreader',serif;color:var(--ink-2);font-size:13px;line-height:1.5;margin-top:2px;padding-top:10px;border-top:1px solid var(--hairline);">${l1}${l2}</div>`;
+    } else {
+      narrative = `<div class="mt-phase" style="font-size:12.5px;color:var(--ink-2);margin-top:2px;">${escapeHtml(phaseText)}</div>
+        <div class="mt-trend" style="font-size:12.5px;color:var(--ink-3);margin-top:6px;padding-top:10px;border-top:1px solid var(--hairline);">${escapeHtml(trendArr)} ${escapeHtml(trendText)}</div>`;
+    }
     return `
       <div class="member-tile" data-ref="member:${escapeHtml(m.email)}" data-attention="${attentionScore(m)}" data-activity="${m.today.sessions}" data-alpha="${escapeHtml(m.displayName)}" onclick="window.openSO('member', '${escapeHtml(m.email)}')">
         <div class="mt-head">
@@ -289,8 +325,7 @@ export function renderMembersFragment(snap: OverviewSnapshot, opts: FragmentOpts
           <span class="where-label">在做</span>
           <span class="where-val">${escapeHtml(m.topProject ?? '—')}</span>
         </div>
-        <div class="mt-phase" style="font-size:12.5px;color:var(--ink-2);margin-top:2px;">${escapeHtml(phaseText)}</div>
-        <div class="mt-trend" style="font-size:12.5px;color:var(--ink-3);margin-top:6px;padding-top:10px;border-top:1px solid var(--hairline);">${escapeHtml(trendArr)} ${escapeHtml(trendText)}</div>
+        ${narrative}
         <svg class="mt-spark" viewBox="0 0 48 16"><path d="${path}" stroke="${sparkColor}" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>
       </div>`;
   }).join('');
@@ -329,7 +364,11 @@ function p2NarrativeRow(p: ProjectSnapshot, now: number): string {
   const trendText = trendLabel(p.trend7d);
   const etaText = etaLabel(p.etaDays);
 
-  // Latest-file narrative line (graceful when no edits captured).
+  // Latest-file narrative line (graceful when no edits captured). The
+  // legacy template uses inline <span class="mono"> markup that depends on
+  // template-controlled (escaped) inputs — so the string is emitted
+  // unescaped further down. The T3 path emits an LLM-authored plain string
+  // which we escape, since LLM output is treated as external content.
   let latestLine = '';
   if (p.lastTouch) {
     const hours = Math.max(0, (resolveNow(now) - Date.parse(p.lastTouch.ts)) / 3_600_000);
@@ -340,14 +379,26 @@ function p2NarrativeRow(p: ProjectSnapshot, now: number): string {
     latestLine = '暂无最近编辑';
   }
 
+  // T3 project digest. When present, llmLine1 replaces the phase·trend
+  // subtitle, and llmLine2 replaces the "最近: file · author · since" line.
+  // The project name, health dot, "N/M 人在做" and ETA columns are
+  // unchanged. Both lines escaped — LLM output is external content.
+  const llmLines = p.llmWeekly ? p.llmWeekly.split('\n') : [];
+  const phaseSubtitleHtml = llmLines[0]
+    ? escapeHtml(llmLines[0])
+    : `${escapeHtml(phaseText)} · ${escapeHtml(trendText)}`;
+  const latestLineHtml = llmLines[1]
+    ? escapeHtml(llmLines[1])
+    : latestLine;
+
   return `<div class="proj-row" data-ref="project:${escapeHtml(p.name)}" data-attention="${p.busFactorWarning ? 4 : 0}" data-activity="${sumTrend}" data-alpha="${escapeHtml(p.name)}" onclick="window.openSO('project', '${escapeHtml(p.name)}')" style="grid-template-columns:1fr 24px;align-items:start;padding:18px 24px;">
     <div style="min-width:0;">
       <div class="proj-name" style="display:flex;align-items:center;gap:10px;">
         <span class="proj-health-dot" title="${escapeHtml(healthLabel(p.healthScore))}" style="background:${dotColor};width:8px;height:8px;border-radius:50%;flex-shrink:0;"></span>
         <span style="font-size:15px;font-weight:600;color:var(--ink-1);">${renderProjectTitleHtml(p.name)}</span>
-        <span style="font-size:12px;color:var(--ink-3);">${escapeHtml(phaseText)} · ${escapeHtml(trendText)}</span>
+        <span style="font-size:12px;color:var(--ink-3);">${phaseSubtitleHtml}</span>
       </div>
-      <div class="proj-latest" style="font-size:12.5px;color:var(--ink-3);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${latestLine}</div>
+      <div class="proj-latest" style="font-size:12.5px;color:var(--ink-3);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${latestLineHtml}</div>
       <div class="proj-team-eta" style="font-size:12.5px;color:var(--ink-2);margin-top:4px;">
         <span>${activeCount}/${totalContributors} 人在做</span>
         <span style="color:var(--ink-4);"> · </span>
@@ -446,7 +497,11 @@ export function renderHighlightsFragment(snap: OverviewSnapshot): string {
   const rows = all.slice(0, 10).map(h => {
     const hours = Math.max(0, (resolveNow(now) - Date.parse(h.ts)) / 3_600_000);
     const since = idleSince(hours);
-    const detail = h.detail && h.detail.length > 0 ? ' · ' + escapeHtml(h.detail) : '';
+    // T1 digest: prefer the LLM-authored one-liner over the raw command in
+    // `h.detail`. Both fields are user-content-derived (the LLM string is
+    // external content, the raw command is shell text); always escape.
+    const text = h.llmDigest ?? h.detail;
+    const detail = text && text.length > 0 ? ' · ' + escapeHtml(text) : '';
     return `<div class="hl-row" style="display:grid;grid-template-columns:24px 1fr auto;gap:12px;align-items:center;padding:12px 24px;border-bottom:1px solid var(--hairline);">
       <div class="hl-icon" style="font-size:13px;color:var(--accent-ink);width:24px;text-align:center;">${escapeHtml(highlightIcon(h.type))}</div>
       <div class="hl-body" style="min-width:0;font-size:13px;color:var(--ink-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">

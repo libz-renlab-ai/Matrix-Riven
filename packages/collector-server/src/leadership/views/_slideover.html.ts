@@ -85,7 +85,15 @@ export function renderMemberSlideoverFragments(
   const topProject = member.topProject ?? mostCommonProject(detail);
   const shortTopFile = topFile ? shortFile(topFile) : '';
   let calloutSentence: string;
-  if (member.stateBadge === 'needs_help') {
+  // T2 LLM digest takes precedence: when present we emit the LLM string
+  // (escaped — plain external text) joining the two lines into one
+  // sentence. The severity color and icon come from the surrounding markup
+  // and are unchanged. Falls back to the template-authored callout below
+  // when llmWeekly is absent or empty.
+  const llmText = member.llmWeekly?.split('\n').filter(Boolean).join(' ').trim();
+  if (llmText) {
+    calloutSentence = escapeHtml(llmText);
+  } else if (member.stateBadge === 'needs_help') {
     calloutSentence = topProject
       ? `${escapeHtml(member.displayName)} 在 <em>${escapeHtml(topProject)}</em> 上反复受阻 — <em>看一眼是否需要支援</em>。`
       : `${escapeHtml(member.displayName)} 工具调用反复失败 — <em>看一眼是否需要支援</em>。`;
@@ -249,7 +257,14 @@ export function renderProjectSlideoverFragments(
   // ETA "暂无预估" reads awkwardly when concatenated as "预计 暂无预估"; in
   // that case we use the underlying phrase as a standalone sentence end.
   const etaClause = project.etaDays == null ? etaText : `预计 ${etaText}`;
-  const calloutText = `<em>${escapeHtml(project.name)}</em> ${escapeHtml(phaseText)}，${escapeHtml(trendText)}。当前 <em>${activeCount} 人在做</em>，${escapeHtml(etaClause)}。`;
+  // T3 LLM digest takes precedence: when present we emit the LLM sentences
+  // (escaped — plain external text) joined into a single callout line.
+  // Severity / icon color / surrounding markup are unchanged. Falls back to
+  // the template callout when llmWeekly is absent or empty.
+  const llmText = project.llmWeekly?.split('\n').filter(Boolean).join(' ').trim();
+  const calloutText = llmText
+    ? escapeHtml(llmText)
+    : `<em>${escapeHtml(project.name)}</em> ${escapeHtml(phaseText)}，${escapeHtml(trendText)}。当前 <em>${activeCount} 人在做</em>，${escapeHtml(etaClause)}。`;
   const dotColor = healthDotColor(project.healthScore);
   const callout = `<div class="so-callout">
     <div class="so-callout-icon" style="color:${dotColor};">

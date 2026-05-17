@@ -304,3 +304,58 @@ describe('renderProjectSlideoverFragments (P-B6)', () => {
     expect(evil.evolve).toContain('&lt;script&gt;');
   });
 });
+
+// ---------------------------------------------------------------------------
+// L-10 LLM narrative — slide-over callout (T2 / T3)
+// ---------------------------------------------------------------------------
+
+describe('renderMemberSlideoverFragments — llmWeekly callout (L-10)', () => {
+  it('member callout text is the LLM digest when llmWeekly is set', () => {
+    const m: MemberSnapshot = { ...makeMember(), llmWeekly: '本周聚焦 overview\n卡在 e2e 测试' };
+    const f = renderMemberSlideoverFragments(m, makeMemberDetail());
+    expect(f.callout).toContain('本周聚焦 overview');
+    expect(f.callout).toContain('卡在 e2e 测试');
+    // Template idle copy ("已经 ... 没有新动作") replaced.
+    expect(f.callout).not.toContain('没有新动作');
+    // Callout wrapper / icon still emitted.
+    expect(f.callout).toContain('class="so-callout');
+    expect(f.callout).toContain('serif');
+  });
+
+  it('member callout escapes the LLM string', () => {
+    const m: MemberSnapshot = { ...makeMember(), llmWeekly: '<script>x</script>\nok' };
+    const f = renderMemberSlideoverFragments(m, makeMemberDetail());
+    expect(f.callout).not.toContain('<script>x</script>');
+    expect(f.callout).toContain('&lt;script&gt;');
+  });
+
+  it('member callout falls back to template when llmWeekly absent', () => {
+    const f = renderMemberSlideoverFragments(makeMember(), makeMemberDetail());
+    // low_activity branch fires for the fixture's stateBadge.
+    expect(f.callout).toContain('没有新动作');
+  });
+});
+
+describe('renderProjectSlideoverFragments — llmWeekly callout (L-10)', () => {
+  it('project callout text is the LLM digest when llmWeekly is set', () => {
+    const p: ProjectSnapshot = { ...makeProject(), llmWeekly: '团队在做 overview\n进展正常 / 待 e2e' };
+    const f = renderProjectSlideoverFragments(p, makeProjectDetail());
+    expect(f.callout).toContain('团队在做 overview');
+    expect(f.callout).toContain('进展正常 / 待 e2e');
+    // Template phrase "推进新功能" replaced by LLM text.
+    expect(f.callout).not.toContain('推进新功能');
+    expect(f.callout).toContain('class="so-callout');
+  });
+
+  it('project callout escapes the LLM string', () => {
+    const p: ProjectSnapshot = { ...makeProject(), llmWeekly: '<script>x</script>\nok' };
+    const f = renderProjectSlideoverFragments(p, makeProjectDetail());
+    expect(f.callout).not.toContain('<script>x</script>');
+    expect(f.callout).toContain('&lt;script&gt;');
+  });
+
+  it('project callout falls back to template when llmWeekly absent', () => {
+    const f = renderProjectSlideoverFragments(makeProject(), makeProjectDetail());
+    expect(f.callout).toContain('推进新功能');
+  });
+});

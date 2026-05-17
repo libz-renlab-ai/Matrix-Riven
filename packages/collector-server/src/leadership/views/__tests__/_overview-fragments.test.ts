@@ -531,3 +531,206 @@ describe('top-N cap + see-all footer (P-B7)', () => {
     expect(html).toContain('<span class="section-count">6</span>');
   });
 });
+
+// ── L-10: views prefer llm* fields with template fallbacks ────────────────────
+
+describe('L-10 LLM narrative — hero brief box (T5)', () => {
+  it('renders no .brief-box when llmBrief is absent', () => {
+    const html = renderHeroFragment(makeSnapshot());
+    expect(html).not.toContain('brief-box');
+    expect(html).not.toContain('aria-label="leader daily brief"');
+  });
+
+  it('renders no .brief-box when llmBrief is an empty array', () => {
+    const html = renderHeroFragment(makeSnapshot({ llmBrief: [] }));
+    expect(html).not.toContain('brief-box');
+  });
+
+  it('renders .brief-box with all three lines when llmBrief has 3 entries', () => {
+    const html = renderHeroFragment(makeSnapshot({
+      llmBrief: ['第一条 brief 文案', '第二条 brief 文案', '第三条 brief 文案'],
+    }));
+    expect(html).toContain('class="brief-box');
+    expect(html).toContain('aria-label="leader daily brief"');
+    expect(html).toContain('第一条 brief 文案');
+    expect(html).toContain('第二条 brief 文案');
+    expect(html).toContain('第三条 brief 文案');
+    // Three brief-line divs.
+    expect((html.match(/class="brief-line"/g) ?? []).length).toBe(3);
+  });
+
+  it('escapes HTML in llmBrief lines so injected <script> cannot run', () => {
+    const html = renderHeroFragment(makeSnapshot({
+      llmBrief: ['<script>alert(1)</script>', 'ok', 'ok'],
+    }));
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;script&gt;');
+  });
+});
+
+describe('L-10 LLM narrative — attention rewrite (T4)', () => {
+  it('uses escaped llmRewrite when present and drops legacy <span class="mono">', () => {
+    const html = renderAttentionFragment(makeSnapshot({
+      attention: [{
+        kind: 'member', refId: 'a@x.com', displayName: 'a', initials: 'a',
+        tag: 't', tagSeverity: 'urgent',
+        line2: '上一次停在 <span class="mono">api/overview.ts</span>',
+        time: '—', severity: 9,
+        llmRewrite: 'Liboze 反复重试 build 命令，已 11 小时无进展',
+      }],
+    }));
+    expect(html).toContain('Liboze 反复重试 build 命令，已 11 小时无进展');
+    // Legacy mono-span markup must not appear when LLM rewrite is used.
+    expect(html).not.toContain('<span class="mono">api/overview.ts</span>');
+  });
+
+  it('escapes HTML in llmRewrite — LLM string is external content', () => {
+    const html = renderAttentionFragment(makeSnapshot({
+      attention: [{
+        kind: 'member', refId: 'a@x.com', displayName: 'a', initials: 'a',
+        tag: 't', tagSeverity: 'urgent', line2: 'fallback',
+        time: '—', severity: 9,
+        llmRewrite: '<script>boom</script>',
+      }],
+    }));
+    expect(html).not.toContain('<script>boom');
+    expect(html).toContain('&lt;script&gt;');
+  });
+
+  it('falls back to unescaped line2 (trusted template HTML) when llmRewrite is undefined', () => {
+    const html = renderAttentionFragment(makeSnapshot({
+      attention: [{
+        kind: 'member', refId: 'a@x.com', displayName: 'a', initials: 'a',
+        tag: 't', tagSeverity: 'normal',
+        line2: '上一次停在 <span class="mono">api/overview.ts</span>',
+        time: '—', severity: 5,
+      }],
+    }));
+    expect(html).toContain('<span class="mono">api/overview.ts</span>');
+  });
+});
+
+describe('L-10 LLM narrative — member tile (T2)', () => {
+  function memberFixture(overrides: Partial<MemberSnapshotFixture> = {}): OverviewSnapshotFixture {
+    return makeSnapshot({
+      members: [{
+        email: 'u0@x.com', displayName: 'user0', stateBadge: 'active',
+        today: { sessions: 5, tokens: 10000, estMinutes: 30, costUsd: 1.0 },
+        trend7d: [1, 2, 3, 4, 5, 6, 7], deltaVs7dAvgPct: 0.1, warnings: [], topProject: 'mr',
+        ...overrides,
+      } as never],
+    });
+  }
+
+  it('renders two LLM lines when llmWeekly is set; phase/trend template gone', () => {
+    const html = renderMembersFragment(memberFixture({ llmWeekly: '本周聚焦 overview\n卡在 e2e 测试' } as never));
+    expect(html).toContain('class="m-llm"');
+    expect(html).toContain('本周聚焦 overview');
+    expect(html).toContain('卡在 e2e 测试');
+    // Phase + trend template classes absent when LLM lines are present.
+    expect(html).not.toContain('class="mt-phase"');
+    expect(html).not.toContain('class="mt-trend"');
+  });
+
+  it('falls back to phase/trend template when llmWeekly is absent', () => {
+    const html = renderMembersFragment(memberFixture());
+    expect(html).not.toContain('class="m-llm"');
+    expect(html).toContain('class="mt-phase"');
+    expect(html).toContain('class="mt-trend"');
+    expect(html).toMatch(/推进|集中|整理|完善|梳理|规划|多线/); // phaseLabel
+    expect(html).toMatch(/加速|稳步|放缓|收尾|未活跃|才开始/); // trendLabel
+  });
+
+  it('escapes HTML in llmWeekly lines', () => {
+    const html = renderMembersFragment(memberFixture({ llmWeekly: '<script>x</script>\n<b>y</b>' } as never));
+    expect(html).not.toContain('<script>x</script>');
+    expect(html).not.toContain('<b>y</b>');
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).toContain('&lt;b&gt;');
+  });
+});
+
+describe('L-10 LLM narrative — project row (T3)', () => {
+  function projFixture(overrides: Partial<ProjectSnapshotFixture> = {}): OverviewSnapshotFixture {
+    return makeSnapshot({
+      computedAt: '2026-05-17T12:00:00.000Z',
+      projects: [{
+        name: 'mr', state: 'active' as const, contributors: [
+          { email: 'a@x.com', sharePct: 1 },
+        ], busFactorWarning: false, trend7d: [1,1,2,2,3,3,4], phaseGuess: 'implement' as const,
+        healthScore: 7, etaDays: 5, etaConfidence: 'low' as const,
+        activeTodayPct: 1, activeTodayCount: 1,
+        lastTouch: { filePath: '/work/proj/api/overview.ts', by: 'hrdai@example.com', ts: '2026-05-17T10:00:00.000Z' },
+        ...overrides,
+      } as never],
+    });
+  }
+
+  it('renders both LLM lines when llmWeekly is set; "最近:" line gone', () => {
+    const html = renderProjectsFragment(projFixture({ llmWeekly: '团队在做 overview tab\n进展正常 / 待 e2e 通过' } as never));
+    expect(html).toContain('团队在做 overview tab');
+    expect(html).toContain('进展正常 / 待 e2e 通过');
+    expect(html).not.toContain('最近:');
+    expect(html).not.toContain('api/overview.ts');
+    // Name + N/M 人在做 + ETA still present.
+    expect(html).toContain('mr');
+    expect(html).toContain('1/1 人在做');
+  });
+
+  it('falls back to phase/trend subtitle + "最近:" line when llmWeekly is absent', () => {
+    const html = renderProjectsFragment(projFixture());
+    expect(html).toContain('最近:');
+    expect(html).toContain('api/overview.ts');
+    // Phase + trend narrative still in subtitle.
+    expect(html).toMatch(/推进新功能/);
+  });
+});
+
+describe('L-10 LLM narrative — highlight digest (T1)', () => {
+  it('renders llmDigest when present and drops raw detail', () => {
+    const html = renderHighlightsFragment(makeSnapshot({
+      computedAt: '2026-05-17T12:00:00.000Z',
+      highlights: [{
+        ts: '2026-05-17T10:00:00.000Z', type: 'push',
+        by: 'liboze', project: 'Matrix-Riven',
+        detail: 'git push origin foo 2>&1 | tail -4',
+        llmDigest: 'Liboze 推送 foo 分支',
+      }],
+    }));
+    expect(html).toContain('Liboze 推送 foo 分支');
+    expect(html).not.toContain('git push origin foo');
+    expect(html).not.toContain('tail -4');
+  });
+
+  it('falls back to raw escaped detail when llmDigest is absent', () => {
+    const html = renderHighlightsFragment(makeSnapshot({
+      computedAt: '2026-05-17T12:00:00.000Z',
+      highlights: [{
+        ts: '2026-05-17T10:00:00.000Z', type: 'commit',
+        by: 'liboze', project: 'Matrix-Riven',
+        detail: 'fix: x',
+      }],
+    }));
+    expect(html).toContain('fix: x');
+  });
+
+  it('escapes llmDigest — LLM output is external content', () => {
+    const html = renderHighlightsFragment(makeSnapshot({
+      computedAt: '2026-05-17T12:00:00.000Z',
+      highlights: [{
+        ts: '2026-05-17T10:00:00.000Z', type: 'commit',
+        by: 'liboze', project: 'Matrix-Riven', detail: 'd',
+        llmDigest: '<script>boom</script>',
+      }],
+    }));
+    expect(html).not.toContain('<script>boom');
+    expect(html).toContain('&lt;script&gt;');
+  });
+});
+
+// These shims keep the test file standalone — the project doesn't export
+// per-shape Fixture types and the test file already operates with `as never`
+// casts when shaping member/project/snapshot objects. Aliasing for clarity.
+type MemberSnapshotFixture = Record<string, unknown>;
+type ProjectSnapshotFixture = Record<string, unknown>;
+type OverviewSnapshotFixture = OverviewSnapshot;
