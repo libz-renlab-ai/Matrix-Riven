@@ -87,6 +87,14 @@ export function parseEnvelopeBuffer(buf: Buffer): ParsedSession | null {
     rivenVersion: str(envBlock.riven_version, 'unknown'),
     consentedAt: envBlock.consented_at == null ? null : String(envBlock.consented_at),
   };
+  // Plugin-future fast path: when the uploader has already resolved
+  // `git config --get remote.origin.url` and emitted it in the envelope,
+  // prefer that authoritative value over scanning the transcript text.
+  const rawGitRemote = envBlock.git_remote;
+  if (typeof rawGitRemote === 'string' && rawGitRemote.length > 0) {
+    const norm = findGithubRemote(rawGitRemote) ?? null;
+    if (norm) envelope.gitRemote = norm;
+  }
 
   const messages: ParsedMessage[] = [];
   let firstTs: Date | undefined;
@@ -122,7 +130,7 @@ export function parseEnvelopeBuffer(buf: Buffer): ParsedSession | null {
   const startTs = firstTs ?? new Date(envelope.capturedAt);
   const endTs = lastTs ?? startTs;
 
-  return {
+  const parsed: ParsedSession = {
     envelope,
     l1RedactionCount: typeof obj.l1_redaction_count === 'number' ? obj.l1_redaction_count : 0,
     messages,
@@ -132,6 +140,14 @@ export function parseEnvelopeBuffer(buf: Buffer): ParsedSession | null {
     model: firstModel,
     tokens,
   };
+  // When envelope didn't carry an authoritative git_remote field, do the
+  // one-time transcript scan now so downstream consumers can rely on
+  // `envelope.gitRemote` without re-walking the message list.
+  if (!envelope.gitRemote) {
+    const found = extractRemoteFromSession(parsed);
+    if (found) envelope.gitRemote = found;
+  }
+  return parsed;
 }
 
 function parseMessageRecord(rec: Record<string, unknown>): ParsedMessage | null {
@@ -506,7 +522,7 @@ export function parseRawJsonlBuffer(
   const startTs = firstTs;
   const endTs = lastTs ?? firstTs;
 
-  return {
+  const parsed: ParsedSession = {
     envelope,
     l1RedactionCount: 0,
     messages,
@@ -516,6 +532,209 @@ export function parseRawJsonlBuffer(
     model: firstModel,
     tokens,
   };
+  // Raw `.jsonl` transcripts (the local Claude Code on-disk format) never
+  // carry an envelope.git_remote — always scan the messages for github
+  // URLs so the leadership dashboard can still resolve `owner/repo`.
+  const found = extractRemoteFromSession(parsed);
+  if (found) envelope.gitRemote = found;
+  return parsed;
+}
+
+// ---------------------------------------------------------------------------
+// GitHub remote resolution — 2026-05-17 project-identity rebuild
+// ---------------------------------------------------------------------------
+
+/**
+ * Match a GitHub remote URL inside `s` and return the `owner/repo` form.
+ * Recognises the three shapes we see in cc-session transcripts:
+ *
+ *   - SSH:   `git@github.com:owner/repo[.git]`
+ *   - HTTPS: `https://github.com/owner/repo[.git][/...]`
+ *   - bare:  `github.com/owner/repo` (rare; appears in docs/README quotes)
+ *
+ * The first match wins; trailing `/` and `.git` are stripped before return so
+ * the canonical form is always identifier-shaped. Returns null when the input
+ * is empty, nullable, or contains no recognisable github URL.
+ *
+ * Exported because the envelope-parser uses it to normalise an authoritative
+ * `envelope.git_remote` plugin field, and the tests pin its behaviour.
+ */
+export function findGithubRemote(s: string | undefined | null): string | null {
+  if (!s) return null;
+  // SSH form: git@github.com:owner/repo[.git]
+  const ssh = s.match(/git@github\.com:([\w.-]+\/[\w.-]+?)(?:\.git)?(?=$|[\s,'"])/);
+  if (ssh && ssh[1]) return normaliseOwnerRepo(ssh[1]);
+  // HTTPS form: https://github.com/owner/repo[.git][/...]
+  const https = s.match(
+    /https?:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?=$|[/\s,?#'"])/,
+  );
+  if (https && https[1]) return normaliseOwnerRepo(https[1]);
+  return null;
+}
+
+function normaliseOwnerRepo(s: string): string {
+  // Strip any trailing slash, `.git`, or stray trailing periods picked up
+  // from sentence punctuation (e.g. "see github.com/owner/repo." in prose).
+  return s
+    .replace(/\/$/, '')
+    .replace(/\.git$/, '')
+    .replace(/\.+$/, '');
+}
+
+/**
+ * Common placeholder `owner/repo` slugs that appear in documentation or
+ * example URLs. We never want these surfacing as a real project identity,
+ * since they'd collapse unrelated sessions that happened to include the
+ * example URL in a prompt or transcript.
+ */
+const PLACEHOLDER_REMOTES = new Set([
+  'owner/repo',
+  'foo/bar',
+  'user/repo',
+  'org/repo',
+  'username/repo',
+  'example/example',
+  'your-org/your-repo',
+]);
+
+/**
+ * Scan a parsed session for the first github.com URL inside any Bash command,
+ * tool-result text, or other string-valued tool-input field. Used at parse
+ * time so every ParsedSession gets `envelope.gitRemote` populated once and
+ * downstream consumers (aggregator, propagation pass) skip re-scanning.
+ *
+ * Returns null when nothing is found; callers should then rely on cwd-prefix
+ * propagation across sibling sessions (`propagateRemotes`) or the
+ * `deriveProjectName` cwd-walk fallback.
+ *
+ * Placeholder slugs (`owner/repo`, `foo/bar`, etc.) are filtered out — those
+ * almost always come from documentation/example URLs and would otherwise
+ * collapse unrelated sessions that quoted the same example.
+ */
+export function extractRemoteFromSession(session: ParsedSession): string | null {
+  for (const m of session.messages) {
+    for (const tu of m.toolUses) {
+      if (tu.name === 'Bash' && typeof tu.input.command === 'string') {
+        const found = findGithubRemote(tu.input.command);
+        if (found && !PLACEHOLDER_REMOTES.has(found.toLowerCase())) return found;
+      }
+      // Also peek into other string-valued tool inputs (file paths in
+      // Write/Edit, URLs in WebFetch, etc.) for occasional embedded
+      // github.com references.
+      for (const v of Object.values(tu.input)) {
+        if (typeof v === 'string') {
+          const found = findGithubRemote(v);
+          if (found && !PLACEHOLDER_REMOTES.has(found.toLowerCase())) return found;
+        }
+      }
+    }
+    for (const tr of m.toolResults) {
+      const found = findGithubRemote(tr.text);
+      if (found && !PLACEHOLDER_REMOTES.has(found.toLowerCase())) return found;
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve a session's project identity. Priority:
+ *
+ *   1. `envelope.gitRemote` — `owner/repo`, authoritative when set
+ *   2. `envelope.projectName` — Phase-1 upstream uploader field, when
+ *      present and not the literal "unknown" sentinel
+ *   3. `deriveProjectName(cwd)` — last-resort heuristic walk
+ *
+ * Returning a string lets `aggregator.groupBy` use the resolved identity as
+ * the grouping key, which automatically collapses multi-cwd sessions of the
+ * same repo into one project entry.
+ */
+export function resolveProjectIdentity(envelope: ParsedEnvelope): string {
+  if (envelope.gitRemote) return envelope.gitRemote;
+  if (
+    envelope.projectName &&
+    envelope.projectName.trim() &&
+    envelope.projectName !== 'unknown'
+  ) {
+    return envelope.projectName;
+  }
+  return deriveProjectName(envelope.cwd ?? '');
+}
+
+/**
+ * Fill in `envelope.gitRemote` for sessions whose cwd shares a prefix with
+ * at least one other session that did discover a github URL. Without this
+ * step, only sessions that actually ran `git remote -v` / `git clone …`
+ * would carry a remote; everything else in the same repo would still group
+ * by the cwd-derived name and collide with the remote-derived sibling.
+ *
+ * Algorithm:
+ *   1. For each session that already has a remote, strip the user-home
+ *      prefix from its cwd so `/home/u/proj-a/src` becomes `proj-a/src`.
+ *      Index every prefix from the full path down to the FIRST segment
+ *      past home (`proj-a`). This bounds propagation to the repo-root
+ *      level — a sibling cwd `/home/u/proj-b/lib` will not collide because
+ *      `proj-b` is a different first-post-home segment.
+ *   2. For each remote-less session, normalise its cwd the same way and
+ *      pick the longest matching indexed prefix. Longest-match wins so a
+ *      nested repo doesn't inherit its grandparent's remote.
+ *
+ * The home-prefix-strip uses the same `HOME_PREFIX_PATTERNS` that
+ * `deriveProjectName` uses, so cross-platform behaviour stays consistent.
+ * Sessions whose cwd is too short to have a repo-root segment (e.g. just
+ * `/home/u`) are skipped on the source side — we have no meaningful key
+ * to anchor the propagation.
+ *
+ * Mutates envelopes in place. Idempotent. Exported so the data-trust tests
+ * can pin behaviour directly.
+ */
+export function propagateRemotes(sessions: ParsedSession[]): void {
+  const cwdToRemote = new Map<string, string>();
+  for (const s of sessions) {
+    if (!s.envelope.gitRemote || !s.envelope.cwd) continue;
+    const stripped = stripHomePrefix(s.envelope.cwd);
+    const segments = stripped.split('/').filter(Boolean);
+    if (segments.length === 0) continue;
+    // Index from the full path down to the first segment past home (the
+    // repo-root candidate). We never index just the home-prefix portion
+    // itself, so unrelated repos under the same `/home/u/` won't collide.
+    for (let i = segments.length; i >= 1; i--) {
+      const prefix = '/' + segments.slice(0, i).join('/');
+      if (!cwdToRemote.has(prefix)) cwdToRemote.set(prefix, s.envelope.gitRemote);
+    }
+  }
+  for (const s of sessions) {
+    if (s.envelope.gitRemote || !s.envelope.cwd) continue;
+    const cwd = '/' + stripHomePrefix(s.envelope.cwd).split('/').filter(Boolean).join('/');
+    let bestPrefix: string | null = null;
+    let bestRemote: string | null = null;
+    for (const [prefix, remote] of cwdToRemote) {
+      if (cwd === prefix || cwd.startsWith(prefix + '/')) {
+        if (!bestPrefix || prefix.length > bestPrefix.length) {
+          bestPrefix = prefix;
+          bestRemote = remote;
+        }
+      }
+    }
+    if (bestRemote) s.envelope.gitRemote = bestRemote;
+  }
+}
+
+/**
+ * Internal helper — strip the user-home prefix (`/home/<u>/`, `C:/Users/<u>/`,
+ * etc.) from a cwd so propagation indices anchor to repo-root segments rather
+ * than shared ancestor directories. Returns the input unchanged (with `\` →
+ * `/`) when no home pattern matches.
+ */
+function stripHomePrefix(cwd: string): string {
+  let normalised = cwd.replace(/\\/g, '/');
+  for (const rx of HOME_PREFIX_PATTERNS) {
+    const m = normalised.match(rx);
+    if (m) {
+      normalised = normalised.slice(m[0].length);
+      break;
+    }
+  }
+  return normalised;
 }
 
 export function scanAllSessions(collectorDir: string, opts: ScanOptions = {}): ParsedSession[] {
@@ -550,6 +769,12 @@ export function scanAllSessions(collectorDir: string, opts: ScanOptions = {}): P
       scanLeafDir(datePath, userDir, dateDir, out);
     }
   }
+  // 2026-05-17 — fill in `envelope.gitRemote` for sessions that didn't run
+  // any git commands themselves but share a cwd tree with a session that
+  // did. Without this step, sibling sessions of the same repo would still
+  // group separately under their cwd-derived names and inflate the project
+  // list.
+  propagateRemotes(out);
   return out;
 }
 

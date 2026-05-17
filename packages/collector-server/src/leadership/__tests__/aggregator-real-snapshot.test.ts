@@ -154,6 +154,22 @@ describe('real snapshot data trust (data-layer rebuild)', () => {
     }
   });
 
+  it.skipIf(!SNAPSHOT_AVAILABLE)('at least some projects resolve via gitRemote (owner/repo form)', () => {
+    __resetParsedCacheForTests();
+    const sessions = scanAllSessions(REAL_DIR);
+    const snap = buildOverviewSnapshot({
+      sessions,
+      range: RANGE,
+      now: NOW,
+      collectorDir: REAL_DIR,
+    });
+    const remoteCount = snap.projects.filter((p) => p.name.includes('/')).length;
+    // Soft floor — even if not every repo is git-touched in transcripts, the
+    // dogfood Matrix-Riven sessions definitely run `git remote -v` / commits,
+    // so at least one project should now group under `owner/repo`.
+    expect(remoteCount).toBeGreaterThan(0);
+  });
+
   it.skipIf(!SNAPSHOT_AVAILABLE)('highlights array populated when milestones exist', () => {
     __resetParsedCacheForTests();
     const sessions = scanAllSessions(REAL_DIR);

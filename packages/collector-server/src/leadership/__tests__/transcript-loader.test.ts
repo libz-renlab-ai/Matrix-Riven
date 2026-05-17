@@ -8,7 +8,9 @@ import {
   deriveProjectName,
   scanAllSessions,
   isNoiseProjectName,
+  propagateRemotes,
 } from '../transcript-loader.js';
+import type { ParsedEnvelope, ParsedSession } from '../types.js';
 
 function buildEnvelope(transcriptLines: string[]): Buffer {
   const jsonl = transcriptLines.join('\n');
@@ -283,5 +285,75 @@ describe('parsed-session cache (P-D1 follow-up)', () => {
     expect(r3[0]).toBe(r1[0]);
     // Confirm we actually exercised the cache, not an empty result set.
     expect(statSync(join(root, 'liu@example.com', '2026-05-13')).isDirectory()).toBe(true);
+  });
+});
+
+/**
+ * 2026-05-17 — `propagateRemotes` is the bridge that lets non-git sessions in
+ * the same repo inherit a sibling session's discovered `owner/repo` remote.
+ * Without it, sessions that never ran a git command would still group by their
+ * cwd-derived name and fragment the project list.
+ */
+describe('propagateRemotes', () => {
+  function makeSessionFixture(envelope: Partial<ParsedEnvelope>): ParsedSession {
+    return {
+      envelope: {
+        id: 'id',
+        userId: 'u',
+        machineId: 'm',
+        sessionId: 's',
+        cwd: '',
+        projectName: '',
+        capturedAt: '2026-05-17T00:00:00Z',
+        rivenVersion: '0',
+        consentedAt: null,
+        ...envelope,
+      },
+      l1RedactionCount: 0,
+      messages: [],
+      durationMs: 0,
+      startTs: new Date('2026-05-17T00:00:00Z'),
+      endTs: new Date('2026-05-17T00:00:00Z'),
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+    };
+  }
+
+  it('fills in remote across same-tree sessions', () => {
+    const a = makeSessionFixture({ cwd: '/home/u/proj-a/src', gitRemote: 'org/proj-a' });
+    const b = makeSessionFixture({ cwd: '/home/u/proj-a/docs' });
+    const c = makeSessionFixture({ cwd: '/home/u/proj-b/lib' });
+    propagateRemotes([a, b, c]);
+    expect(b.envelope.gitRemote).toBe('org/proj-a');
+    expect(c.envelope.gitRemote).toBeUndefined();
+  });
+
+  it('longest-matching prefix wins so a nested repo does not adopt an ancestor remote', () => {
+    const parent = makeSessionFixture({ cwd: '/home/u/parent/x', gitRemote: 'org/parent' });
+    const nested = makeSessionFixture({
+      cwd: '/home/u/parent/nested/y',
+      gitRemote: 'org/nested',
+    });
+    const childOfNested = makeSessionFixture({ cwd: '/home/u/parent/nested/z' });
+    propagateRemotes([parent, nested, childOfNested]);
+    expect(childOfNested.envelope.gitRemote).toBe('org/nested');
+  });
+
+  it('normalises Windows separators in cwd before matching', () => {
+    const a = makeSessionFixture({
+      cwd: 'D:\\projects\\matrix\\src',
+      gitRemote: 'org/matrix',
+    });
+    const b = makeSessionFixture({ cwd: 'D:\\projects\\matrix\\docs' });
+    propagateRemotes([a, b]);
+    expect(b.envelope.gitRemote).toBe('org/matrix');
+  });
+
+  it('is idempotent — re-running does not overwrite or mutate further', () => {
+    const a = makeSessionFixture({ cwd: '/home/u/r/src', gitRemote: 'o/r' });
+    const b = makeSessionFixture({ cwd: '/home/u/r/docs' });
+    propagateRemotes([a, b]);
+    expect(b.envelope.gitRemote).toBe('o/r');
+    propagateRemotes([a, b]);
+    expect(b.envelope.gitRemote).toBe('o/r');
   });
 });

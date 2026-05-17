@@ -1,7 +1,12 @@
 // packages/collector-server/src/leadership/aggregator.ts
 // Composes all 32 signal computers into OverviewSnapshot / MemberDetail / ProjectDetail.
 
-import { scanAllSessions, isNoiseProjectName } from './transcript-loader.js';
+import {
+  scanAllSessions,
+  isNoiseProjectName,
+  resolveProjectIdentity,
+  propagateRemotes,
+} from './transcript-loader.js';
 import type {
   ParsedSession,
   OverviewSnapshot,
@@ -59,6 +64,12 @@ export interface BuildOverviewInput {
 
 export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapshot {
   const sessions = input.sessions ?? loadSessionsForRange(input.collectorDir, input.range);
+  // When sessions were injected (test seam) the disk scan's propagation
+  // pass never ran. Re-run it idempotently so test fixtures that set
+  // `envelope.gitRemote` on a subset still flow to the cwd-sibling
+  // sessions. Disk-loaded sessions had this done in `scanAllSessions`;
+  // running it again is a no-op there.
+  if (input.sessions) propagateRemotes(sessions);
   const inRange = sessions.filter((s) => s.startTs >= input.range.start && s.startTs <= input.range.end);
 
   const teamMedianTokens = median(inRange.map((s) => s.tokens.input + s.tokens.output));
@@ -82,7 +93,11 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
   // Projects — filter noise + low-volume scratch BEFORE finalizing list (P-D2).
   // We compute raw snapshots over all groups, then apply the noise filter and
   // the < 3-session cutoff with an optional env allow-list escape hatch.
-  const byProject = groupBy(inRange, (s) => s.envelope.projectName);
+  // Group by `resolveProjectIdentity` so any session that learned its github
+  // remote at parse time (or via cwd-prefix propagation) collapses with its
+  // siblings under one `owner/repo` key instead of fragmenting across the
+  // multiple cwd-derived names.
+  const byProject = groupBy(inRange, (s) => resolveProjectIdentity(s.envelope));
   const projectNames = [...byProject.keys()].sort();
   const allowList = parseProjectAllowList(process.env.LEADERSHIP_PROJECT_ALLOW);
   const projects: ProjectSnapshot[] = projectNames
@@ -669,10 +684,13 @@ function buildMemberSnapshotInner(
   const risky = extractRiskyActions(memberSessions);
   if (risky.length > 0) warnings.push(sanitizeWarningText(`危险动作 ${risky.length} 次`));
 
-  // Top project today
+  // Top project today — use the resolved project identity (owner/repo when
+  // a github remote is known, else cwd-derived) so the member's topProject
+  // matches the project list rendered on the Overview.
   const projectCounts = new Map<string, number>();
   for (const s of todaySessions) {
-    projectCounts.set(s.envelope.projectName, (projectCounts.get(s.envelope.projectName) ?? 0) + 1);
+    const key = resolveProjectIdentity(s.envelope);
+    projectCounts.set(key, (projectCounts.get(key) ?? 0) + 1);
   }
   let topProject: string | undefined;
   let topMax = 0;
@@ -796,6 +814,7 @@ export function buildMemberDetail(input: {
   mainProjects?: string[];
 }): (MemberSnapshot & { detail: MemberDetail }) | null {
   const all = input.sessions ?? loadSessionsForRange(input.collectorDir, input.range);
+  if (input.sessions) propagateRemotes(all);
   const inRange = all.filter((s) => s.startTs >= input.range.start && s.startTs <= input.range.end);
   const memberSessions = inRange.filter((s) => s.envelope.userId === input.email);
   if (memberSessions.length === 0) return null;
@@ -862,7 +881,7 @@ export function buildMemberDetail(input: {
       return {
         sessionId: s.envelope.sessionId,
         capturedAt: s.envelope.capturedAt,
-        projectName: s.envelope.projectName,
+        projectName: resolveProjectIdentity(s.envelope),
         totalTokens: s.tokens.input + s.tokens.output,
         firstPromptPreview: text.length > 200 ? text.slice(0, 200) : text,
         firstPromptFull: text,
@@ -918,8 +937,11 @@ export function buildProjectDetail(input: {
   sessions?: ParsedSession[];
 }): (ProjectSnapshot & { detail: ProjectDetail }) | null {
   const all = input.sessions ?? loadSessionsForRange(input.collectorDir, input.range);
+  if (input.sessions) propagateRemotes(all);
   const inRange = all.filter((s) => s.startTs >= input.range.start && s.startTs <= input.range.end);
-  const projectSessions = inRange.filter((s) => s.envelope.projectName === input.projectName);
+  const projectSessions = inRange.filter(
+    (s) => resolveProjectIdentity(s.envelope) === input.projectName,
+  );
   if (projectSessions.length === 0) return null;
 
   const base = buildProjectSnapshotInner(input.projectName, projectSessions, input.now);

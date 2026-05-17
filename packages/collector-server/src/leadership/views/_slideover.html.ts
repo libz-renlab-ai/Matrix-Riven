@@ -180,13 +180,41 @@ function renderMemberProjects(detail: MemberDetail): string {
     .map(
       ([name, n]) => `
     <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--surface-2);border-radius:var(--r-md);">
-      <div class="proj-icon" style="width:24px;height:24px;font-size:10px;">${escapeHtml(name.slice(0, 2).toUpperCase())}</div>
-      <div style="flex:1;font-size:13.5px;color:var(--ink-1);font-weight:500;">${escapeHtml(name)}</div>
+      <div class="proj-icon" style="width:24px;height:24px;font-size:10px;">${escapeHtml(projectInitials(name))}</div>
+      <div style="flex:1;font-size:13.5px;color:var(--ink-1);font-weight:500;">${renderProjectTitleHtml(name)}</div>
       <div style="font-size:12px;color:var(--ink-3);">${n} 会话</div>
     </div>`,
     )
     .join('');
   return `<div style="display:flex;flex-direction:column;gap:8px;">${items}</div>`;
+}
+
+/**
+ * 2-character initials for a project icon. When the name is in the
+ * `owner/repo` form produced by the github-remote project identity, the
+ * initials come from the **repo** part (the meaningful identifier) rather
+ * than the owner. Cwd-derived names use the first two characters as-is.
+ */
+function projectInitials(name: string): string {
+  const slash = name.indexOf('/');
+  if (slash >= 0) {
+    const repo = name.slice(slash + 1);
+    return repo.slice(0, 2).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+/**
+ * Render an `owner/repo` name with the `owner/` prefix dimmed. Plain names
+ * pass through unchanged. Both branches escape so output is safe to drop
+ * into innerHTML directly.
+ */
+function renderProjectTitleHtml(name: string): string {
+  const slashIdx = name.indexOf('/');
+  if (slashIdx < 0) return escapeHtml(name);
+  const owner = name.slice(0, slashIdx);
+  const repo = name.slice(slashIdx + 1);
+  return `<span style="color:var(--ink-3);font-weight:400;">${escapeHtml(owner)}/</span>${escapeHtml(repo)}`;
 }
 
 /**

@@ -344,7 +344,7 @@ function p2NarrativeRow(p: ProjectSnapshot, now: number): string {
     <div style="min-width:0;">
       <div class="proj-name" style="display:flex;align-items:center;gap:10px;">
         <span class="proj-health-dot" title="${escapeHtml(healthLabel(p.healthScore))}" style="background:${dotColor};width:8px;height:8px;border-radius:50%;flex-shrink:0;"></span>
-        <span style="font-size:15px;font-weight:600;color:var(--ink-1);">${escapeHtml(p.name)}</span>
+        <span style="font-size:15px;font-weight:600;color:var(--ink-1);">${renderProjectTitleHtml(p.name)}</span>
         <span style="font-size:12px;color:var(--ink-3);">${escapeHtml(phaseText)} · ${escapeHtml(trendText)}</span>
       </div>
       <div class="proj-latest" style="font-size:12.5px;color:var(--ink-3);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${latestLine}</div>
@@ -356,6 +356,20 @@ function p2NarrativeRow(p: ProjectSnapshot, now: number): string {
     </div>
     <div class="proj-arrow" style="align-self:center;">›</div>
   </div>`;
+}
+
+/**
+ * Render a project name as HTML, dimming the `owner/` prefix when the name is
+ * in the `owner/repo` form produced by the github-remote project identity.
+ * Plain (cwd-derived) names render unchanged. Both branches escape their
+ * content so the caller can drop the result straight into innerHTML.
+ */
+function renderProjectTitleHtml(name: string): string {
+  const slashIdx = name.indexOf('/');
+  if (slashIdx < 0) return escapeHtml(name);
+  const owner = name.slice(0, slashIdx);
+  const repo = name.slice(slashIdx + 1);
+  return `<span style="color:var(--ink-3);font-weight:400;">${escapeHtml(owner)}/</span>${escapeHtml(repo)}`;
 }
 
 /** Local-part of email; falls through to the original string if no '@'. */

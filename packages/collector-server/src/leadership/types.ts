@@ -31,6 +31,14 @@ export interface ParsedEnvelope {
   capturedAt: string;
   rivenVersion: string;
   consentedAt: string | null;
+  /**
+   * GitHub remote, normalized as `owner/repo`. Populated either by future
+   * plugin (envelope.git_remote field) or by scanning the transcript for
+   * github.com URLs at parse time. Propagated across same-tree sessions in
+   * `scanAllSessions` so non-git sessions inherit a sibling's remote. Falls
+   * back to undefined when no remote is detectable.
+   */
+  gitRemote?: string;
 }
 
 export type ParsedMessageRole = 'user' | 'assistant' | 'tool';
