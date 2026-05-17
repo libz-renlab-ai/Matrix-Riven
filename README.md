@@ -118,19 +118,58 @@ node packages/collector-server/dist/bin-prod-server.cjs
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `PORT` | `8080` | 监听端口 |
-| `HOST` | `0.0.0.0` | 监听地址 |
+| `PORT` | `8933` | 监听端口 |
+| `HOST` | `127.0.0.1` | 监听地址。默认 loopback，**避免领导仪表盘在没有 token 的情况下被 LAN 任意访问**。明确放 LAN 必须设 `HOST=0.0.0.0` 并配 `RIVEN_AUTH_TOKEN`。 |
 | `RIVEN_COLLECTOR_DIR` | `<HOME>/riven-collector` | 数据落盘目录 |
-| `RIVEN_AUTH_TOKEN` | （不设） | 设置后 `POST /v1/cc-sessions` 需要 `Authorization: Bearer <token>` |
+| `RIVEN_AUTH_TOKEN` | （不设） | 设置后 **`POST /v1/cc-sessions` + 所有 `/api/*` 与 `/overview` 等领导路由**均要求 `Authorization: Bearer <token>` |
+| `RIVEN_MAIN_PROJECTS` | （不设） | 逗号分隔的主项目名列表。slacking 信号检测器据此判定"在非主项目摸鱼"。空 = 检测器静默 |
+| `LLM_ENABLED` | `false` | 打开后 `claude -p` 后台 worker 每 5 分钟跑一次，把 T1–T5 中文叙事写进本地 cache，看板渲染时只读 cache（永不阻塞） |
+| `LLM_DAILY_BUDGET_USD` | `5` | 日预算软上限，到 95% 自动停下剩余 tier |
+| `LLM_TIER1_MODEL` | `claude-haiku-4-5-20251001` | T1–T4 用的模型 |
+| `LLM_TIER5_MODEL` | `claude-sonnet-4-6` | T5 日报用的模型 |
+| `LLM_CACHE_DIR` | `<HOME>/.matrix-riven/llm-cache` | LLM cache JSONL 目录，50MB 软上限 + 最老条目淘汰 |
+| `LLM_WORKER_INTERVAL_MS` | `300000` | worker 触发间隔（5 分钟） |
+| `LLM_BRIEF_INTERVAL_MS` | `3600000` | T5 简报间隔（1 小时） |
 | `HTTPS_KEY_PATH` | （不设） | TLS 私钥路径；与 `HTTPS_CERT_PATH` 同时设置才启用 TLS |
 | `HTTPS_CERT_PATH` | （不设） | TLS 证书路径 |
 
-### API 端点
+### API + HTML 端点
 
-- `POST /v1/cc-sessions` — 接收 transcript（可选 token 认证）
+**Public（不需 token）：**
+- `GET /landing` — 公开 landing page，给冷点击者看
+- `GET /sources` — 数据来源 + 17 个信号检测器的透明页
+- `GET /overview?demo=1` — Demo 看板，跑在烤进去的 fixture 上（合成数据，无 PII）
+- `GET /api/overview?demo=1` — 同上的 JSON 形式
+
+**Receiver（POST，可选 token）：**
+- `POST /v1/cc-sessions` — 接收 transcript
 - `POST /v1/cc-status` — 接收实时状态快照
-- `GET /` — 网页看板
-- `GET /api/*` — 查询接口
+
+**Leadership（GET，配 token 后强制鉴权）：**
+- `GET /` 或 `GET /overview` — 实时领导仪表盘（Overview tab）
+- `GET /people` / `GET /projects` — 全量成员/项目页
+- `GET /api/overview[?range=today|24h|7d|30d]` — Overview 快照 JSON
+- `GET /api/members/<localpart>` — 单个成员详情（含 slideover HTML 片段）
+- `GET /api/projects/<name>` — 单个项目详情
+- `GET /api/llm/status` — LLM 工作状态 ops 端点：`{enabled, cache: {entries, bytes, todayCostUsd, byTier}}`
+
+### 端到端起一个完整 demo
+
+```bash
+# 一行起一个本地跑得起来的实时仪表盘
+PORT=8933 HOST=127.0.0.1 \
+  RIVEN_COLLECTOR_DIR=/path/to/your/riven-collector \
+  LLM_ENABLED=true \
+  RIVEN_AUTH_TOKEN=$(openssl rand -hex 32) \
+  RIVEN_MAIN_PROJECTS=your-repo,owner/repo \
+  node packages/collector-server/dist/bin-prod-server.cjs
+
+# 访问：
+#   http://127.0.0.1:8933/landing       — public marketing
+#   http://127.0.0.1:8933/overview?demo=1 — demo dashboard, no auth
+#   http://127.0.0.1:8933/overview        — real dashboard (need bearer)
+#   http://127.0.0.1:8933/api/llm/status   — ops health
+```
 
 ---
 
