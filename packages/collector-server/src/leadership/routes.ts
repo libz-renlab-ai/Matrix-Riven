@@ -20,6 +20,7 @@ import { readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { TtlCache } from './cache.js';
 import type { DateRange } from './types.js';
+import type { LlmCache } from './llm/cache.js';
 import {
   buildOverviewSnapshot,
   buildMemberDetail,
@@ -54,6 +55,12 @@ export interface LeadershipRouteDeps {
   now?: () => Date;
   /** Project names treated as "main" for slacking detection. */
   mainProjects?: string[];
+  /**
+   * L-11: Optional LLM narrative cache. When set, forwarded to the aggregator's
+   * cache-only read path so snapshots carry T1–T5 `llm*` fields. Absent (default
+   * — `LLM_ENABLED` off) preserves byte-identical pre-LLM behaviour.
+   */
+  llmCache?: LlmCache;
 }
 
 /**
@@ -98,6 +105,7 @@ export function handleLeadershipRequest(
           range,
           now: nowDate,
           mainProjects: deps.mainProjects,
+          llmCache: deps.llmCache,
         });
         // /api/overview is consumed by the Overview-tab live polling loop,
         // which swaps these fragments in via outerHTML. Apply the same
@@ -335,6 +343,7 @@ function renderOverviewTab(
       range,
       now: nowDate,
       mainProjects: deps.mainProjects,
+      llmCache: deps.llmCache,
     });
     const html = renderOverview(snap);
     deps.cache.set(cacheKey, html);
@@ -375,6 +384,7 @@ function renderPeopleTab(
       range,
       now: now(),
       mainProjects: deps.mainProjects,
+      llmCache: deps.llmCache,
     });
     const tightHero = `<header id="hero" class="hero fade-in"><div><h1 class="serif">团队 <em>${snap.members.length} 人</em></h1><div class="sub">完整成员视图 · 数据每 30 秒刷新</div></div></header>`;
     const body = snap.members.length === 0
@@ -417,6 +427,7 @@ function renderProjectsTab(
       range,
       now: now(),
       mainProjects: deps.mainProjects,
+      llmCache: deps.llmCache,
     });
     const tightHero = `<header id="hero" class="hero fade-in"><div><h1 class="serif">项目 <em>${snap.projects.length} 个</em></h1><div class="sub">完整项目视图 · 数据每 30 秒刷新</div></div></header>`;
     const body = snap.projects.length === 0

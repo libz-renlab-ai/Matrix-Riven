@@ -47,10 +47,21 @@ import { buildOverview } from './overview/aggregator.js';
 // Task 15 — Leadership API + HTML routes (replaces legacy /api/overview in the
 // dispatch order so the new aggregator + cache wins over the old disk-scan path).
 import { TtlCache } from './leadership/cache.js';
-import { handleLeadershipRequest } from './leadership/routes.js';
+import { handleLeadershipRequest, type LeadershipRouteDeps } from './leadership/routes.js';
 // P-D1 — on-disk session index. Built async at startup when missing, appended
 // after each successful POST so scanAllSessions has a fast cold-start path.
 import { appendIndex, rebuildAllIndexes } from './leadership/index.js';
+// L-11 — LLM narrative layer boot wiring. `LLM_ENABLED=false` (default) keeps
+// the dashboard byte-identical to pre-L-8: no cache file is created, no worker
+// is started, and `llmCache` stays undefined so the aggregator skips its
+// enrichment pass.
+import { readLlmConfig } from './leadership/llm/config.js';
+import { LlmCache } from './leadership/llm/cache.js';
+import {
+  startWorker,
+  type WorkerHandle,
+  type WorkerInputs,
+} from './leadership/llm/worker.js';
 
 /** Cap raw POST body to bound memory + reject obvious DoS payloads. */
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -602,10 +613,28 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
   // Task 15 — shared TTL cache for all leadership endpoints (30s TTL keeps the
   // dashboard snappy under polling while bounding disk-scan frequency).
   const leadershipCache = new TtlCache<unknown>(30_000);
-  const leadershipDeps = {
+
+  // L-11 — LLM narrative layer. Read config from env; when disabled (default)
+  // `llmCache` stays undefined and no worker is started — the aggregator's
+  // `attachLlmFields` short-circuits on the missing cache so behaviour is
+  // byte-identical to pre-L-8. When enabled, we load the on-disk cache before
+  // the server binds (load is cheap — a single readFile) so the first
+  // /api/overview request can read whatever cached lines the previous process
+  // wrote. The worker itself starts AFTER `server.listen` resolves so its
+  // first tick can never race the listen callback.
+  const llmCfg = readLlmConfig(process.env);
+  let llmCache: LlmCache | undefined;
+  let llmWorker: WorkerHandle | undefined;
+  if (llmCfg.enabled) {
+    llmCache = new LlmCache(join(llmCfg.cacheDir, 'v1.jsonl'));
+    await llmCache.load();
+  }
+
+  const leadershipDeps: LeadershipRouteDeps = {
     collectorDir: outputDir,
     cache: leadershipCache,
     now,
+    llmCache,
   };
 
   const requestHandler = (req: IncomingMessage, res: ServerResponse): void => {
@@ -924,12 +953,44 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
           /* non-fatal — scanAllSessions degrades to readdirSync */
         });
       });
+
+      // L-11 — start the LLM narrative worker AFTER `listen` resolves so its
+      // first tick can never race the listen callback. `collectInputs` is
+      // currently a stub (returns null) — the worker handles this by short-
+      // circuiting the tick with `reason: 'no_inputs'` and never calling the
+      // LLM. L-12 will replace the stub with a real input collector that
+      // imports the aggregator's helpers. Wiring the worker now (rather than
+      // deferring everything to L-12) keeps the boot/teardown path honest:
+      // any startup/shutdown bug surfaces here, not in L-12.
+      if (llmCfg.enabled && llmCache !== undefined) {
+        const cache = llmCache;
+        llmWorker = startWorker({
+          cache,
+          cfg: llmCfg,
+          collectInputs: async (): Promise<WorkerInputs | null> => {
+            // Stub — L-12 will wire real T1..T5 input collection. Returning
+            // null makes the worker tick report `no_inputs` without any LLM
+            // call or summarizer entry, so the boot path is exercised but
+            // no narrative is generated yet.
+            return null;
+          },
+          log: (msg: string) => console.log(`[llm-worker] ${msg}`),
+        });
+      }
+
       resolve({
         url: `${opts.tls ? 'https' : 'http'}://${host}:${addr.port}`,
         port: addr.port,
         outputDir,
         close: () =>
           new Promise<void>((r, rej) => {
+            // L-11 — stop the LLM worker BEFORE closing the HTTP server so
+            // its interval timer can't fire one more tick while teardown is
+            // in flight. `stop()` is synchronous + idempotent.
+            if (llmWorker) {
+              llmWorker.stop();
+              llmWorker = undefined;
+            }
             server.close((err) => (err ? rej(err) : r()));
             // Force-destroy any in-flight connections so a slowloris client
             // can't keep the process alive past graceful close.
