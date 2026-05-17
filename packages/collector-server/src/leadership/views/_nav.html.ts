@@ -46,11 +46,42 @@ export function renderNav(active: ActiveTab, opts: RenderNavOptions = {}): strin
       <div class="nav-meta">
         <span class="live-dot"></span>
         <span>实时 · ${escapeHtml(rangeLabel)}</span>
+        <button id="theme-toggle" type="button" aria-label="切换主题" title="切换深色/浅色主题"
+          style="background:transparent;border:1px solid var(--hairline);color:var(--ink-3);padding:6px 10px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;line-height:1;">◐</button>
         <div class="avatar-me">YL</div>
       </div>
     </nav>
+    <script>${THEME_TOGGLE_SCRIPT}</script>
   `;
 }
+
+/**
+ * Tiny self-contained snippet: reads saved theme from localStorage, applies
+ * it to <html data-theme>, and toggles on the nav button click. No external
+ * deps; safe to inline alongside the CLIENT_REFRESH_SCRIPT.
+ */
+const THEME_TOGGLE_SCRIPT = `(function() {
+  try {
+    var KEY = 'mr-theme';
+    var saved = localStorage.getItem(KEY);
+    if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    function bind() {
+      var btn = document.getElementById('theme-toggle');
+      if (!btn) return;
+      btn.addEventListener('click', function() {
+        var cur = document.documentElement.getAttribute('data-theme');
+        var next = cur === 'dark' ? null : 'dark';
+        if (next) document.documentElement.setAttribute('data-theme', next);
+        else document.documentElement.removeAttribute('data-theme');
+        try { localStorage.setItem(KEY, next || 'light'); } catch (e) {}
+      });
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', bind);
+    } else { bind(); }
+  } catch (e) {}
+})();`;
+
 
 function escapeHtml(s: string): string {
   return String(s)

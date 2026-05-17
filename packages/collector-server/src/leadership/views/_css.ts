@@ -61,6 +61,37 @@ export const LEADERSHIP_CSS_V2 = `
     --spring: cubic-bezier(.34,1.56,.64,1);
   }
 
+  /* ===== DARK THEME ===== */
+  /* Activated by html[data-theme="dark"] (set by the nav toggle below).
+   * Same token names, deeper inks; everything else (KPIs, sparklines,
+   * tile backgrounds, hairlines) flips automatically through the
+   * existing var(--ink-*) / var(--surface) consumers. */
+  :root[data-theme="dark"] {
+    --bg:         #0E0F11;
+    --bg-elev:    #14161A;
+    --surface:    #1A1D22;
+    --surface-2:  #20242A;
+    --ink-1:      #F2F0EA;
+    --ink-2:      #C3C0B7;
+    --ink-3:      #8C887E;
+    --ink-4:      #66635A;
+    --ink-5:      #3A3933;
+    --hairline:   #2A2D33;
+    --accent:     #95B47E;
+    --accent-soft:#2A3520;
+    --accent-ink: #B5D499;
+    --warn:       #D9A56A;
+    --warn-soft:  #3D2F18;
+    --danger:     #C9756B;
+    --danger-soft:#3A1F1B;
+    --calm:       #98A7B7;
+    --calm-soft:  #1E262E;
+    --shadow-1:   0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
+    --shadow-2:   0 1px 3px rgba(0,0,0,.5), 0 12px 32px rgba(0,0,0,.4);
+    --shadow-3:   0 2px 6px rgba(0,0,0,.5), 0 24px 64px rgba(0,0,0,.5);
+    --shadow-lift:0 1px 2px rgba(0,0,0,.5), 0 8px 28px rgba(0,0,0,.5);
+  }
+
   /* ===== RESET ===== */
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
