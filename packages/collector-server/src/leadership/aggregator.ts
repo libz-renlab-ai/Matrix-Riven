@@ -47,6 +47,15 @@ import { computeExtensionMix, computeTestRatio } from './signals/project-stack.j
 import { guessPhase } from './signals/project-phase.js';
 import { computeHealthScore, extractMilestones } from './signals/project-health.js';
 import { computeWebResearchShare, computeTrend7d, computeHeatmap7x24 } from './signals/project-rhythm.js';
+import { createHash } from 'node:crypto';
+import type { LlmCache } from './llm/cache.js';
+import type {
+  T1Input,
+  T2Input,
+  T3Input,
+  T4Input,
+  T5Input,
+} from './llm/prompts/index.js';
 
 // sumRedactions is imported but only used indirectly (available for callers).
 // Suppress TS unused-import by using it in a re-export.
@@ -60,6 +69,15 @@ export interface BuildOverviewInput {
   mainProjects?: string[];
   /** Test seam — inject sessions instead of disk scan. */
   sessions?: ParsedSession[];
+  /**
+   * Optional LLM narrative enrichment. When provided, the aggregator reads
+   * cached T1–T5 outputs and attaches them to the snapshot's `llm*` fields.
+   * The LLM is NEVER called from this path — the worker (L-9) fills the
+   * cache asynchronously. Absent → behaviour identical to pre-L-8.
+   */
+  llmCache?: LlmCache;
+  /** ISO date string (YYYY-MM-DD) used for the T5 cache key. Defaults to today. */
+  today?: string;
 }
 
 export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapshot {
@@ -203,7 +221,399 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
     highlights: highlightsTop,
   };
   if (staleness) snap.staleness = staleness;
+
+  // L-8: attach LLM narrative fields from the cache when a cache is provided.
+  // Cache-only path — never calls the LLM here. Worker (L-9) fills the cache
+  // asynchronously; we just read whatever is already there.
+  if (input.llmCache) {
+    attachLlmFields(snap, inRange, byEmail, byProject, input);
+  }
+
   return snap;
+}
+
+// ---------------------------------------------------------------------------
+// L-8 — LLM narrative enrichment (cache-only, synchronous)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read T1–T5 cached outputs for this snapshot and attach them to the matching
+ * snapshot entities. **Never calls the LLM** — we recompute the cache keys
+ * deterministically from snapshot data (mirroring `llm/summarizer.ts`) and do
+ * pure `Map.get` lookups against the in-memory cache. Misses leave the
+ * corresponding `llm*` field undefined so the renderer falls back to its
+ * template strings.
+ *
+ * Why duplicate the key shapes from summarizer.ts instead of calling
+ * `summarizeXxx(..., {cacheOnly: true})` directly? Those functions are typed
+ * async and `Promise.resolve` cannot be unwrapped synchronously — keeping
+ * `buildOverviewSnapshot` synchronous lets the existing `routes.ts` handlers
+ * stay synchronous too. The key shapes are stable by design (worker writes
+ * by them; aggregator reads by them) and small enough that duplication is
+ * cheaper than refactoring the whole HTTP pipeline to async.
+ */
+function attachLlmFields(
+  snap: OverviewSnapshot,
+  inRange: ParsedSession[],
+  byEmail: Map<string, ParsedSession[]>,
+  byProject: Map<string, ParsedSession[]>,
+  input: BuildOverviewInput,
+): void {
+  const cache = input.llmCache;
+  if (!cache) return;
+
+  // --- T1: session digests across the whole range ----------------------------
+  const sessionsMap = new Map<string, string>();
+  const t1Inputs: T1Input[] = [];
+  for (const s of inRange) {
+    const t1 = buildT1InputFromSession(s);
+    if (!t1) continue;
+    t1Inputs.push(t1);
+    const v = cache.get(t1CacheKey(t1));
+    if (v !== undefined) sessionsMap.set(t1.id, v);
+  }
+
+  // --- T2: per-member weekly digest ------------------------------------------
+  const membersMap = new Map<string, string>();
+  for (const m of snap.members) {
+    if (!m.email) continue;
+    const memSessions = byEmail.get(m.email) ?? [];
+    const t2 = buildT2InputForMember(m, memSessions, sessionsMap);
+    if (!t2) continue;
+    const v = cache.get(t2CacheKey(t2));
+    if (v !== undefined) {
+      membersMap.set(m.email, v);
+      m.llmWeekly = v;
+    }
+  }
+
+  // --- T3: per-project weekly digest -----------------------------------------
+  const projectsMap = new Map<string, string>();
+  for (const p of snap.projects) {
+    if (!p.name) continue;
+    const psess = byProject.get(p.name) ?? [];
+    const t3 = buildT3InputForProject(p, psess, sessionsMap);
+    if (!t3) continue;
+    const v = cache.get(t3CacheKey(t3));
+    if (v !== undefined) {
+      projectsMap.set(p.name, v);
+      p.llmWeekly = v;
+    }
+  }
+
+  // --- T4: attention rewrites ------------------------------------------------
+  const attentionMap = new Map<string, string>();
+  for (const it of snap.attention) {
+    const t4 = buildT4InputForAttention(it);
+    if (!t4) continue;
+    const v = cache.get(t4CacheKey(t4));
+    if (v !== undefined) {
+      attentionMap.set(it.refId, v);
+      it.llmRewrite = v;
+    }
+  }
+
+  // --- T1 → highlight digests -----------------------------------------------
+  // HighlightEvent has no sessionId field today; we key T1 by sessionId in the
+  // cache. Walk each highlight's project's session bucket and find the session
+  // whose [startTs, endTs] window contains the highlight.ts (best effort).
+  for (const h of snap.highlights) {
+    const sid = findSessionIdForHighlight(h, byProject);
+    if (!sid) continue;
+    const v = sessionsMap.get(sid);
+    if (v !== undefined) h.llmDigest = v;
+  }
+
+  // --- T5: daily leader brief ------------------------------------------------
+  const today = input.today ?? new Date().toISOString().slice(0, 10);
+  const t5Input: T5Input = {
+    date: today,
+    topHighlights: snap.highlights.slice(0, 5).map((h) => {
+      const sid = findSessionIdForHighlight(h, byProject);
+      const fromT1 = sid ? sessionsMap.get(sid) : undefined;
+      return fromT1 ?? h.detail.slice(0, 80);
+    }),
+    attentionRewrites: [...attentionMap.values()],
+    topProjects: snap.projects.slice(0, 3).map((p) => ({
+      name: p.name,
+      digest: projectsMap.get(p.name) ?? '',
+    })),
+  };
+  const briefRaw = cache.get(t5CacheKey(t5Input));
+  if (briefRaw !== undefined) {
+    try {
+      const arr = JSON.parse(briefRaw);
+      if (Array.isArray(arr) && arr.every((x) => typeof x === 'string') && arr.length > 0) {
+        snap.llmBrief = arr as string[];
+      }
+    } catch {
+      // Malformed cache value — silently skip so the template fallback renders.
+    }
+  }
+}
+
+// ---- cache-key generators (mirror llm/summarizer.ts) ------------------------
+
+/**
+ * Stringify with object keys recursively sorted — exact mirror of the helper
+ * in `llm/summarizer.ts`. Required so the keys we recompute here match the
+ * keys the worker wrote.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? JSON.stringify(value) : 'null';
+  }
+  if (typeof value === 'string' || typeof value === 'boolean') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => stableStringify(v)).join(',')}]`;
+  }
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+  }
+  return 'null';
+}
+
+function cacheKey(tier: string, payload: unknown): string {
+  const hash = createHash('sha1').update(stableStringify(payload)).digest('hex').slice(0, 16);
+  return `${tier}:${hash}`;
+}
+
+function t1CacheKey(x: T1Input): string {
+  // `changedFiles` order is incidental — sort to mirror summarizer behaviour.
+  const sortedFiles = [...x.changedFiles].sort();
+  return cacheKey('t1', {
+    id: x.id,
+    firstUserPrompt: x.firstUserPrompt,
+    changedFiles: sortedFiles,
+    toolCounts: x.toolCounts,
+    durationMin: x.durationMin,
+    errors: x.errors,
+  });
+}
+
+function t2CacheKey(x: T2Input): string {
+  return cacheKey('t2', {
+    email: x.email,
+    displayName: x.displayName,
+    state: x.state,
+    topFiles: [...x.topFiles].sort(),
+    sessionDigests: x.sessionDigests,
+  });
+}
+
+function t3CacheKey(x: T3Input): string {
+  return cacheKey('t3', {
+    project: x.project,
+    phase: x.phase,
+    contributors: [...x.contributors].sort(),
+    sessionDigests: x.sessionDigests,
+    recentCommits: x.recentCommits,
+  });
+}
+
+function t4CacheKey(x: T4Input): string {
+  return cacheKey('t4', {
+    refId: x.refId,
+    kind: x.kind,
+    displayName: x.displayName,
+    signal: x.signal,
+    evidence: x.evidence,
+  });
+}
+
+function t5CacheKey(x: T5Input): string {
+  return cacheKey('t5', {
+    date: x.date,
+    topHighlights: x.topHighlights,
+    attentionRewrites: x.attentionRewrites,
+    topProjects: x.topProjects,
+  });
+}
+
+/**
+ * Build a T1 input from a parsed session. Mirrors the data the worker (L-9)
+ * will pack; key shape MUST match exactly so cache lookups hit.
+ */
+function buildT1InputFromSession(s: ParsedSession): T1Input | null {
+  const id = s.envelope.sessionId;
+  if (!id) return null;
+
+  // First user message text, ≤200 chars
+  let firstUserPrompt = '';
+  for (const m of s.messages) {
+    if (m.role === 'user' && m.text.trim().length > 0) {
+      firstUserPrompt = m.text.length > 200 ? m.text.slice(0, 200) : m.text;
+      break;
+    }
+  }
+
+  // Up to 3 distinct edited file paths
+  const filesSeen = new Set<string>();
+  const changedFiles: string[] = [];
+  for (const m of s.messages) {
+    for (const tu of m.toolUses) {
+      if (tu.name === 'Edit' || tu.name === 'Write' || tu.name === 'MultiEdit') {
+        const fp = typeof tu.input.file_path === 'string' ? tu.input.file_path : undefined;
+        if (fp && !filesSeen.has(fp)) {
+          filesSeen.add(fp);
+          changedFiles.push(fp);
+          if (changedFiles.length >= 3) break;
+        }
+      }
+    }
+    if (changedFiles.length >= 3) break;
+  }
+
+  // Tool counts + errors
+  let edit = 0;
+  let bash = 0;
+  let read = 0;
+  let webFetch = 0;
+  let errors = 0;
+  for (const m of s.messages) {
+    for (const tu of m.toolUses) {
+      if (tu.name === 'Edit' || tu.name === 'Write' || tu.name === 'MultiEdit') edit++;
+      else if (tu.name === 'Bash') bash++;
+      else if (tu.name === 'Read') read++;
+      else if (tu.name === 'WebFetch' || tu.name === 'WebSearch') webFetch++;
+    }
+    for (const tr of m.toolResults) {
+      if (tr.isError) errors++;
+    }
+  }
+
+  const durationMin = Math.max(0, Math.round(s.durationMs / 60_000));
+  return {
+    id,
+    firstUserPrompt,
+    changedFiles,
+    toolCounts: { edit, bash, read, webFetch },
+    durationMin,
+    errors,
+  };
+}
+
+function buildT2InputForMember(
+  m: MemberSnapshot,
+  memberSessions: ParsedSession[],
+  sessionsMap: Map<string, string>,
+): T2Input | null {
+  if (!m.email) return null;
+  const topFiles = computeTopFiles(memberSessions, 5);
+  const sessionDigests: string[] = [];
+  for (const s of memberSessions) {
+    const v = sessionsMap.get(s.envelope.sessionId);
+    if (v) sessionDigests.push(v);
+  }
+  return {
+    email: m.email,
+    displayName: m.displayName,
+    state: mapStateBadgeToT2(m.stateBadge),
+    topFiles,
+    sessionDigests,
+  };
+}
+
+function buildT3InputForProject(
+  p: ProjectSnapshot,
+  projectSessions: ParsedSession[],
+  sessionsMap: Map<string, string>,
+): T3Input | null {
+  if (!p.name) return null;
+  const sessionDigests: string[] = [];
+  for (const s of projectSessions) {
+    const v = sessionsMap.get(s.envelope.sessionId);
+    if (v) sessionDigests.push(v);
+  }
+  return {
+    project: p.name,
+    phase: p.phaseGuess ?? '',
+    contributors: p.contributors.map((c) => localPart(c.email)),
+    sessionDigests,
+    recentCommits: [],
+  };
+}
+
+function buildT4InputForAttention(it: AttentionItem): T4Input | null {
+  if (!it.refId) return null;
+  // Strip HTML tags from line2 — attention.line2 may contain `<span class="mono">`.
+  const evidence = it.line2 ? [it.line2.replace(/<[^>]+>/g, '')] : [];
+  return {
+    refId: it.refId,
+    kind: it.kind,
+    displayName: it.displayName,
+    signal: it.tag,
+    evidence,
+  };
+}
+
+/** Map MemberStateBadge → T2Input.state (the prompt-tier's state enum). */
+function mapStateBadgeToT2(badge: MemberStateBadge): T2Input['state'] {
+  switch (badge) {
+    case 'needs_help': return 'needs_help';
+    case 'stuck':      return 'stuck';
+    case 'active':     return 'active';
+    case 'low_activity': return 'idle';
+    case 'quiet':      return 'off';
+    default:           return 'active';
+  }
+}
+
+/** Top-N edited files for a member's session bucket. */
+function computeTopFiles(memberSessions: ParsedSession[], n: number): string[] {
+  const counts = new Map<string, number>();
+  for (const s of memberSessions) {
+    for (const m of s.messages) {
+      for (const tu of m.toolUses) {
+        if (tu.name === 'Edit' || tu.name === 'Write' || tu.name === 'MultiEdit') {
+          const fp = typeof tu.input.file_path === 'string' ? tu.input.file_path : undefined;
+          if (fp) counts.set(fp, (counts.get(fp) ?? 0) + 1);
+        }
+      }
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([path]) => path);
+}
+
+/**
+ * Best-effort lookup of the sessionId for a given highlight. HighlightEvent
+ * lacks a sessionId field, so we walk the highlight's project's session
+ * bucket and pick the session whose startTs is the latest one ≤ the
+ * highlight's ts (milestones are emitted with their message ts, which falls
+ * inside the session's [startTs, endTs] window).
+ */
+function findSessionIdForHighlight(
+  h: HighlightEvent,
+  byProject: Map<string, ParsedSession[]>,
+): string | undefined {
+  const candidates = byProject.get(h.project);
+  if (!candidates || candidates.length === 0) return undefined;
+  const tsMs = Date.parse(h.ts);
+  if (!Number.isFinite(tsMs)) return undefined;
+  let bestId: string | undefined;
+  let bestStart = -Infinity;
+  for (const s of candidates) {
+    const startMs = s.startTs.getTime();
+    const endMs = s.endTs.getTime();
+    // Prefer sessions whose [startTs, endTs] window contains the ts.
+    if (startMs <= tsMs && tsMs <= endMs) {
+      return s.envelope.sessionId;
+    }
+    // Fallback: latest start ≤ ts.
+    if (startMs <= tsMs && startMs > bestStart) {
+      bestStart = startMs;
+      bestId = s.envelope.sessionId;
+    }
+  }
+  return bestId;
 }
 
 // ---------------------------------------------------------------------------
