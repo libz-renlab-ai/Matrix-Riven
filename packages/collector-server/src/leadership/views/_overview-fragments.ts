@@ -130,11 +130,14 @@ export function renderAttentionFragment(snap: OverviewSnapshot): string {
 }
 
 function escapeHtml(s: string): string {
+  // Must escape `'` too — inline onclick handlers in member tiles / project
+  // rows embed escaped strings inside JS single-quoted literals.
   return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +221,9 @@ export function renderMembersFragment(snap: OverviewSnapshot): string {
 export function renderProjectsFragment(snap: OverviewSnapshot): string {
   const rows = snap.projects.map(p => {
     const initials = p.name.slice(0, 2).toUpperCase();
+    // Placeholder progress: OverviewSnapshot has no real progress field yet.
+    // Use 7-day trend sum / (recent file count, or trend length * 10 fallback)
+    // clamped to [0, 100]. Replace once aggregator exposes a real progress signal.
     const sumTrend = p.trend7d.reduce((a, b) => a + b, 0);
     const total = (p.detail?.recentFiles.length ?? p.trend7d.length * 10) || 1;
     const progress = Math.min(100, Math.round((sumTrend / total) * 100));

@@ -169,6 +169,18 @@ describe('renderMembersFragment (P-B5)', () => {
     const html = renderMembersFragment(snapWithMembers(2));
     expect(html).toContain('mt-status idle');
   });
+  it("escapes apostrophes in onclick payload (XSS hardening)", () => {
+    const snap = makeSnapshot({
+      members: [{
+        email: "o'reilly@x.com", displayName: "o'reilly", stateBadge: 'active',
+        today: { sessions: 1, tokens: 100, estMinutes: 5, costUsd: 0.1 },
+        trend7d: [1], deltaVs7dAvgPct: 0, warnings: [], topProject: 'mr',
+      } as never],
+    });
+    const html = renderMembersFragment(snap);
+    expect(html).not.toContain("'reilly@x.com'");
+    expect(html).toContain('&#39;reilly@x.com');
+  });
 });
 
 describe('renderProjectsFragment (P-B5)', () => {
