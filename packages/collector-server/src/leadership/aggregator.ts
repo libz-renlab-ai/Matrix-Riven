@@ -22,6 +22,7 @@ import type {
   AttentionItem,
   HighlightEvent,
 } from './types.js';
+import { redactForLLM } from './llm/redact.js';
 import { computeActivity, computeFocus, computeRhythmDelta } from './signals/activity.js';
 import { detectLowActivity } from './signals/slacking.js';
 import { detectBlocker } from './signals/blockers.js';
@@ -204,7 +205,12 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
         type: m.type,
         by: localPart(m.by),
         project: p.name,
-        detail: m.detail,
+        // Redact at aggregator time so both wire JSON and rendered HTML see
+        // the safe version. Highlight details are raw Bash tool inputs
+        // (`git push origin foo 2>&1 | tail -5`, `cd /Users/alice/...`); the
+        // PII redactor strips absolute paths / emails / secrets, and we
+        // hard-cap length at 120 chars (the renderer further trims to 80).
+        detail: redactHighlightDetail(m.detail),
       });
     }
   }
@@ -945,6 +951,25 @@ function riskyPatternLabel(pattern: string): string {
 function localPart(email: string): string {
   const at = email.indexOf('@');
   return at >= 0 ? email.slice(0, at) : email;
+}
+
+/**
+ * Strip PII from a raw highlight `detail` (typically the Bash command that
+ * produced the commit / push / PR) before it hits the JSON wire or HTML.
+ * The PII redactor handles emails / absolute paths / secrets / IPs; we also
+ * clip stderr suffixes (`2>&1 | tail -N`) and hard-cap length so the
+ * dashboard never serves a 500-byte shell pipe.
+ */
+function redactHighlightDetail(raw: string): string {
+  if (!raw) return '';
+  let s = redactForLLM(raw);
+  // Strip the common "&& git push ... 2>&1 | tail -N" stderr decorator —
+  // it's noise on the dashboard, real reviewers can pull it from the raw
+  // session if they care.
+  s = s.replace(/\s*2>&1\s*\|\s*(tail|head)\s+-?\d*\s*$/u, '');
+  s = s.replace(/\s*\|\s*(tail|head)\s+-?\d*\s*$/u, '');
+  if (s.length > 120) s = s.slice(0, 117) + '…';
+  return s;
 }
 
 /**
