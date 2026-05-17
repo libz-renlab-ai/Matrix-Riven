@@ -98,6 +98,10 @@ export interface MemberSnapshot {
   iterationDensity?: number;
   /** Mean prompt length over the range (used for stuck line2). */
   meanPromptLen?: number;
+  /** Optional because LLM is opt-in / may cache-miss; consumed by views/_overview-fragments.ts + views/_slideover.html.ts. */
+  /** Two-line LLM-authored weekly digest (sentences joined by '\n'). Optional;
+   * absent when LLM disabled or cache miss. */
+  llmWeekly?: string;
   // Detail-page-only fields below; aggregator includes them for /api/members/:id
   detail?: MemberDetail;
 }
@@ -171,6 +175,9 @@ export interface ProjectSnapshot {
    * line in that case.
    */
   lastTouch?: { filePath: string; by: string; ts: string };
+  /** Optional because LLM is opt-in / may cache-miss; consumed by views/_overview-fragments.ts project narrative + views/_slideover.html.ts. */
+  /** Two-line LLM-authored weekly project digest. Optional. */
+  llmWeekly?: string;
   detail?: ProjectDetail;
 }
 
@@ -222,6 +229,10 @@ export interface AttentionItem {
   line2: string;                // descriptive sentence; may contain inline <span class="mono">
   time: string;                 // 'HH:MM' or arrow glyph
   severity: number;             // 0-10 for sort desc
+  /** Optional because LLM is opt-in / may cache-miss; consumed by views/_overview-fragments.ts attention list to replace the generic line2 template. */
+  /** One-line LLM rewrite that replaces the generic `line2` template when
+   * present. Optional. */
+  llmRewrite?: string;
 }
 
 export interface OverviewSnapshot {
@@ -246,6 +257,10 @@ export interface OverviewSnapshot {
    * live data. Absent when data is fresh (≤ 1 day old).
    */
   staleness?: { ageDays: number; lastActivityAt: string };
+  /** Optional because T5 is opt-in / may cache-miss; consumed by views/_overview-fragments.ts to render a briefBox between hero and KPIs. */
+  /** Three-line leader daily brief (T5). Rendered as a briefBox between the
+   * hero greeting and the KPI row. Optional. */
+  llmBrief?: string[];
 }
 
 /**
@@ -260,6 +275,10 @@ export interface HighlightEvent {
   by: string;       // local-part of the author email
   project: string;
   detail: string;   // short description; aggregator-controlled, safe HTML when escaped
+  /** Optional because T1 is opt-in / may cache-miss; consumed by views/_overview-fragments.ts highlight list to replace the raw command in `detail` when rendered. */
+  /** One-line LLM rewrite of this event for display. Replaces the raw `detail`
+   * field in renders when present. Optional. */
+  llmDigest?: string;
 }
 
 // =====================================================================
