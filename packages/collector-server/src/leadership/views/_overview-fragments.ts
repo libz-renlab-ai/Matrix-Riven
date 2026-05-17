@@ -97,12 +97,20 @@ function formatKilo(n: number): string {
  * (P-B6) can hook click-to-open. `line2` is emitted unescaped because the
  * aggregator guarantees it is safe HTML (template-controlled, no user input).
  */
-export function renderAttentionFragment(snap: OverviewSnapshot): string {
+export interface FragmentOpts {
+  /** Cap the number of items rendered. When set and total > limit, a
+   * "看全部 N →" footer link is appended pointing to the dedicated tab. */
+  limit?: number;
+}
+
+export function renderAttentionFragment(snap: OverviewSnapshot, opts: FragmentOpts = {}): string {
   if (snap.attention.length === 0) {
     return `<section id="attention" class="section fade-in"></section>`;
   }
-  const lead = attentionLead(snap.attention.length);
-  const rows = snap.attention.map(a => `
+  const totalAll = snap.attention.length;
+  const items = opts.limit != null ? snap.attention.slice(0, opts.limit) : snap.attention;
+  const lead = attentionLead(totalAll);
+  const rows = items.map(a => `
     <div class="att-row" data-ref="${escapeHtml(a.kind)}:${escapeHtml(a.refId)}" data-attention="${a.severity}">
       <div class="att-avatar" style="background:${avatarColor(a.refId)}">${escapeHtml(a.initials)}</div>
       <div class="att-body">
@@ -115,9 +123,10 @@ export function renderAttentionFragment(snap: OverviewSnapshot): string {
       <div class="att-time">${escapeHtml(a.time)}</div>
       <div class="att-arrow">›</div>
     </div>`).join('');
+  const footer = renderSeeAllFooter(items.length, totalAll, '项', '/people?focus=attention');
   return `<section id="attention" class="section fade-in">
     <div class="section-head">
-      <div class="section-title">需要你看一眼 <span class="section-count">${snap.attention.length}</span></div>
+      <div class="section-title">需要你看一眼 <span class="section-count">${totalAll}</span></div>
     </div>
     <div class="attention">
       <div class="attention-head">
@@ -125,8 +134,21 @@ export function renderAttentionFragment(snap: OverviewSnapshot): string {
         <div class="attention-headline serif">${lead}</div>
       </div>
       <div class="attention-list">${rows}</div>
+      ${footer}
     </div>
   </section>`;
+}
+
+/**
+ * Render a "看全部 N →" footer link inside a section wrapper. Returns the
+ * empty string when no overflow exists (totalShown >= totalAll) so callers
+ * can interpolate unconditionally.
+ */
+function renderSeeAllFooter(totalShown: number, totalAll: number, label: string, href: string): string {
+  if (totalShown >= totalAll) return '';
+  return `<div class="see-all-row" style="text-align:right;padding:14px 24px 4px;">
+    <a href="${href}" style="font-size:12.5px;color:var(--ink-3);text-decoration:none;border-bottom:1px solid var(--ink-5);padding-bottom:1px;">看全部 ${totalAll} ${label} →</a>
+  </div>`;
 }
 
 function escapeHtml(s: string): string {
@@ -179,8 +201,10 @@ function attentionScore(m: MemberSnapshot): number {
   return 0;
 }
 
-export function renderMembersFragment(snap: OverviewSnapshot): string {
-  const tiles = snap.members.map(m => {
+export function renderMembersFragment(snap: OverviewSnapshot, opts: FragmentOpts = {}): string {
+  const totalAll = snap.members.length;
+  const members = opts.limit != null ? snap.members.slice(0, opts.limit) : snap.members;
+  const tiles = members.map(m => {
     const initials = m.displayName.slice(0, 2).toLowerCase();
     const status = memberStatus(m);
     const path = sparkFromTrend(m.trend7d);
@@ -205,9 +229,10 @@ export function renderMembersFragment(snap: OverviewSnapshot): string {
       </div>`;
   }).join('');
 
+  const footer = renderSeeAllFooter(members.length, totalAll, '人', '/people');
   return `<section id="members" class="section fade-in">
     <div class="section-head">
-      <div class="section-title">团队 <span class="section-count">${snap.members.length}</span></div>
+      <div class="section-title">团队 <span class="section-count">${totalAll}</span></div>
       <div class="sort-toggle">
         <button data-sort="attention" class="active">需关注</button>
         <button data-sort="activity">活跃</button>
@@ -215,11 +240,14 @@ export function renderMembersFragment(snap: OverviewSnapshot): string {
       </div>
     </div>
     <div class="members">${tiles}</div>
+    ${footer}
   </section>`;
 }
 
-export function renderProjectsFragment(snap: OverviewSnapshot): string {
-  const rows = snap.projects.map(p => {
+export function renderProjectsFragment(snap: OverviewSnapshot, opts: FragmentOpts = {}): string {
+  const totalAll = snap.projects.length;
+  const projects = opts.limit != null ? snap.projects.slice(0, opts.limit) : snap.projects;
+  const rows = projects.map(p => {
     const initials = p.name.slice(0, 2).toUpperCase();
     // Placeholder progress: OverviewSnapshot has no real progress field yet.
     // Use 7-day trend sum / (recent file count, or trend length * 10 fallback)
@@ -248,9 +276,10 @@ export function renderProjectsFragment(snap: OverviewSnapshot): string {
       <div class="proj-arrow">›</div>
     </div>`;
   }).join('');
+  const footer = renderSeeAllFooter(projects.length, totalAll, '个', '/projects');
   return `<section id="projects" class="section fade-in">
     <div class="section-head">
-      <div class="section-title">项目 <span class="section-count">${snap.projects.length}</span></div>
+      <div class="section-title">项目 <span class="section-count">${totalAll}</span></div>
       <div class="sort-toggle">
         <button data-sort="attention" class="active">需关注</button>
         <button data-sort="activity">活跃</button>
@@ -258,5 +287,6 @@ export function renderProjectsFragment(snap: OverviewSnapshot): string {
       </div>
     </div>
     <div class="projects-list">${rows}</div>
+    ${footer}
   </section>`;
 }

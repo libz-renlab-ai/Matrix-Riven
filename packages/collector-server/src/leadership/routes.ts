@@ -38,6 +38,8 @@ import {
   renderProjectsFragment,
 } from './views/_overview-fragments.js';
 import { renderNav, type ActiveTab } from './views/_nav.html.js';
+import { renderSlideoverShell } from './views/_slideover.html.js';
+import { CLIENT_REFRESH_SCRIPT } from './views/_refresh.js.js';
 import { LEADERSHIP_CSS } from './views/styles.css.js';
 
 // ── public interface ──────────────────────────────────────────────────────────
@@ -95,12 +97,15 @@ export function handleLeadershipRequest(
           now: nowDate,
           mainProjects: deps.mainProjects,
         });
+        // /api/overview is consumed by the Overview-tab live polling loop,
+        // which swaps these fragments in via outerHTML. Apply the same
+        // top-N caps used in renderOverview() so polling stays consistent.
         const _html = {
           hero: renderHeroFragment(snap),
           kpis: renderKpisFragment(snap),
-          attention: renderAttentionFragment(snap),
-          members: renderMembersFragment(snap),
-          projects: renderProjectsFragment(snap),
+          attention: renderAttentionFragment(snap, { limit: 3 }),
+          members: renderMembersFragment(snap, { limit: 4 }),
+          projects: renderProjectsFragment(snap, { limit: 4 }),
         };
         const body = { ...snap, _html } as Record<string, unknown>;
         entry = { body, etag: etagFor(body) };
@@ -247,16 +252,15 @@ export function handleLeadershipRequest(
     return renderOverviewTab(req, res, deps, query, now);
   }
 
-  // P-B2: stub tab routes — render the shared frosted nav with a "尚未实现"
-  // placeholder. Inner content lands in Phase 3.
+  // P-B7: People + Projects are real pages — full unsliced grid/list with
+  // the same shell, nav, slide-over and 30 s polling as Overview.
   if (pathname === '/people' && req.method === 'GET') {
-    sendHtml(res, 200, renderStubTab('people', 'People'));
-    return true;
+    return renderPeopleTab(req, res, deps, query, now);
   }
   if (pathname === '/projects' && req.method === 'GET') {
-    sendHtml(res, 200, renderStubTab('projects', 'Projects'));
-    return true;
+    return renderProjectsTab(req, res, deps, query, now);
   }
+  // Activity + Insights remain stubs — Phase 3 scope.
   if (pathname === '/activity' && req.method === 'GET') {
     sendHtml(res, 200, renderStubTab('activity', 'Activity'));
     return true;
@@ -338,8 +342,130 @@ function renderOverviewTab(
 }
 
 /**
- * Render a minimal "尚未实现" placeholder page for the People / Projects /
- * Activity / Insights tabs (P-B2). Inner content arrives in Phase 3.
+ * P-B7: GET /people — full unsliced member grid. Shares the Overview shell
+ * (frosted nav + slide-over panel + 30 s polling) so the slide-over and sort
+ * buttons keep working. Cache-keyed independently from Overview because the
+ * payload (no slicing) is different.
+ */
+function renderPeopleTab(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: LeadershipRouteDeps,
+  query: URLSearchParams,
+  now: () => Date,
+): boolean {
+  if (req.method !== 'GET') {
+    sendJson(res, 405, { error: 'method_not_allowed' });
+    return true;
+  }
+  const range = parseRange(query.get('range') ?? undefined, now());
+  const cacheKey = `html|/people|${range.label}`;
+  const cached = deps.cache.get(cacheKey);
+  if (cached !== undefined) {
+    sendHtml(res, 200, cached as string);
+    return true;
+  }
+  try {
+    const snap = buildOverviewSnapshot({
+      collectorDir: deps.collectorDir,
+      range,
+      now: now(),
+      mainProjects: deps.mainProjects,
+    });
+    const tightHero = `<header id="hero" class="hero fade-in"><div><h1 class="serif">团队 <em>${snap.members.length} 人</em></h1><div class="sub">完整成员视图 · 数据每 30 秒刷新</div></div></header>`;
+    const body = snap.members.length === 0
+      ? `<section id="members" class="section fade-in"><div class="lh-empty">这个窗口内没有成员活动</div></section>`
+      : renderMembersFragment(snap); // no limit → full grid
+    const html = renderTabPage('people', rangeToNavLabelLocal(range.label), tightHero + body);
+    deps.cache.set(cacheKey, html);
+    sendHtml(res, 200, html);
+  } catch {
+    sendHtml(res, 500, renderOverviewError());
+  }
+  return true;
+}
+
+/**
+ * P-B7: GET /projects — full unsliced project list. Mirrors renderPeopleTab.
+ */
+function renderProjectsTab(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: LeadershipRouteDeps,
+  query: URLSearchParams,
+  now: () => Date,
+): boolean {
+  if (req.method !== 'GET') {
+    sendJson(res, 405, { error: 'method_not_allowed' });
+    return true;
+  }
+  const range = parseRange(query.get('range') ?? undefined, now());
+  const cacheKey = `html|/projects|${range.label}`;
+  const cached = deps.cache.get(cacheKey);
+  if (cached !== undefined) {
+    sendHtml(res, 200, cached as string);
+    return true;
+  }
+  try {
+    const snap = buildOverviewSnapshot({
+      collectorDir: deps.collectorDir,
+      range,
+      now: now(),
+      mainProjects: deps.mainProjects,
+    });
+    const tightHero = `<header id="hero" class="hero fade-in"><div><h1 class="serif">项目 <em>${snap.projects.length} 个</em></h1><div class="sub">完整项目视图 · 数据每 30 秒刷新</div></div></header>`;
+    const body = snap.projects.length === 0
+      ? `<section id="projects" class="section fade-in"><div class="lh-empty">这个窗口内没有项目活动</div></section>`
+      : renderProjectsFragment(snap); // no limit → full list
+    const html = renderTabPage('projects', rangeToNavLabelLocal(range.label), tightHero + body);
+    deps.cache.set(cacheKey, html);
+    sendHtml(res, 200, html);
+  } catch {
+    sendHtml(res, 500, renderOverviewError());
+  }
+  return true;
+}
+
+/**
+ * Wrap a tab's inner content with the shared shell — same DOCTYPE, CSS, nav,
+ * slide-over panel, and 30 s polling script as Overview. Keeps People +
+ * Projects visually consistent and lets the slide-over open from member tiles
+ * / project rows without duplicating markup.
+ */
+function renderTabPage(active: ActiveTab, rangeLabel: string, innerHtml: string): string {
+  const title = active.charAt(0).toUpperCase() + active.slice(1);
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)} · Matrix·Riven</title>
+<style>${LEADERSHIP_CSS}</style>
+</head>
+<body>
+<div class="shell">
+${renderNav(active, { rangeLabel })}
+${innerHtml}
+</div>
+${renderSlideoverShell()}
+<script>${CLIENT_REFRESH_SCRIPT}</script>
+</body>
+</html>`;
+}
+
+/** Local copy of rangeToNavLabel (duplicated to avoid cross-imports). */
+function rangeToNavLabelLocal(label: string): string {
+  switch (label) {
+    case '24h': return '24 小时';
+    case 'today': return '今日';
+    case '30d': return '30 日窗口';
+    case '7d':
+    default: return '7 日窗口';
+  }
+}
+
+/**
+ * Render a minimal "尚未实现" placeholder page for the Activity / Insights
+ * tabs. People + Projects are now real pages (P-B7).
  */
 function renderStubTab(active: ActiveTab, title: string): string {
   return `<!DOCTYPE html>

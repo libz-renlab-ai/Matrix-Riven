@@ -206,3 +206,88 @@ describe('renderProjectsFragment (P-B5)', () => {
     expect((html.match(/class="proj-people-stack"/g) ?? []).length).toBe(2);
   });
 });
+
+// ── P-B7: per-section top-N cap + "see all" footer ───────────────────────────
+
+describe('top-N cap + see-all footer (P-B7)', () => {
+  function snapWithAttention(n: number) {
+    return makeSnapshot({
+      attention: Array.from({ length: n }, (_, i) => ({
+        kind: 'member' as const, refId: `u${i}@x.com`, displayName: `user${i}`,
+        initials: 'u' + i, tag: '闲置', tagSeverity: 'normal' as const,
+        line2: 'x', time: '03:12', severity: 10 - i,
+      })),
+    });
+  }
+  function snapWithMembers(n: number) {
+    return makeSnapshot({
+      members: Array.from({ length: n }, (_, i) => ({
+        email: `u${i}@x.com`, displayName: `user${i}`, stateBadge: 'active' as const,
+        today: { sessions: 1, tokens: 100, estMinutes: 5, costUsd: 0.1 },
+        trend7d: [1], deltaVs7dAvgPct: 0, warnings: [], topProject: 'mr',
+      })),
+    });
+  }
+  function snapWithProjects(n: number) {
+    return makeSnapshot({
+      projects: Array.from({ length: n }, (_, i) => ({
+        name: `proj${i}`, state: 'active' as const, contributors: [
+          { email: 'a@x.com', sharePct: 0.5 },
+        ], busFactorWarning: false, trend7d: [1,2,3,4,5,6,7], phaseGuess: 'implement' as const,
+        healthScore: 7, etaDays: 5, etaConfidence: 'low' as const,
+      })),
+    });
+  }
+
+  it('attention with limit 3 on 5 items → 3 rows + 1 see-all footer', () => {
+    const html = renderAttentionFragment(snapWithAttention(5), { limit: 3 });
+    expect((html.match(/class="att-row"/g) ?? []).length).toBe(3);
+    expect((html.match(/class="see-all-row"/g) ?? []).length).toBe(1);
+    expect(html).toContain('看全部 5 项');
+    expect(html).toContain('href="/people?focus=attention"');
+  });
+
+  it('members with limit 4 on 6 items → 4 tiles + 1 see-all footer', () => {
+    const html = renderMembersFragment(snapWithMembers(6), { limit: 4 });
+    expect((html.match(/class="member-tile"/g) ?? []).length).toBe(4);
+    expect((html.match(/class="see-all-row"/g) ?? []).length).toBe(1);
+    expect(html).toContain('看全部 6 人');
+    expect(html).toContain('href="/people"');
+  });
+
+  it('projects with limit 4 on 6 items → 4 rows + 1 see-all footer', () => {
+    const html = renderProjectsFragment(snapWithProjects(6), { limit: 4 });
+    expect((html.match(/class="proj-row"/g) ?? []).length).toBe(4);
+    expect((html.match(/class="see-all-row"/g) ?? []).length).toBe(1);
+    expect(html).toContain('看全部 6 个');
+    expect(html).toContain('href="/projects"');
+  });
+
+  it('no see-all footer when total <= limit (attention)', () => {
+    const html = renderAttentionFragment(snapWithAttention(2), { limit: 3 });
+    expect((html.match(/class="att-row"/g) ?? []).length).toBe(2);
+    expect(html).not.toContain('see-all-row');
+  });
+
+  it('no see-all footer when no limit passed (members)', () => {
+    const html = renderMembersFragment(snapWithMembers(6));
+    expect((html.match(/class="member-tile"/g) ?? []).length).toBe(6);
+    expect(html).not.toContain('see-all-row');
+  });
+
+  it('no see-all footer when no limit passed (projects)', () => {
+    const html = renderProjectsFragment(snapWithProjects(6));
+    expect((html.match(/class="proj-row"/g) ?? []).length).toBe(6);
+    expect(html).not.toContain('see-all-row');
+  });
+
+  it('section count reflects total (not the sliced count) on attention', () => {
+    const html = renderAttentionFragment(snapWithAttention(5), { limit: 3 });
+    expect(html).toContain('<span class="section-count">5</span>');
+  });
+
+  it('section count reflects total (not the sliced count) on members', () => {
+    const html = renderMembersFragment(snapWithMembers(6), { limit: 4 });
+    expect(html).toContain('<span class="section-count">6</span>');
+  });
+});

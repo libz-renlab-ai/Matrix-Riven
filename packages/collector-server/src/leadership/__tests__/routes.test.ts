@@ -281,12 +281,31 @@ describe('5 leadership tab routes (P-B2)', () => {
     expect(html).toMatch(/class="tab active"[^>]*>[^<]*Overview/);
   });
 
-  it('GET /people marks the People tab as active and is a stub', async () => {
+  it('GET /people marks the People tab as active and renders the full member grid (P-B7)', async () => {
     const res = await fetch(`${baseUrl}/people`);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toMatch(/class="tab active"[^>]*>[^<]*People/);
-    expect(html).toContain('尚未实现');
+    // P-B7: real page, not a "尚未实现" stub.
+    expect(html).not.toContain('尚未实现');
+    expect(html).toContain('class="member-tile"');
+    // Slide-over shell is mounted (so click-to-open works).
+    expect(html).toContain('id="scrim"');
+    expect(html).toContain('id="so"');
+    // No see-all footer on the full page — it's the full unsliced grid.
+    expect(html).not.toContain('see-all-row');
+  });
+
+  it('GET /projects marks the Projects tab as active and renders the full project list (P-B7)', async () => {
+    const res = await fetch(`${baseUrl}/projects`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toMatch(/class="tab active"[^>]*>[^<]*Projects/);
+    expect(html).not.toContain('尚未实现');
+    expect(html).toContain('class="proj-row"');
+    expect(html).toContain('id="scrim"');
+    expect(html).toContain('id="so"');
+    expect(html).not.toContain('see-all-row');
   });
 
   it('GET /activity is a stub page', async () => {

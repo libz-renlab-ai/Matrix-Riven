@@ -24,11 +24,11 @@ export function renderOverview(snapshot: OverviewSnapshot): string {
 
   const membersSection = members.length === 0
     ? `<section id="members" class="section fade-in"><div class="lh-empty">这个窗口内没有成员活动</div></section>`
-    : renderMembersFragment(snapshot);
+    : renderMembersFragment(snapshot, { limit: 4 });
 
   const projectsSection = projects.length === 0
     ? `<section id="projects" class="section fade-in"><div class="lh-empty">这个窗口内没有项目活动</div></section>`
-    : renderProjectsFragment(snapshot);
+    : renderProjectsFragment(snapshot, { limit: 4 });
 
   const collabHtml = collaboration.length === 0
     ? ''
@@ -49,7 +49,7 @@ export function renderOverview(snapshot: OverviewSnapshot): string {
 ${renderNav('overview', { rangeLabel: navRangeLabel })}
 ${renderHeroFragment(snapshot)}
 ${renderKpisFragment(snapshot)}
-${renderAttentionFragment(snapshot)}
+${renderAttentionFragment(snapshot, { limit: 3 })}
 ${membersSection}
 ${projectsSection}
 <div class="lh-container">
