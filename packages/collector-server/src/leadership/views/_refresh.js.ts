@@ -14,10 +14,18 @@
  *       via `outerHTML`, compute KPI deltas vs `localStorage['lh.lastKpis']`
  *       and render ±N badges that fade after 4–5 s. The current KPI snapshot
  *       is persisted back to localStorage so next-load can diff.
+ * P-C3: slide-over live polling while the drawer is open. `openSO` records
+ *       (kind, id) and delegates the initial fetch to `pollSO`, then arms a
+ *       30 s `soInterval = setInterval(pollSO, 30000)` so the panel keeps
+ *       refreshing while the user reads it. `pollSO` sends
+ *       `If-None-Match: soEtag` and on 304 short-circuits. On 200 it swaps
+ *       the 4 drawer fragments and refreshes head fields. `closeSO` clears
+ *       the interval and resets `soKind` / `soId` / `soEtag`.
  *
- * The script is wrapped in an IIFE and is ES5-compatible (no arrow fns, no
- * const/let, no template literals at runtime — the surrounding TS template
- * literal does NOT get evaluated client-side).
+ * The script is wrapped in an IIFE and uses ES2017-compatible syntax (var,
+ * function expressions, async/await — async is needed for fetch flow). No
+ * arrow fns / const-let / template literals at runtime, so the surrounding
+ * TS template literal does NOT get evaluated client-side.
  */
 
 export const CLIENT_REFRESH_SCRIPT = `
@@ -144,9 +152,11 @@ export const CLIENT_REFRESH_SCRIPT = `
 
   function showKpiDeltas(prev, curr) {
     if (!prev || !curr) return;
+    // Only diff attention.value — the kpi-good card displays
+    // classifyHighOutput(members), not kpis.teamActivity.value, so we can't
+    // honestly diff it here without re-deriving member counts client-side.
     var fields = [
-      { key: 'attention', selector: '.kpi.kpi-warn .kpi-num' },
-      { key: 'teamActivity', selector: '.kpi.kpi-good .kpi-num' }
+      { key: 'attention', selector: '.kpi.kpi-warn .kpi-num' }
     ];
     for (var f = 0; f < fields.length; f++) {
       var spec = fields[f];
