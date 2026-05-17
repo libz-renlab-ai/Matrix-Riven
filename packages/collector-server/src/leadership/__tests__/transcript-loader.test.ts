@@ -110,6 +110,8 @@ describe('deriveProjectName common-name collapse', () => {
     ['/a/.git', 'a'],
     ['/x/y/build', 'y'],
     ['/x/y/test', 'y'],
+    ['/x/y/SRC', 'y'],
+    ['/x/y/Build', 'y'],
   ];
   for (const [cwd, expected] of cases) {
     it(`${cwd} → ${expected}`, () => {
