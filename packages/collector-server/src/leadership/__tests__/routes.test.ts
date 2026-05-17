@@ -21,9 +21,13 @@ function writeEnvelope(
   sid: string,
   opts: { projectName: string; cwd: string },
 ): void {
+  // Anchor the message + envelope timestamps to the date folder so
+  // sessions written under different date dirs actually bucket into
+  // different days for trend7d / activeDays computations.
+  const ts = `${date}T10:00:00Z`;
   const jsonl = JSON.stringify({
     type: 'user',
-    timestamp: '2026-05-14T10:00:00Z',
+    timestamp: ts,
     message: { role: 'user', content: 'hi' },
   });
   const gz = gzipSync(Buffer.from(jsonl)).toString('base64');
@@ -36,7 +40,7 @@ function writeEnvelope(
       session_id: sid,
       cwd: opts.cwd,
       project_name: opts.projectName,
-      captured_at: '2026-05-14T10:00:00Z',
+      captured_at: ts,
       source: 'stop-hook',
       host: { os: 'l', arch: 'x', hostname: 'h' },
       riven_version: '0',
@@ -67,16 +71,31 @@ let cache: TtlCache<unknown>;
 const FIXED_NOW = new Date('2026-05-16T12:00:00Z');
 
 beforeAll(async () => {
-  // Write fixture sessions
+  // Write fixture sessions — span ≥ 2 active days per project so they
+  // survive the post-2026-05-17 volume gate (≥ 5 sessions OR ≥ 2 active
+  // days). Without the cross-day spread, single-afternoon scratch sessions
+  // would be dropped from the dashboard project list.
   writeEnvelope(collectorDir, EMAIL_A, '2026-05-14', 'sess-a1', {
     projectName: PROJECT_A,
     cwd: `/home/alice/projects/${PROJECT_A}`,
   });
-  writeEnvelope(collectorDir, EMAIL_A, '2026-05-15', 'sess-a2', {
+  writeEnvelope(collectorDir, EMAIL_A, '2026-05-14', 'sess-a2', {
+    projectName: PROJECT_A,
+    cwd: `/home/alice/projects/${PROJECT_A}`,
+  });
+  writeEnvelope(collectorDir, EMAIL_A, '2026-05-15', 'sess-a3', {
     projectName: PROJECT_A,
     cwd: `/home/alice/projects/${PROJECT_A}`,
   });
   writeEnvelope(collectorDir, EMAIL_B, '2026-05-14', 'sess-b1', {
+    projectName: PROJECT_B,
+    cwd: `/home/bob/projects/${PROJECT_B}`,
+  });
+  writeEnvelope(collectorDir, EMAIL_B, '2026-05-14', 'sess-b2', {
+    projectName: PROJECT_B,
+    cwd: `/home/bob/projects/${PROJECT_B}`,
+  });
+  writeEnvelope(collectorDir, EMAIL_B, '2026-05-15', 'sess-b3', {
     projectName: PROJECT_B,
     cwd: `/home/bob/projects/${PROJECT_B}`,
   });

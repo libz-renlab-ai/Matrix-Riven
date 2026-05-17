@@ -47,6 +47,7 @@ export function renderOverview(snapshot: OverviewSnapshot): string {
 <body>
 <div class="shell">
 ${renderNav('overview', { rangeLabel: navRangeLabel })}
+${snapshot.staleness ? renderStaleBanner(snapshot.staleness) : ''}
 ${renderHeroFragment(snapshot)}
 ${renderKpisFragment(snapshot)}
 ${renderAttentionFragment(snapshot, { limit: 3 })}
@@ -78,6 +79,24 @@ function rangeToNavLabel(label: string): string {
     case '7d':
     default: return '7 日窗口';
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stale-data banner (P-D2 data-trust rebuild)
+// ---------------------------------------------------------------------------
+
+/**
+ * Render the "data is N days old" banner that mounts above the hero when
+ * the snapshot's freshest in-range session is more than ~1 day older than
+ * `computedAt`. Visually tied to the warn palette so it reads as advisory,
+ * not error. Exported so the People/Projects tab can reuse the markup.
+ */
+export function renderStaleBanner(s: { ageDays: number; lastActivityAt: string }): string {
+  const d = new Date(s.lastActivityAt);
+  const dateLabel = `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+  return `<div class="stale-banner" style="background:var(--warn-soft);border:1px solid rgba(200,146,75,.2);border-radius:var(--r-md);padding:12px 16px;margin-bottom:20px;color:var(--ink-2);font-size:13px;">
+    <strong style="color:var(--warn);">ⓘ 数据截止 ${escapeHtml(dateLabel)}</strong> · 距今 ${s.ageDays} 天 · 实时数据需要团队成员接入 Riven plugin
+  </div>`;
 }
 
 // ---------------------------------------------------------------------------

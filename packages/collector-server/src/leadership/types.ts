@@ -217,6 +217,13 @@ export interface OverviewSnapshot {
   projects: ProjectSnapshot[];
   collaboration: CollabHit[];
   attention: AttentionItem[];
+  /**
+   * Present when the freshest in-range session is more than ~1 day old
+   * relative to `computedAt`. Renderer surfaces this as a banner so the
+   * leader knows "today" KPIs are relative to a stale capture rather than
+   * live data. Absent when data is fresh (≤ 1 day old).
+   */
+  staleness?: { ageDays: number; lastActivityAt: string };
 }
 
 // =====================================================================

@@ -25,7 +25,7 @@ import {
   buildMemberDetail,
   buildProjectDetail,
 } from './aggregator.js';
-import { renderOverview } from './views/overview.html.js';
+import { renderOverview, renderStaleBanner } from './views/overview.html.js';
 import {
   renderMemberSlideoverFragments,
   renderProjectSlideoverFragments,
@@ -376,7 +376,8 @@ function renderPeopleTab(
     const body = snap.members.length === 0
       ? `<section id="members" class="section fade-in"><div class="lh-empty">这个窗口内没有成员活动</div></section>`
       : renderMembersFragment(snap); // no limit → full grid
-    const html = renderTabPage('people', rangeToNavLabelLocal(range.label), tightHero + body);
+    const banner = snap.staleness ? renderStaleBanner(snap.staleness) : '';
+    const html = renderTabPage('people', rangeToNavLabelLocal(range.label), banner + tightHero + body);
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);
   } catch {
@@ -417,7 +418,8 @@ function renderProjectsTab(
     const body = snap.projects.length === 0
       ? `<section id="projects" class="section fade-in"><div class="lh-empty">这个窗口内没有项目活动</div></section>`
       : renderProjectsFragment(snap); // no limit → full list
-    const html = renderTabPage('projects', rangeToNavLabelLocal(range.label), tightHero + body);
+    const banner = snap.staleness ? renderStaleBanner(snap.staleness) : '';
+    const html = renderTabPage('projects', rangeToNavLabelLocal(range.label), banner + tightHero + body);
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);
   } catch {

@@ -216,7 +216,9 @@ function numOrUndef(v: unknown): number | undefined {
 
 /**
  * Common last-path segments that should NOT be treated as project names.
- * When cwd ends in one of these, walk back toward root to find a real name.
+ * Retained from the legacy walk-from-right algorithm; in the new walk-from-root
+ * algorithm they serve as an additional skip alongside CONTAINER_DIRS so we
+ * never bottom out on a generic build / test folder.
  * Case-insensitive — all entries lower-cased; lookups lower-case the segment.
  */
 const COMMON_LAST_SEGMENTS = new Set([
@@ -226,22 +228,131 @@ const COMMON_LAST_SEGMENTS = new Set([
 ]);
 
 /**
+ * Per-OS user-home prefixes. When a cwd matches one of these, everything up to
+ * and including the username segment is stripped, so the next segment is a
+ * candidate project root (e.g. `/home/u/Matrix-Riven/...` → walk from
+ * `Matrix-Riven/...`).
+ *
+ * Order matters only insofar as we want the most specific Windows form to
+ * win when both could match — `^[A-Z]:\/Users\/[^/]+\/` covers the canonical
+ * Windows user-profile path.
+ */
+const HOME_PREFIX_PATTERNS: RegExp[] = [
+  /^\/home\/[^/]+\//,
+  /^\/Users\/[^/]+\//,
+  /^[A-Z]:\/Users\/[^/]+\//i,
+  /^\/root\//,
+];
+
+/**
+ * Top-level / container-style directories that hold *many* unrelated projects.
+ * We walk past these from root toward leaf so the project name resolves to the
+ * actual repo, not its parent workspace folder. Add cautiously: any name in
+ * here is permanently skipped during project-name derivation.
+ */
+const CONTAINER_DIRS = new Set<string>([
+  'projects', 'project', 'workspace', 'workspaces', 'work',
+  'code', 'codes', 'src', 'documents', 'desktop',
+  'dev', 'develop', 'repos', 'repo', 'git', 'github',
+  'github.com', 'gitlab.com',
+  '.cache', '.local',
+  // Claude Code conventions — `.claude/worktrees/<slug>` is a transient
+  // worktree, never a project root. Skip past so we land on the repo above.
+  '.claude', 'worktrees',
+  // Windows system folders that leak through when no home prefix matches
+  // (e.g. `C:\Users\x\AppData\Local\…` or paths that resolve to `Users`
+  // as a standalone segment because the username was missing).
+  'users', 'appdata', 'local', 'roaming', 'temp', 'tmp',
+  // Common literal fallback that should never surface
+  'unknown', 'private', 'jobs',
+]);
+
+/**
+ * Noise patterns we never want to surface as a project name:
+ *   - pure-hex hashes (commit-id-ish: `38a51917`)
+ *   - bench fixture names from earlier dogfood runs
+ *   - explicitly-disabled folders
+ *   - underscore-prefix temp dirs (`_456`, `_temp`)
+ *   - pure numeric dirs
+ *   - the lowercase-prefix + random-CamelCase suffix shape (`teamagent-2xvaUa`)
+ *     that bench fixtures generate
+ *   - bare drive letters (`C:` / `D:`) leaked through when no home prefix matched
+ */
+const NOISE_NAME_PATTERNS: RegExp[] = [
+  /^[0-9a-f]{6,}$/i,
+  /-bench-/i,
+  /-disabled-/i,
+  /^_/,
+  /^\d+$/,
+  // bench-fixture shape: lowercase-prefix then a random alnum suffix with at
+  // least one capital. Matches `teamagent-2xvaUa`, `foo-Bar9XyZ`, etc.; does
+  // NOT match conventional kebab names like `collector-server`.
+  /^[a-z]+-[A-Za-z0-9]*[A-Z][A-Za-z0-9]*$/,
+  /^[a-z]:$/i,
+  // Claude Code auto-generated worktree names: 3-word lowercase-kebab with
+  // a whimsical adjective + verb-ing + noun. Examples:
+  //   snug-mixing-kazoo, stateless-dancing-corbato, squishy-moseying-lovelace,
+  //   whimsical-napping-sunset, enumerated-roaming-engelbart, ticklish-floating-engelbart.
+  // The pattern requires (1) exactly two hyphens, (2) the MIDDLE token ending
+  // in `ing` — that's the distinctive shape that separates a worktree slug
+  // from real 3-part repo names. Keeps `collector-server-core` etc. safe.
+  /^[a-z]+-[a-z]+ing-[a-z]+$/,
+];
+
+/**
+ * Returns true when `name` looks like a generated / scratch directory name
+ * that should not appear as a leadership-dashboard project. The caller
+ * decides what to do (skip in derivation, drop from project list, etc.).
+ *
+ * Also treats CONTAINER_DIRS as noise: when a cwd contained nothing past a
+ * generic workspace folder, `deriveProjectName` falls back to that segment
+ * (e.g. `/private/tmp` → `tmp`). We don't want `tmp` / `unknown` / `projects`
+ * surfacing on the dashboard, so they're filtered here at the project-list
+ * gate.
+ */
+export function isNoiseProjectName(name: string): boolean {
+  if (!name || name.length < 2) return true;
+  if (CONTAINER_DIRS.has(name.toLowerCase())) return true;
+  if (name === 'unknown') return true;
+  return NOISE_NAME_PATTERNS.some((rx) => rx.test(name));
+}
+
+/**
  * Derive a project name from a cwd path when envelope.project_name is missing.
- * Walks from the last segment back toward root, skipping common build/test
- * directories that would otherwise collide many unrelated projects on the
- * same name (e.g. every "src" subfolder becoming a "src" project).
+ *
+ * Algorithm (walk-from-root, post-2026-05-17 calibration):
+ *   1. Normalize Windows separators → '/'.
+ *   2. Strip the user-home prefix (`/home/<u>/`, `C:/Users/<u>/`, etc.) so the
+ *      first remaining segment is a candidate project root.
+ *   3. Walk segments left-to-right; skip CONTAINER_DIRS (`projects`, `code`...),
+ *      noise (hash/bench/temp), and COMMON_LAST_SEGMENTS (legacy skip list).
+ *      Return the first segment that survives all three filters.
+ *   4. Last resort: return the right-most segment so we never return `unknown`
+ *      for a non-empty path.
  *
  * Edge cases:
  *   - empty cwd → 'unknown'
- *   - single-segment cwd → that segment
- *   - all segments are common → last segment as last resort
+ *   - all segments filtered → last segment (so dashboard still has a label)
  *   - handles both POSIX `/` and Windows `\` separators
  */
 export function deriveProjectName(cwd: string): string {
-  const parts = cwd.replace(/\\/g, '/').split('/').filter(p => p.length > 0);
+  if (!cwd) return 'unknown';
+  let trimmed = cwd.replace(/\\/g, '/');
+  for (const rx of HOME_PREFIX_PATTERNS) {
+    const m = trimmed.match(rx);
+    if (m) {
+      trimmed = trimmed.slice(m[0].length);
+      break;
+    }
+  }
+  const parts = trimmed.split('/').filter((p) => p.length > 0);
   if (parts.length === 0) return 'unknown';
-  for (let i = parts.length - 1; i >= 0; i--) {
-    if (!COMMON_LAST_SEGMENTS.has(parts[i]!.toLowerCase())) return parts[i]!;
+  for (const part of parts) {
+    const lc = part.toLowerCase();
+    if (CONTAINER_DIRS.has(lc)) continue;
+    if (isNoiseProjectName(part)) continue;
+    if (COMMON_LAST_SEGMENTS.has(lc)) continue;
+    return part;
   }
   return parts[parts.length - 1]!;
 }

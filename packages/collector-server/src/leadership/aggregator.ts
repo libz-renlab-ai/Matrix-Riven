@@ -1,7 +1,7 @@
 // packages/collector-server/src/leadership/aggregator.ts
 // Composes all 32 signal computers into OverviewSnapshot / MemberDetail / ProjectDetail.
 
-import { scanAllSessions } from './transcript-loader.js';
+import { scanAllSessions, isNoiseProjectName } from './transcript-loader.js';
 import type {
   ParsedSession,
   OverviewSnapshot,
@@ -69,20 +69,30 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
     buildMemberSnapshotInner(email, byEmail.get(email) ?? [], inRange, teamMedianTokens, input),
   );
 
-  // Projects
+  // Second pass — reclassify stateBadge against team distribution (P-D2).
+  // Absolute thresholds (e.g. failRate > 0.2) and the bare-keyword detector
+  // both flagged ~all members on the real 2026-05-14 snapshot — `help`,
+  // `stuck`, `卡住` are common substrings in any technical conversation.
+  // Relative percentile gates make the badge mean "high vs team", which is
+  // the only useful signal at small team sizes. `stuck` is preserved when
+  // the structural blocker detector fired (3 sessions same cwd, no commit).
+  reclassifyMemberStateAgainstTeam(members, byEmail);
+
+  // Projects — filter noise + low-volume scratch BEFORE finalizing list (P-D2).
+  // We compute raw snapshots over all groups, then apply the noise filter and
+  // the < 3-session cutoff with an optional env allow-list escape hatch.
   const byProject = groupBy(inRange, (s) => s.envelope.projectName);
   const projectNames = [...byProject.keys()].sort();
-  const projects: ProjectSnapshot[] = projectNames.map((name) =>
-    buildProjectSnapshotInner(name, byProject.get(name) ?? [], input.now),
-  );
+  const allowList = parseProjectAllowList(process.env.LEADERSHIP_PROJECT_ALLOW);
+  const projects: ProjectSnapshot[] = projectNames
+    .map((name) => buildProjectSnapshotInner(name, byProject.get(name) ?? [], input.now))
+    .filter((p) => isProjectInteresting(p, allowList));
 
   // Collaboration
   const collaboration: CollabHit[] = detectCollabHits(inRange);
 
   // Attention items (P-B4) — derived from member badges + project signals,
-  // sorted by severity desc so the editorial card can render row-by-row.
-  // We pass byProject so dormant rows can interpolate real "X days since
-  // last activity" rather than the old "48 小时无活动" template.
+  // sorted by severity desc, folded by shape, and globally capped (P-D2).
   const attention: AttentionItem[] = deriveAttention(members, projects, input.now, byProject);
 
   // Team-wide pace: today vs prior-7-day daily-average tokens.
@@ -125,7 +135,14 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
     todayCostUsd: Math.round(todayCostUsd * 100) / 100,
   };
 
-  return {
+  // Snapshot staleness — when the freshest session in `inRange` is older than
+  // 1 day relative to `now`, surface a banner-ready signal so the renderer
+  // can warn the leader that "today" KPIs are relative to a stale capture
+  // rather than live data. Computed AFTER the filter passes so we use the
+  // same session set the dashboard renders.
+  const staleness = computeStaleness(inRange, input.now);
+
+  const snap: OverviewSnapshot = {
     schemaVersion: 1,
     range: {
       start: input.range.start.toISOString(),
@@ -138,6 +155,178 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
     projects,
     collaboration,
     attention,
+  };
+  if (staleness) snap.staleness = staleness;
+  return snap;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers added during the 2026-05-17 data-trust-layer rebuild (P-D2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Inclusive linear-rank percentile. Returns 0 for empty inputs so callers can
+ * compose into Math.max(percentile(...), floor) without an `isFinite` guard.
+ *
+ * Why not interpolated: at typical team sizes (3-15 members) interpolation
+ * adds noise without changing the threshold meaningfully; nearest-rank keeps
+ * the floor-driven calibration intuitive.
+ */
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(Math.floor(sorted.length * p), sorted.length - 1);
+  return sorted[idx]!;
+}
+
+/**
+ * Reclassify each member's `stateBadge` against the team's distribution
+ * (P-D2). The original implementation used absolute thresholds (failRate
+ * > 0.2, sessions === 0, etc.) which flagged 6 of 6 members on the real
+ * 2026-05-14 snapshot because the whole team had high failure rates. The
+ * relative gates below cap the population that can be flagged to roughly
+ * the worst quartile, with a hard floor so a single outlier still trips
+ * when the team is small but well-behaved.
+ *
+ * State priority is preserved: stuck > needs_help > low_activity > quiet >
+ * active. `stuck` is left untouched because the blocker detector already uses
+ * structural evidence (3 sessions in the same cwd with no commit) that is
+ * NOT susceptible to the distribution problem.
+ */
+function reclassifyMemberStateAgainstTeam(
+  members: MemberSnapshot[],
+  byEmail: Map<string, ParsedSession[]>,
+): void {
+  if (members.length === 0) return;
+  const failureRates = members.map((m) => m.toolFailureRate ?? 0).filter((x) => x > 0);
+  const p75Failure = Math.max(percentile(failureRates, 0.75), 0.1);
+  const iterDensities = members.map((m) => m.iterationDensity ?? 0).filter((x) => x > 0);
+  const p75Iter = Math.max(percentile(iterDensities, 0.75), 2.5);
+  const recents = members.map((m) => {
+    const sessions = byEmail.get(m.email) ?? [];
+    return sessions.length;
+  });
+  const p20Recent = percentile(recents, 0.2);
+
+  for (const m of members) {
+    // Preserve `stuck` — that uses structural cwd-grouped evidence
+    // (3 same-cwd sessions, no commit), not distributional signals.
+    if (m.stateBadge === 'stuck') continue;
+    const fail = m.toolFailureRate ?? 0;
+    const iter = m.iterationDensity ?? 0;
+    const recent = (byEmail.get(m.email) ?? []).length;
+
+    if (fail > 0 && fail > p75Failure) {
+      m.stateBadge = 'needs_help';
+      continue;
+    }
+    if (iter > 0 && iter > p75Iter) {
+      m.stateBadge = 'stuck';
+      continue;
+    }
+    if (recent <= p20Recent && recent < 3) {
+      m.stateBadge = 'low_activity';
+      continue;
+    }
+    // No relative red flag → demote prior absolute-threshold / bare-keyword
+    // misfires to `active`. `quiet` only when truly zero sessions.
+    m.stateBadge = recent === 0 ? 'quiet' : 'active';
+  }
+}
+
+/**
+ * Parse the `LEADERSHIP_PROJECT_ALLOW` env var into a set of project names
+ * that bypass the noise + low-volume filters. Empty / unset → no escape
+ * hatch (default). Comma-separated, leading / trailing whitespace trimmed.
+ *
+ * This is the documented escape hatch for cases where the noise heuristics
+ * are too eager — set the env var on the server and the listed names come
+ * back into the dashboard unconditionally.
+ */
+function parseProjectAllowList(raw: string | undefined): Set<string> {
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  );
+}
+
+/**
+ * Apply the project-list noise filter introduced 2026-05-17 (P-D2). A
+ * project survives when:
+ *   - its name is in the LEADERSHIP_PROJECT_ALLOW allow-list (escape hatch);
+ *   OR
+ *   - its name is not noise (hash, bench fixture, etc.) AND it has at least
+ *     3 sessions over the 7-day window. The < 3 cutoff drops one-off
+ *     scratch projects without obscuring real low-volume work.
+ */
+function isProjectInteresting(p: ProjectSnapshot, allowList: Set<string>): boolean {
+  if (allowList.has(p.name)) return true;
+  if (isNoiseProjectName(p.name)) return false;
+  // Drop "project name == contributor's email local-part" — that's the
+  // signature of a session that ran in `/home/<user>/` without a real
+  // project folder. Treats those as personal scratch.
+  if (projectNameLooksLikeUsername(p)) return false;
+  const totalSessions = p.trend7d.reduce((a, b) => a + b, 0);
+  if (totalSessions < 3) return false;
+  // Additional volume gate (2026-05-17 calibration): a "real" project on
+  // the dashboard either spans ≥ 2 active days OR has ≥ 5 sessions. One
+  // afternoon of 3-4 sessions is usually scratch/exploration, not work
+  // worth dashboard real estate. Allow-list bypass already returned above.
+  const activeDays = p.trend7d.filter((n) => n > 0).length;
+  if (activeDays < 2 && totalSessions < 5) return false;
+  return true;
+}
+
+/**
+ * Detects the "project name is just a username" case (`hrdai`, `zhangziyi`
+ * on the 2026-05-14 snapshot). These come from sessions whose cwd was the
+ * user's home folder rather than a real repo. Compare lowercase.
+ */
+function projectNameLooksLikeUsername(p: ProjectSnapshot): boolean {
+  const nameLc = p.name.toLowerCase();
+  for (const c of p.contributors) {
+    const atIdx = c.email.indexOf('@');
+    const localPart = atIdx >= 0 ? c.email.slice(0, atIdx).toLowerCase() : c.email.toLowerCase();
+    if (nameLc === localPart) return true;
+    // Hostname-style emails (`zhangziyi@zhangziyideMacBook-Air.local`):
+    // strip trailing `de…` (CJK possessive in Hanyu Pinyin) and digits so
+    // we catch the common `<name>deLaptop` machine-id format.
+    if (nameLc === localPart.replace(/(de)?[A-Za-z0-9_-]+$/, '')) {
+      // Only accept this fuzzy match if the head is non-trivially long.
+      if (nameLc.length >= 4) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Compute snapshot staleness — `null` when the most-recent session in scope
+ * is within ~1 day of `now`. Otherwise return a structured payload the
+ * renderer turns into a "data is N days old" banner.
+ *
+ * Day boundary uses 86_400_000 ms = 1 day (no DST math needed — both ends
+ * are ms-since-epoch). `ageDays` is rounded to one decimal so the banner
+ * reads cleanly ("距今 3.2 天").
+ */
+function computeStaleness(
+  sessions: ParsedSession[],
+  now: Date,
+): { ageDays: number; lastActivityAt: string } | undefined {
+  if (sessions.length === 0) return undefined;
+  let lastTs = sessions[0]!.endTs.getTime();
+  for (const s of sessions) {
+    const t = s.endTs.getTime();
+    if (t > lastTs) lastTs = t;
+  }
+  const ageMs = now.getTime() - lastTs;
+  const ageDays = ageMs / 86_400_000;
+  if (ageDays <= 1) return undefined;
+  return {
+    ageDays: Math.round(ageDays * 10) / 10,
+    lastActivityAt: new Date(lastTs).toISOString(),
   };
 }
 
@@ -227,7 +416,48 @@ function deriveAttention(
     }
   }
 
-  return items.sort((a, b) => b.severity - a.severity);
+  return foldSameShape(items);
+}
+
+/**
+ * Collapse same-shape attention rows into a single "N 个X" row, then sort
+ * by severity DESC and cap at 10 globally (P-D2). A "shape" is defined by
+ * `${kind}:${tag}` — e.g. all "单点依赖" project rows fold together, all
+ * "求助" member rows fold together. Groups of 2 or fewer pass through
+ * unchanged so small teams don't see N=1 / N=2 fold rows.
+ *
+ * The folded row picks the worst severity in the group and packs the first
+ * three displayNames into `line2` so the leader still sees who is in the
+ * fold without expanding. Identical refId is preserved on the sample so a
+ * downstream slideover click still works (lands on the first member /
+ * project in the fold).
+ */
+function foldSameShape(items: AttentionItem[]): AttentionItem[] {
+  const groups = new Map<string, AttentionItem[]>();
+  for (const it of items) {
+    const key = `${it.kind}:${it.tag}`;
+    const arr = groups.get(key) ?? [];
+    arr.push(it);
+    groups.set(key, arr);
+  }
+  const folded: AttentionItem[] = [];
+  for (const group of groups.values()) {
+    if (group.length <= 2) {
+      folded.push(...group);
+      continue;
+    }
+    const sample = group[0]!;
+    const preview = group.slice(0, 3).map((g) => g.displayName).join('、');
+    const ellipsis = group.length > 3 ? '...' : '';
+    folded.push({
+      ...sample,
+      displayName: `${group.length} 个${sample.tag}`,
+      initials: String(group.length),
+      line2: preview + ellipsis,
+      severity: Math.max(...group.map((g) => g.severity)),
+    });
+  }
+  return folded.sort((a, b) => b.severity - a.severity).slice(0, 10);
 }
 
 /**
@@ -294,11 +524,11 @@ function buildMemberSnapshotInner(
 
   const warnings: string[] = [];
   const overflow = countContextOverflow(memberSessions);
-  if (overflow > 0) warnings.push(`context 爆炸 ${overflow} 次`);
+  if (overflow > 0) warnings.push(sanitizeWarningText(`context 爆炸 ${overflow} 次`));
   const failRate = computeToolFailureRate(memberSessions);
-  if (failRate > 0.2) warnings.push(`tool 失败率 ${(failRate * 100).toFixed(0)}%`);
+  if (failRate > 0.2) warnings.push(sanitizeWarningText(`tool 失败率 ${(failRate * 100).toFixed(0)}%`));
   const risky = extractRiskyActions(memberSessions);
-  if (risky.length > 0) warnings.push(`危险动作 ${risky.length} 次`);
+  if (risky.length > 0) warnings.push(sanitizeWarningText(`危险动作 ${risky.length} 次`));
 
   // Top project today
   const projectCounts = new Map<string, number>();
@@ -604,4 +834,31 @@ function filterToday(sessions: ParsedSession[], now: Date): ParsedSession[] {
   const dayMs = 24 * 60 * 60 * 1000;
   const todayStart = new Date(now.getTime() - dayMs);
   return sessions.filter((s) => s.startTs >= todayStart && s.startTs <= now);
+}
+
+// ---------------------------------------------------------------------------
+// Encoding sanitisation boundary (P-D2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Strip lone surrogate code points from a warning string before it enters
+ * the snapshot.
+ *
+ * Context: the on-the-wire `/api/overview` payload is clean UTF-8 — the
+ * mojibake the leadership audit observed (`镉遍橳铔ㄤ綔 92 婘\udca1`) was a
+ * downstream display issue (a terminal interpreting UTF-8 bytes as GBK).
+ * The trailing `\udca1` in that audit copy IS a real signal: it is a lone
+ * low surrogate that survived a Buffer-decode somewhere upstream and would
+ * have re-corrupted any JSON serializer.
+ *
+ * We replace lone surrogates with `?` at the construction site so even if
+ * upstream transcript bytes ever land mis-decoded, the warning string the
+ * dashboard sees stays valid UTF-16 and round-trips cleanly through
+ * JSON.stringify → JSON.parse on the client. Well-formed strings pass
+ * through unchanged.
+ */
+export function sanitizeWarningText(s: string): string {
+  // Match high surrogate not followed by low, OR low surrogate not preceded
+  // by high. The negative-lookaround pair makes the regex idempotent.
+  return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '?');
 }

@@ -50,11 +50,21 @@ function makeSession(
   };
 }
 
-// 3 sessions: alice×2 (project-alpha), bob×1 (project-beta)
+// 10 sessions per project — at 5 sessions each project survives the
+// post-2026-05-17 noise filter (which requires ≥ 5 sessions OR ≥ 2 active
+// days). All anchored to NOW with hour-scale offsets so today.sessions
+// remains meaningful.
 const FIXTURE: ParsedSession[] = [
   makeSession('alice@example.com', 'project-alpha', 'sess-a1', 1 * 60 * 60 * 1000),
   makeSession('alice@example.com', 'project-alpha', 'sess-a2', 2 * 60 * 60 * 1000, 'Long prompt: ' + 'x'.repeat(300)),
-  makeSession('bob@example.com',   'project-beta',  'sess-b1', 3 * 60 * 60 * 1000),
+  makeSession('alice@example.com', 'project-alpha', 'sess-a3', 3 * 60 * 60 * 1000),
+  makeSession('alice@example.com', 'project-alpha', 'sess-a4', 4 * 60 * 60 * 1000),
+  makeSession('alice@example.com', 'project-alpha', 'sess-a5', 5 * 60 * 60 * 1000),
+  makeSession('bob@example.com',   'project-beta',  'sess-b1', 6 * 60 * 60 * 1000),
+  makeSession('bob@example.com',   'project-beta',  'sess-b2', 7 * 60 * 60 * 1000),
+  makeSession('bob@example.com',   'project-beta',  'sess-b3', 8 * 60 * 60 * 1000),
+  makeSession('bob@example.com',   'project-beta',  'sess-b4', 9 * 60 * 60 * 1000),
+  makeSession('bob@example.com',   'project-beta',  'sess-b5', 10 * 60 * 60 * 1000),
 ];
 
 // ── tests ─────────────────────────────────────────────────────────────────
@@ -67,7 +77,7 @@ describe('buildOverviewSnapshot', () => {
 
   it('kpis.teamActivity.value equals total session count in range', () => {
     const snap = buildOverviewSnapshot({ sessions: FIXTURE, range: RANGE, now: NOW, collectorDir: '' });
-    expect(snap.kpis.teamActivity.value).toBe(3);
+    expect(snap.kpis.teamActivity.value).toBe(10);
   });
 
   it('members emails match expected set', () => {
@@ -209,15 +219,20 @@ function makeMixedFixture(): ParsedSession[] {
 
 /**
  * Project with bus-factor warning: one user contributes >70% of tokens.
+ * Spreads three heavy sessions across `whale@x.com` so the project survives
+ * the post-2026-05-17 < 3-session noise filter while still containing two
+ * distinct contributors (required for the bus-factor warning to fire).
  */
 function makeFixtureWithBusFactorProject(): ParsedSession[] {
-  const heavy = makeSessionWith('whale@x.com', 'monolith', 'bf-1', 1 * 60 * 60 * 1000, [makeMsg('a')], {
-    tokens: { input: 100_000, output: 50_000 },
-  });
-  const light = makeSessionWith('minnow@x.com', 'monolith', 'bf-2', 2 * 60 * 60 * 1000, [makeMsg('b')], {
+  const heavies = [1, 2, 3, 4].map((i) =>
+    makeSessionWith('whale@x.com', 'monolith', `bf-h${i}`, i * 60 * 60 * 1000, [makeMsg('a')], {
+      tokens: { input: 100_000, output: 50_000 },
+    }),
+  );
+  const light = makeSessionWith('minnow@x.com', 'monolith', 'bf-l1', 5 * 60 * 60 * 1000, [makeMsg('b')], {
     tokens: { input: 100, output: 50 },
   });
-  return [heavy, light];
+  return [...heavies, light];
 }
 
 describe('deriveAttention (P-B4)', () => {
@@ -405,3 +420,151 @@ describe('Phase 2 wired signals (P-A1)', () => {
     expect(result!.detail.collabDensity).toBeLessThanOrEqual(1);
   });
 });
+
+// =============================================================================
+// P-D2: data-trust-layer rebuild (2026-05-17)
+// =============================================================================
+
+/**
+ * Build a synthetic mass-noise fixture: 25 different project names, one
+ * session each. After the filter pass, none of these should appear because
+ * every project has fewer than 3 sessions.
+ */
+function makeNoiseProjectFixture(): ParsedSession[] {
+  const out: ParsedSession[] = [];
+  for (let i = 0; i < 25; i++) {
+    const name =
+      i < 5 ? `38a519${i.toString(16).padStart(2, '0')}` : // pure-hex hash names
+      i < 10 ? `teamagent-bench-x${i}` :                    // bench fixtures
+      `oneoff-real-${i}`;                                    // single-session real-looking
+    out.push(makeSession('alice@example.com', name, `sess-${i}`, i * 60 * 60 * 1000));
+  }
+  return out;
+}
+
+describe('P-D2 — project noise + low-volume filter', () => {
+  it('drops hash + bench + single-session projects, keeps allow-listed', () => {
+    const sessions = makeNoiseProjectFixture();
+    const snap = buildOverviewSnapshot({
+      sessions, range: RANGE, now: NOW, collectorDir: '',
+    });
+    // None of the noise patterns should leak through
+    for (const p of snap.projects) {
+      expect(p.name).not.toMatch(/^[0-9a-f]{6,}$/i);
+      expect(p.name).not.toMatch(/-bench-/);
+    }
+    // Single-session projects are all filtered → 0 left after filter
+    expect(snap.projects.length).toBe(0);
+  });
+
+  it('keeps projects with ≥ 5 sessions on a single day (passes volume gate)', () => {
+    const sessions: ParsedSession[] = [];
+    for (let i = 0; i < 5; i++) {
+      sessions.push(makeSession('alice@example.com', 'real-project', `sess-${i}`, i * 60 * 60 * 1000));
+    }
+    const snap = buildOverviewSnapshot({
+      sessions, range: RANGE, now: NOW, collectorDir: '',
+    });
+    expect(snap.projects.map((p) => p.name)).toContain('real-project');
+  });
+
+  it('drops projects with only one active day and < 5 sessions', () => {
+    // 3 sessions, single day → fails the volume gate even though name is real
+    const sessions: ParsedSession[] = [
+      makeSession('alice@example.com', 'one-shot', 's-1', 1 * 60 * 60 * 1000),
+      makeSession('alice@example.com', 'one-shot', 's-2', 2 * 60 * 60 * 1000),
+      makeSession('alice@example.com', 'one-shot', 's-3', 3 * 60 * 60 * 1000),
+    ];
+    const snap = buildOverviewSnapshot({
+      sessions, range: RANGE, now: NOW, collectorDir: '',
+    });
+    expect(snap.projects.map((p) => p.name)).not.toContain('one-shot');
+  });
+});
+
+describe('P-D2 — attention queue folding + cap', () => {
+  it('caps attention queue at 10 items globally', () => {
+    // 20 distinct one-person projects don't fold; verify after filter+fold
+    // the global cap still holds. Build with ≥ 3 sessions per project so
+    // they survive the project-noise filter.
+    const sessions: ParsedSession[] = [];
+    for (let p = 0; p < 20; p++) {
+      for (let s = 0; s < 3; s++) {
+        sessions.push(makeSession(`u${p}@x.com`, `proj-${p}`, `s-${p}-${s}`, (p * 3 + s) * 60 * 60 * 1000));
+      }
+    }
+    const snap = buildOverviewSnapshot({
+      sessions, range: RANGE, now: NOW, collectorDir: '',
+    });
+    expect(snap.attention.length).toBeLessThanOrEqual(10);
+  });
+
+  it('folds 3+ same-shape items into a single N-row', () => {
+    // 5 bus-factor projects (need ≥ 2 contributors with > 70% imbalance,
+    // and ≥ 5 sessions to pass the volume gate).
+    const sessions: ParsedSession[] = [];
+    for (let p = 0; p < 5; p++) {
+      for (let i = 1; i <= 4; i++) {
+        sessions.push(makeSessionWith(`whale-${p}@x.com`, `mono-${p}`, `h-${p}-${i}`, i * 60 * 60 * 1000, [makeMsg('heavy')], {
+          tokens: { input: 100_000, output: 50_000 },
+        }));
+      }
+      sessions.push(makeSessionWith(`minnow-${p}@x.com`, `mono-${p}`, `l-${p}-1`, 5 * 60 * 60 * 1000, [makeMsg('light')], {
+        tokens: { input: 100, output: 50 },
+      }));
+    }
+    const snap = buildOverviewSnapshot({
+      sessions, range: RANGE, now: NOW, collectorDir: '',
+    });
+    // All 5 should fold into one "N 个单点依赖" row
+    const busAttn = snap.attention.filter((a) => a.tag === '单点依赖');
+    expect(busAttn.length).toBe(1);
+    expect(busAttn[0]!.displayName).toMatch(/5 个单点依赖/);
+  });
+});
+
+describe('P-D2 — staleness detection', () => {
+  it('flags staleness when freshest session is > 1 day old', () => {
+    // Build sessions ending 3 days before NOW. Staleness is computed from
+    // the freshest endTs, so 5 sessions clustered around the same old day
+    // all have ageDays ≈ 3 — well past the > 1 day threshold.
+    const oldStart = new Date(NOW.getTime() - 3 * 24 * 60 * 60 * 1000);
+    function makeOld(id: string): ParsedSession {
+      return {
+        envelope: {
+          id, userId: 'a@x.com', machineId: 'm', sessionId: id,
+          cwd: '/home/a/real-project', projectName: 'real-project',
+          capturedAt: oldStart.toISOString(), rivenVersion: '1', consentedAt: null,
+        },
+        l1RedactionCount: 0, messages: [makeMsg('old work')], durationMs: 60_000,
+        startTs: oldStart, endTs: new Date(oldStart.getTime() + 60_000),
+        model: 'claude-sonnet-4-6',
+        tokens: { input: 1000, output: 500, cacheRead: 0, cacheCreation: 0 },
+      };
+    }
+    const sessions = [makeOld('old-1'), makeOld('old-2'), makeOld('old-3'), makeOld('old-4'), makeOld('old-5')];
+    const range = rangeFor(7, NOW);
+    const snap = buildOverviewSnapshot({
+      sessions, range, now: NOW, collectorDir: '',
+    });
+    expect(snap.staleness).toBeDefined();
+    expect(snap.staleness!.ageDays).toBeGreaterThan(2);
+    expect(snap.staleness!.ageDays).toBeLessThan(4);
+  });
+
+  it('does not flag staleness when data is fresh (< 1 day)', () => {
+    const snap = buildOverviewSnapshot({
+      sessions: FIXTURE, range: RANGE, now: NOW, collectorDir: '',
+    });
+    expect(snap.staleness).toBeUndefined();
+  });
+});
+
+/** Build a synthetic 7d range relative to a given `now`. */
+function rangeFor(days: number, end: Date) {
+  return {
+    start: new Date(end.getTime() - days * 24 * 60 * 60 * 1000),
+    end,
+    label: days === 7 ? ('7d' as const) : `${days}d`,
+  };
+}

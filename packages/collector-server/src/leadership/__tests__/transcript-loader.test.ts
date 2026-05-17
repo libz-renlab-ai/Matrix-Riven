@@ -3,7 +3,12 @@ import { gzipSync } from 'node:zlib';
 import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseEnvelopeBuffer, deriveProjectName, scanAllSessions } from '../transcript-loader.js';
+import {
+  parseEnvelopeBuffer,
+  deriveProjectName,
+  scanAllSessions,
+  isNoiseProjectName,
+} from '../transcript-loader.js';
 
 function buildEnvelope(transcriptLines: string[]): Buffer {
   const jsonl = transcriptLines.join('\n');
@@ -103,29 +108,90 @@ describe('parseEnvelopeBuffer', () => {
   });
 });
 
-describe('deriveProjectName common-name collapse', () => {
+/**
+ * Post-2026-05-17 (data trust layer rebuild): `deriveProjectName` walks
+ * left-to-right past home prefixes + container dirs + noise patterns to land
+ * on the REPO ROOT, not the rightmost cwd segment. Each fixture below pins one
+ * branch of that algorithm.
+ */
+describe('deriveProjectName walk-from-root', () => {
   const cases: [string, string][] = [
-    ['/home/u/Matrix-Riven/packages/collector-server/src', 'collector-server'],
-    ['C:\\u\\Matrix-Riven\\packages\\shared\\dist', 'shared'],
-    ['/home/u/Matrix-Riven/packages/collector-server/__tests__', 'collector-server'],
+    // Home prefix stripped + repo is first non-container segment
+    ['/home/u/Matrix-Riven/packages/collector-server/src', 'Matrix-Riven'],
+    ['/Users/X/projects/TeamBrain/api/routes.ts', 'TeamBrain'],
+    // Windows %USERPROFILE% + `Documents/projects/` container chain
+    ['C:\\Users\\Z\\Documents\\projects\\My-Repo\\src', 'My-Repo'],
+    // /root/ home prefix
+    ['/root/proj/foo/bar', 'proj'],
+    // No home prefix → drive letter + 1-char user folder filtered as noise,
+    // first real segment wins
+    ['C:\\u\\Matrix-Riven\\packages\\shared\\dist', 'Matrix-Riven'],
+    // Common-last list still skipped at the head
+    ['/home/u/Matrix-Riven/packages/collector-server/__tests__', 'Matrix-Riven'],
+    // node_modules anywhere on the path is irrelevant; first non-container wins
     ['/home/u/proj/node_modules', 'proj'],
+    // Pathological short paths — all single-char segments are filtered by
+    // the length-<2 noise guard, so we fall back to the last segment.
     ['/single', 'single'],
-    ['/a/.git', 'a'],
-    ['/x/y/build', 'y'],
-    ['/x/y/test', 'y'],
-    ['/x/y/SRC', 'y'],
-    ['/x/y/Build', 'y'],
+    ['/a/.git', '.git'],
+    ['/x/y/build', 'build'],
+    ['/x/y/test', 'test'],
+    ['/x/y/SRC', 'SRC'],
+    ['/x/y/Build', 'Build'],
   ];
   for (const [cwd, expected] of cases) {
     it(`${cwd} → ${expected}`, () => {
       expect(deriveProjectName(cwd)).toBe(expected);
     });
   }
-  it('compound: when both last and 2nd-to-last are common, walks further back', () => {
-    expect(deriveProjectName('/u/Matrix-Riven/packages/dist/src')).toBe('packages');
+  it('container chain bottoms out on the next real segment', () => {
+    // `u` is filtered (length < 2), then Matrix-Riven wins.
+    expect(deriveProjectName('/u/Matrix-Riven/packages/dist/src')).toBe('Matrix-Riven');
   });
-  it('all-common path: keeps last segment as last resort', () => {
+  it('all-segments-filtered → keeps last segment as last resort', () => {
+    // src + dist are both COMMON_LAST_SEGMENTS, no real candidate left
     expect(deriveProjectName('/src/dist')).toBe('dist');
+  });
+  it('empty cwd → unknown', () => {
+    expect(deriveProjectName('')).toBe('unknown');
+  });
+  it('noise patterns are skipped during the walk', () => {
+    // 38a51917 is a pure-hex noise dir; walk continues past it to the real name
+    expect(deriveProjectName('/home/u/38a51917/Matrix-Riven/src')).toBe('Matrix-Riven');
+  });
+});
+
+describe('isNoiseProjectName', () => {
+  it('flags pure-hex hash names', () => {
+    expect(isNoiseProjectName('38a51917')).toBe(true);
+    expect(isNoiseProjectName('deadbeef')).toBe(true);
+    expect(isNoiseProjectName('ABCDEF')).toBe(true);
+  });
+  it('flags bench / disabled fixture names', () => {
+    expect(isNoiseProjectName('teamagent-bench-teamagent-2xvaUa')).toBe(true);
+    expect(isNoiseProjectName('foo-disabled-2026')).toBe(true);
+  });
+  it('flags underscore-prefix temps and pure-numeric dirs', () => {
+    expect(isNoiseProjectName('_temp')).toBe(true);
+    expect(isNoiseProjectName('_456')).toBe(true);
+    expect(isNoiseProjectName('12345')).toBe(true);
+  });
+  it('flags lowercase-prefix + random-CamelCase suffix bench shape', () => {
+    expect(isNoiseProjectName('teamagent-2xvaUa')).toBe(true);
+  });
+  it('flags drive letters', () => {
+    expect(isNoiseProjectName('C:')).toBe(true);
+    expect(isNoiseProjectName('d:')).toBe(true);
+  });
+  it('accepts real-looking project names', () => {
+    expect(isNoiseProjectName('Matrix-Riven')).toBe(false);
+    expect(isNoiseProjectName('TeamBrain')).toBe(false);
+    expect(isNoiseProjectName('My-Repo')).toBe(false);
+    expect(isNoiseProjectName('collector-server')).toBe(false);
+    expect(isNoiseProjectName('CTA_generation')).toBe(false);
+  });
+  it('flags single-char names as noise', () => {
+    expect(isNoiseProjectName('a')).toBe(true);
   });
 });
 

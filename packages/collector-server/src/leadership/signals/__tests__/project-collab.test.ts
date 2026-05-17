@@ -83,6 +83,12 @@ describe('hasBusFactorWarning', () => {
   it('returns false when contributors array is empty', () => {
     expect(hasBusFactorWarning([])).toBe(false);
   });
+
+  it('returns false for a one-person project (post-2026-05-17 calibration)', () => {
+    // Solo project — owner has 100% by definition but there is no second
+    // contributor to lose, so this is not a bus-factor risk.
+    expect(hasBusFactorWarning([{ email: 'solo@x.com', sharePct: 1.0 }])).toBe(false);
+  });
 });
 
 describe('computeCollabDensity', () => {

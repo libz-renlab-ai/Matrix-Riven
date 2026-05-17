@@ -23,9 +23,18 @@ export function computeContributors(sessions: ParsedSession[]): Contributor[] {
   return out;
 }
 
-/** P4 — bus factor warning if top contributor owns > 0.7 of tokens. */
+/**
+ * P4 — bus-factor warning when the top contributor owns more than
+ * `BUS_FACTOR_THRESHOLD` of tokens.
+ *
+ * Calibration (2026-05-17 data-trust rebuild): a one-person project is NOT a
+ * bus-factor risk — it's a solo project, by definition. Require ≥ 2
+ * contributors before the warning can fire so the 77/79-flagged regression
+ * we saw on the real snapshot collapses to a meaningful subset.
+ */
 export function hasBusFactorWarning(contributors: Contributor[]): boolean {
-  return contributors.length > 0 && contributors[0]!.sharePct > BUS_FACTOR_THRESHOLD;
+  if (contributors.length < 2) return false;
+  return contributors[0]!.sharePct > BUS_FACTOR_THRESHOLD;
 }
 
 /** P5 — collaboration density: distinct files touched by ≥2 users / total distinct files. */
