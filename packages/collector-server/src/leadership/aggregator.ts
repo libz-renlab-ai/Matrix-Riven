@@ -278,6 +278,14 @@ export function buildMemberDetail(input: {
     .map((s): SessionSummary => {
       const firstUser = s.messages.find((m) => m.role === 'user');
       const text = firstUser?.text ?? '';
+      // P-A3: enumerate every non-empty user prompt for the L2 expand UI.
+      const allPrompts = s.messages
+        .filter((m) => m.role === 'user' && m.text.trim().length > 0)
+        .map((m) => ({
+          ts: (m.ts ?? s.startTs).toISOString(),
+          preview: m.text.length > 200 ? m.text.slice(0, 200) : m.text,
+          full: m.text,
+        }));
       return {
         sessionId: s.envelope.sessionId,
         capturedAt: s.envelope.capturedAt,
@@ -285,6 +293,7 @@ export function buildMemberDetail(input: {
         totalTokens: s.tokens.input + s.tokens.output,
         firstPromptPreview: text.length > 200 ? text.slice(0, 200) : text,
         firstPromptFull: text,
+        allPrompts,
       };
     });
 

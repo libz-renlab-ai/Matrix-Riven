@@ -49,12 +49,22 @@ export function renderMemberDetail(snap: MemberSnapshot & { detail: MemberDetail
           <div class="lh-session-item">
             <div class="lh-session-meta">${escapeHtml(s.capturedAt.slice(0, 19))} · ${escapeHtml(s.projectName)} · ${s.totalTokens.toLocaleString()} tok</div>
             <div class="lh-session-preview">${escapeHtml(s.firstPromptPreview)}${s.firstPromptFull.length > s.firstPromptPreview.length ? '…' : ''}</div>
-            ${
-              s.firstPromptFull.length > s.firstPromptPreview.length
-                ? `
-              <details><summary>展开全文</summary><pre class="lh-session-full">${escapeHtml(s.firstPromptFull)}</pre></details>`
-                : ''
-            }
+            <details><summary>展开全文（${s.allPrompts.length} 条 prompt）</summary>
+              <div class="lh-prompts-list">${s.allPrompts
+                .map(
+                  p => `
+                <div class="lh-prompt-item">
+                  <div class="lh-prompt-ts">${escapeHtml(formatTimeHMS(p.ts))}</div>
+                  <div class="lh-prompt-preview">${escapeHtml(p.preview)}${p.full.length > p.preview.length ? '…' : ''}</div>
+                  ${
+                    p.full.length > p.preview.length
+                      ? `<details><summary>全文</summary><pre class="lh-session-full">${escapeHtml(p.full)}</pre></details>`
+                      : ''
+                  }
+                </div>`,
+                )
+                .join('')}</div>
+            </details>
           </div>`,
           )
           .join('');
@@ -130,6 +140,17 @@ export function renderMemberDetail(snap: MemberSnapshot & { detail: MemberDetail
   <div class="lh-section-h">Sessions（${d.sessions.length}）</div>
   <div class="lh-sessions-list">${sessionsHtml}</div>
 </div></body></html>`;
+}
+
+// ---------------------------------------------------------------------------
+// Time format helper — extracts HH:MM:SS from an ISO timestamp; tolerant of
+// non-ISO inputs (falls back to the original string).
+// ---------------------------------------------------------------------------
+
+function formatTimeHMS(ts: string): string {
+  // ISO timestamps look like 2026-05-17T03:12:00.000Z → take chars 11..19
+  if (ts.length >= 19 && ts[10] === 'T') return ts.slice(11, 19);
+  return ts;
 }
 
 // ---------------------------------------------------------------------------

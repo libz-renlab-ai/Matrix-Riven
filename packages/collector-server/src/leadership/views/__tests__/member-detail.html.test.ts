@@ -21,6 +21,9 @@ function makeDetail(overrides: Partial<MemberDetail> = {}): MemberDetail {
     totalTokens: 12000,
     firstPromptPreview: 'Fix the login bug',       // 17 chars – fits in 200
     firstPromptFull: 'Fix the login bug',           // same → no details element
+    allPrompts: [
+      { ts: '2026-05-15T08:30:00.000Z', preview: 'Fix the login bug', full: 'Fix the login bug' },
+    ],
   };
   const longPrompt = 'A'.repeat(260);
   const longSession: SessionSummary = {
@@ -30,6 +33,9 @@ function makeDetail(overrides: Partial<MemberDetail> = {}): MemberDetail {
     totalTokens: 88000,
     firstPromptPreview: longPrompt.slice(0, 200),  // 200 chars
     firstPromptFull: longPrompt,                    // 260 chars → needs details
+    allPrompts: [
+      { ts: '2026-05-15T14:00:00.000Z', preview: longPrompt.slice(0, 200), full: longPrompt },
+    ],
   };
   return {
     toolFailureRate: 0.12,
@@ -116,12 +122,13 @@ describe('renderMemberDetail', () => {
     expect(html).toContain('展开全文');
   });
 
-  it('does NOT render <details> when full text equals preview', () => {
-    // Short session: firstPromptPreview === firstPromptFull → no details
-    // We isolate by using a snapshot with only the short session
+  it('does NOT render a per-prompt <summary>全文</summary> when prompt full equals preview (P-A3)', () => {
+    // Short session: firstPromptPreview === firstPromptFull → outer expand-all
+    // <details> still renders (per-session toggle for the prompt list), but no
+    // inner per-prompt 全文 toggle should appear.
     const snap = makeSnapshot({ sessions: [makeDetail().sessions[0]!] });
     const html = renderMemberDetail(snap);
-    expect(html).not.toContain('<details>');
+    expect(html).not.toContain('<summary>全文</summary>');
   });
 
   it('shows empty-state message when sessions list is empty', () => {
@@ -134,5 +141,26 @@ describe('renderMemberDetail', () => {
     const snap = makeSnapshot({ riskyActions: [] });
     const html = renderMemberDetail(snap);
     expect(html).not.toContain('风险动作');
+  });
+
+  it('expand renders all user prompts, not just first (P-A3)', () => {
+    const multiPromptSession: SessionSummary = {
+      sessionId: 'abc',
+      capturedAt: '2026-05-17T03:12:00Z',
+      projectName: 'mr',
+      totalTokens: 100,
+      firstPromptPreview: 'first preview',
+      firstPromptFull: 'first preview full',
+      allPrompts: [
+        { ts: '2026-05-17T03:12:00Z', preview: 'first preview', full: 'first preview full' },
+        { ts: '2026-05-17T03:15:00Z', preview: 'second preview', full: 'second preview full' },
+        { ts: '2026-05-17T03:20:00Z', preview: 'third preview', full: 'third preview full' },
+      ],
+    };
+    const snap = makeSnapshot({ sessions: [multiPromptSession] });
+    const html = renderMemberDetail(snap);
+    expect(html).toContain('first preview');
+    expect(html).toContain('second preview');
+    expect(html).toContain('third preview');
   });
 });

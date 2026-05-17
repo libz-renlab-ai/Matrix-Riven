@@ -123,6 +123,12 @@ export interface SessionSummary {
   /** First user prompt, truncated to 200 chars (the L1-privacy preview). */
   firstPromptPreview: string;
   firstPromptFull: string;       // included so the UI can do client-side expand without another fetch
+  /**
+   * All user prompts in the session (P-A3). Each carries a 200-char preview +
+   * full text so the UI can render an expand-all list with per-prompt full
+   * toggles. Ordered chronologically (oldest first).
+   */
+  allPrompts: { ts: string; preview: string; full: string }[];
 }
 
 export interface ProjectSnapshot {
