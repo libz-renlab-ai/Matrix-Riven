@@ -146,6 +146,19 @@ async function getJson(path: string): Promise<{ status: number; body: unknown; c
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
+describe('GET /api/llm/status', () => {
+  it('returns {enabled:false} when llmCache is undefined', async () => {
+    const { status, body } = await getJson('/api/llm/status');
+    expect(status).toBe(200);
+    expect(body).toEqual({ enabled: false });
+  });
+
+  it('rejects non-GET with 405', async () => {
+    const res = await fetch(`${baseUrl}/api/llm/status`, { method: 'POST' });
+    expect(res.status).toBe(405);
+  });
+});
+
 describe('GET /api/overview', () => {
   it('returns 200 with JSON content-type', async () => {
     const { status, contentType } = await getJson('/api/overview');

@@ -90,6 +90,14 @@ export class LlmCache {
   }
 
   /**
+   * Iterate the live cache keys (for ops endpoints / per-tier counts).
+   * Returns a snapshot array so callers can read while puts happen.
+   */
+  keys(): string[] {
+    return [...this.mem.keys()];
+  }
+
+  /**
    * Append a new entry to the JSONL file and update the in-mem Map.
    * Serialized via internal write lock to prevent torn writes across
    * overlapping concurrent calls.

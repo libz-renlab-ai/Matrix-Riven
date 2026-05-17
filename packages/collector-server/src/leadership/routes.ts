@@ -21,6 +21,7 @@ import { createHash } from 'node:crypto';
 import type { TtlCache } from './cache.js';
 import type { DateRange } from './types.js';
 import type { LlmCache } from './llm/cache.js';
+import { requireBearerToken } from '../auth-gate.js';
 import {
   buildOverviewSnapshot,
   buildMemberDetail,
@@ -61,6 +62,15 @@ export interface LeadershipRouteDeps {
    * — `LLM_ENABLED` off) preserves byte-identical pre-LLM behaviour.
    */
   llmCache?: LlmCache;
+  /**
+   * Optional Bearer-token gate. When non-empty, every leadership endpoint
+   * (`/api/overview`, `/overview`, `/api/members/*`, `/api/projects/*`,
+   * `/api/llm/status`) requires `Authorization: Bearer <token>`. Source
+   * from `RIVEN_AUTH_TOKEN` env in `bin-prod-server.ts`. Empty / undefined
+   * disables auth — matches the original `POST /v1/cc-sessions` behaviour
+   * and keeps localhost demos friction-free when HOST=127.0.0.1.
+   */
+  authToken?: string;
 }
 
 /**
@@ -80,7 +90,75 @@ export function handleLeadershipRequest(
   const pathname = qIdx >= 0 ? rawUrl.slice(0, qIdx) : rawUrl;
   const query = qIdx >= 0 ? new URLSearchParams(rawUrl.slice(qIdx + 1)) : new URLSearchParams();
 
+  // Quick check: is this a leadership-owned path? If not, return false fast
+  // (caller falls through). Doing the prefix match here lets us gate auth
+  // BEFORE we run any heavy work, and lets a bearer-token failure return
+  // 401 with no per-route duplication.
+  const isLeadershipPath =
+    pathname === '/api/overview' ||
+    pathname === '/api/llm/status' ||
+    pathname === '/overview' ||
+    pathname === '/people' ||
+    pathname === '/projects' ||
+    pathname === '/highlights' ||
+    pathname === '/sessions' ||
+    pathname.startsWith('/api/members/') ||
+    pathname.startsWith('/api/projects/') ||
+    pathname.startsWith('/members/') ||
+    pathname.startsWith('/projects/');
+  if (isLeadershipPath && deps.authToken && deps.authToken.length > 0) {
+    const auth = requireBearerToken(req.headers, deps.authToken);
+    if (!auth.ok) {
+      // GET / is the only ambiguous path — when ?sid=X is present, we want
+      // to fall through to the Phase-1 dashboard rather than 401. Other
+      // paths are leadership-only.
+      sendJson(res, 401, { error: 'unauthorized' });
+      return true;
+    }
+  }
+  // GET / falls through to leadership when no ?sid=; gate it on auth too
+  // when a token is configured.
+  if (pathname === '/' && req.method === 'GET' && !query.has('sid') && deps.authToken) {
+    const auth = requireBearerToken(req.headers, deps.authToken);
+    if (!auth.ok) {
+      sendJson(res, 401, { error: 'unauthorized' });
+      return true;
+    }
+  }
+
   // ── API routes ──────────────────────────────────────────────────────────────
+
+  // ── /api/llm/status — ops endpoint for the LLM narrative layer ──────────────
+  // Returns a small JSON blob so a launch-day operator (or a Grafana scrape)
+  // can confirm the worker is ON, the cache is hydrated, and the daily budget
+  // is not yet exhausted. When LLM_ENABLED is off (no llmCache passed in)
+  // the response is `{enabled:false}` — same byte-identical baseline as the
+  // rest of the dashboard.
+  if (pathname === '/api/llm/status') {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'method_not_allowed' });
+      return true;
+    }
+    if (!deps.llmCache) {
+      sendJson(res, 200, { enabled: false });
+      return true;
+    }
+    const stats = deps.llmCache.stats();
+    // Group cache entries by tier prefix so ops can see at a glance which
+    // tier hasn't filled. `stats()` doesn't expose per-tier breakdown, so we
+    // do it here from the in-mem Map via a tiny helper.
+    const byTier = llmCacheTierCounts(deps.llmCache);
+    sendJson(res, 200, {
+      enabled: true,
+      cache: {
+        entries: stats.entries,
+        bytes: stats.bytes,
+        todayCostUsd: Number(stats.todayCostUsd.toFixed(4)),
+        byTier,
+      },
+    });
+    return true;
+  }
 
   if (pathname === '/api/overview') {
     if (req.method !== 'GET') {
@@ -90,6 +168,10 @@ export function handleLeadershipRequest(
     const rangeStr = query.get('range') ?? undefined;
     const nowDate = now();
     const range = parseRange(rangeStr, nowDate);
+    if (range === null) {
+      sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+      return true;
+    }
     const cacheKey = `/api/overview|${range.label}`;
     // P-C1: cache holds the *enriched* payload + a pre-computed ETag, so
     // repeated polls within the same TTL window return both an identical
@@ -122,7 +204,15 @@ export function handleLeadershipRequest(
         const body = { ...snap, _html } as Record<string, unknown>;
         entry = { body, etag: etagFor(body) };
         deps.cache.set(cacheKey, entry);
-      } catch {
+      } catch (err) {
+        // Log server-side so ops can diagnose, but never leak the stack
+        // through the HTTP response (`{error:'internal'}` is opaque on
+        // purpose). The route+pathname tells the operator where it failed.
+        process.stderr.write(
+          `[leadership] 500 on ${req.method ?? 'GET'} ${pathname}: ${
+            err instanceof Error ? err.stack ?? err.message : String(err)
+          }\n`,
+        );
         sendJson(res, 500, { error: 'internal' });
         return true;
       }
@@ -149,6 +239,10 @@ export function handleLeadershipRequest(
     const rangeStr = query.get('range') ?? undefined;
     const nowDate = now();
     const range = parseRange(rangeStr, nowDate);
+    if (range === null) {
+      sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+      return true;
+    }
     const cacheKey = `/api/members/${localPart}|${range.label}`;
     // P-C3: cache holds the *enriched* payload + a pre-computed ETag so that
     // the slide-over live-polling loop (which fires every 30 s while the
@@ -181,7 +275,15 @@ export function handleLeadershipRequest(
         const body = { ...detail, _html } as Record<string, unknown>;
         entry = { body, etag: etagFor(body) };
         deps.cache.set(cacheKey, entry);
-      } catch {
+      } catch (err) {
+        // Log server-side so ops can diagnose, but never leak the stack
+        // through the HTTP response (`{error:'internal'}` is opaque on
+        // purpose). The route+pathname tells the operator where it failed.
+        process.stderr.write(
+          `[leadership] 500 on ${req.method ?? 'GET'} ${pathname}: ${
+            err instanceof Error ? err.stack ?? err.message : String(err)
+          }\n`,
+        );
         sendJson(res, 500, { error: 'internal' });
         return true;
       }
@@ -208,6 +310,10 @@ export function handleLeadershipRequest(
     const rangeStr = query.get('range') ?? undefined;
     const nowDate = now();
     const range = parseRange(rangeStr, nowDate);
+    if (range === null) {
+      sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+      return true;
+    }
     const cacheKey = `/api/projects/${projectName}|${range.label}`;
     // P-C3: same enriched-payload + ETag cache shape as the member endpoint.
     let entry = deps.cache.get(cacheKey) as
@@ -230,7 +336,15 @@ export function handleLeadershipRequest(
         const body = { ...detail, _html } as Record<string, unknown>;
         entry = { body, etag: etagFor(body) };
         deps.cache.set(cacheKey, entry);
-      } catch {
+      } catch (err) {
+        // Log server-side so ops can diagnose, but never leak the stack
+        // through the HTTP response (`{error:'internal'}` is opaque on
+        // purpose). The route+pathname tells the operator where it failed.
+        process.stderr.write(
+          `[leadership] 500 on ${req.method ?? 'GET'} ${pathname}: ${
+            err instanceof Error ? err.stack ?? err.message : String(err)
+          }\n`,
+        );
         sendJson(res, 500, { error: 'internal' });
         return true;
       }
@@ -330,6 +444,10 @@ function renderOverviewTab(
   const rangeStr = query.get('range') ?? undefined;
   const nowDate = now();
   const range = parseRange(rangeStr, nowDate);
+  if (range === null) {
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+    return true;
+  }
   // Single cache key — /  and  /overview  produce the same payload.
   const cacheKey = `html|/overview|${range.label}`;
   const cached = deps.cache.get(cacheKey);
@@ -372,6 +490,10 @@ function renderPeopleTab(
     return true;
   }
   const range = parseRange(query.get('range') ?? undefined, now());
+  if (range === null) {
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+    return true;
+  }
   const cacheKey = `html|/people|${range.label}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
@@ -415,6 +537,10 @@ function renderProjectsTab(
     return true;
   }
   const range = parseRange(query.get('range') ?? undefined, now());
+  if (range === null) {
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+    return true;
+  }
   const cacheKey = `html|/projects|${range.label}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
@@ -504,8 +630,22 @@ function renderStubTab(active: ActiveTab, title: string): string {
 </html>`;
 }
 
+/**
+ * Defensive headers applied to every leadership response. The dashboard
+ * embeds inline `<script>` (small refresh-loop) and inline `<style>` so we
+ * intentionally do NOT set a strict CSP — those would need refactoring all
+ * `views/*.html.ts`. We DO set the cheap, drop-in headers that block easy
+ * exploits (MIME-sniff bypass, clickjacking, referrer leak).
+ */
+function applySecurityHeaders(res: ServerResponse): void {
+  res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('x-frame-options', 'DENY');
+  res.setHeader('referrer-policy', 'no-referrer');
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);
+  applySecurityHeaders(res);
   res.statusCode = status;
   res.setHeader('content-type', 'application/json; charset=utf-8');
   res.setHeader('content-length', Buffer.byteLength(json));
@@ -519,11 +659,25 @@ function sendJsonWithEtag(
   etag: string,
 ): void {
   const json = JSON.stringify(body);
+  applySecurityHeaders(res);
   res.statusCode = status;
   res.setHeader('content-type', 'application/json; charset=utf-8');
   res.setHeader('content-length', Buffer.byteLength(json));
   res.setHeader('etag', etag);
   res.end(json);
+}
+
+/**
+ * Count cache entries by tier prefix (`t1:`, `t2:`, …) for the
+ * `/api/llm/status` endpoint. Cheap O(n) walk over the in-mem key set.
+ */
+function llmCacheTierCounts(cache: LlmCache): Record<string, number> {
+  const counts: Record<string, number> = { t1: 0, t2: 0, t3: 0, t4: 0, t5: 0 };
+  for (const k of cache.keys()) {
+    const tier = k.split(':')[0]!;
+    if (tier in counts) counts[tier] = (counts[tier] ?? 0) + 1;
+  }
+  return counts;
 }
 
 /**
@@ -535,6 +689,7 @@ function etagFor(obj: unknown): string {
 }
 
 function sendHtml(res: ServerResponse, status: number, html: string): void {
+  applySecurityHeaders(res);
   res.statusCode = status;
   res.setHeader('content-type', 'text/html; charset=utf-8');
   res.setHeader('content-length', Buffer.byteLength(html));
@@ -587,9 +742,15 @@ function resolveEmailByLocalPart(collectorDir: string, localPart: string): strin
 
 /**
  * Parse the `range` query parameter into a `DateRange`.
- * Defaults to `7d` for unknown / missing values.
+ * - missing / empty → defaults to `7d` (the common case for HTML loads)
+ * - one of {today, 24h, 7d, 30d} → that range
+ * - anything else → null (route emits 400 so a misconfigured client doesn't
+ *   silently get stale-window data without realising it)
  */
-function parseRange(rangeStr: string | undefined, now: Date): DateRange {
+function parseRange(rangeStr: string | undefined, now: Date): DateRange | null {
+  if (rangeStr !== undefined && rangeStr !== '' && !['today', '24h', '7d', '30d'].includes(rangeStr)) {
+    return null;
+  }
   const end = new Date(now);
   let start: Date;
   let label: string;
