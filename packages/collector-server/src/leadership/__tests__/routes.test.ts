@@ -287,3 +287,81 @@ describe('HTML routes', () => {
     expect(text).toBe('not handled');
   });
 });
+
+// ── P-B2: 5 leadership tab routes + `/` deferral ──────────────────────────────
+
+describe('5 leadership tab routes (P-B2)', () => {
+  it.each(['/overview', '/people', '/projects', '/activity', '/insights'])(
+    'GET %s returns 200 HTML containing the nav',
+    async (path) => {
+      const res = await fetch(`${baseUrl}${path}`);
+      expect(res.status).toBe(200);
+      const ct = res.headers.get('content-type');
+      expect(ct).toContain('text/html');
+      const html = await res.text();
+      expect(html).toContain('class="nav');
+      expect(html).toContain('class="tab');
+      expect(html).toContain('Overview');
+    },
+  );
+
+  it('GET / with no query falls through to the Overview tab rendering', async () => {
+    const res = await fetch(`${baseUrl}/`);
+    expect(res.status).toBe(200);
+    const ct = res.headers.get('content-type');
+    expect(ct).toContain('text/html');
+    const html = await res.text();
+    expect(html).toContain('class="nav');
+    expect(html).toContain('lh-kpi-card'); // real overview content, not a stub
+  });
+
+  it('GET /overview marks the Overview tab as active', async () => {
+    const res = await fetch(`${baseUrl}/overview`);
+    const html = await res.text();
+    expect(html).toMatch(/class="tab active"[^>]*>[^<]*Overview/);
+  });
+
+  it('GET /people marks the People tab as active and is a stub', async () => {
+    const res = await fetch(`${baseUrl}/people`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toMatch(/class="tab active"[^>]*>[^<]*People/);
+    expect(html).toContain('尚未实现');
+  });
+
+  it('GET /activity is a stub page', async () => {
+    const res = await fetch(`${baseUrl}/activity`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('尚未实现');
+    expect(html).toMatch(/class="tab active"[^>]*>[^<]*Activity/);
+  });
+
+  it('GET /insights is a stub page', async () => {
+    const res = await fetch(`${baseUrl}/insights`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('尚未实现');
+    expect(html).toMatch(/class="tab active"[^>]*>[^<]*Insights/);
+  });
+
+  it('GET / with ?sid=XYZ defers to the outer dispatcher (handler returns false)', async () => {
+    // The test server is wired to write "not handled" + 404 when
+    // handleLeadershipRequest returns false. That signal is the contract the
+    // P-A4 raw-link flow depends on.
+    const res = await fetch(`${baseUrl}/?sid=01ABC`);
+    expect(res.status).toBe(404);
+    const text = await res.text();
+    expect(text).toBe('not handled');
+  });
+
+  it('GET /projects/:name still routes to project detail (not the stub tab)', async () => {
+    // Regression: the literal /projects route must not shadow the
+    // /projects/<name> regex below it.
+    const res = await fetch(`${baseUrl}/projects/${encodeURIComponent(PROJECT_A)}`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('lh-kpi-card');
+    expect(html).not.toContain('尚未实现');
+  });
+});

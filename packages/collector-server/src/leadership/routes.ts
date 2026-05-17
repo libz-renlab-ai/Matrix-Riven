@@ -27,6 +27,7 @@ import {
 import { renderOverview } from './views/overview.html.js';
 import { renderMemberDetail } from './views/member-detail.html.js';
 import { renderProjectDetail } from './views/project-detail.html.js';
+import { renderNav, type ActiveTab } from './views/_nav.html.js';
 import { LEADERSHIP_CSS } from './views/styles.css.js';
 
 // ── public interface ──────────────────────────────────────────────────────────
@@ -170,33 +171,38 @@ export function handleLeadershipRequest(
 
   // ── HTML routes ─────────────────────────────────────────────────────────────
 
+  // P-B2: GET / falls through to the Overview tab UNLESS the URL carries a
+  // `?sid=` query — in which case we defer to the Phase-1 dashboard (handled
+  // by the outer dispatcher via `dashboard-html.ts`). The P-A4 "查看 raw ↗"
+  // link relies on `/?sid=<...>` reaching that legacy page.
+  if (pathname === '/' && req.method === 'GET') {
+    if (query.has('sid')) {
+      // Not ours — let the outer dispatcher serve the Phase-1 dashboard.
+      return false;
+    }
+    return renderOverviewTab(req, res, deps, query, now);
+  }
+
   if (pathname === '/overview') {
-    if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
-      return true;
-    }
-    const rangeStr = query.get('range') ?? undefined;
-    const nowDate = now();
-    const range = parseRange(rangeStr, nowDate);
-    const cacheKey = `html|${pathname}|${range.label}`;
-    const cached = deps.cache.get(cacheKey);
-    if (cached !== undefined) {
-      sendHtml(res, 200, cached as string);
-      return true;
-    }
-    try {
-      const snap = buildOverviewSnapshot({
-        collectorDir: deps.collectorDir,
-        range,
-        now: nowDate,
-        mainProjects: deps.mainProjects,
-      });
-      const html = renderOverview(snap);
-      deps.cache.set(cacheKey, html);
-      sendHtml(res, 200, html);
-    } catch {
-      sendHtml(res, 500, render404('Overview (server error)'));
-    }
+    return renderOverviewTab(req, res, deps, query, now);
+  }
+
+  // P-B2: stub tab routes — render the shared frosted nav with a "尚未实现"
+  // placeholder. Inner content lands in Phase 3.
+  if (pathname === '/people' && req.method === 'GET') {
+    sendHtml(res, 200, renderStubTab('people', 'People'));
+    return true;
+  }
+  if (pathname === '/projects' && req.method === 'GET') {
+    sendHtml(res, 200, renderStubTab('projects', 'Projects'));
+    return true;
+  }
+  if (pathname === '/activity' && req.method === 'GET') {
+    sendHtml(res, 200, renderStubTab('activity', 'Activity'));
+    return true;
+  }
+  if (pathname === '/insights' && req.method === 'GET') {
+    sendHtml(res, 200, renderStubTab('insights', 'Insights'));
     return true;
   }
 
@@ -283,6 +289,71 @@ export function handleLeadershipRequest(
 }
 
 // ── internal helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Shared handler for both `GET /` (no `?sid=`) and `GET /overview`.
+ * Returns `true` (always handled — either 200 or 500 HTML).
+ */
+function renderOverviewTab(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: LeadershipRouteDeps,
+  query: URLSearchParams,
+  now: () => Date,
+): boolean {
+  if (req.method !== 'GET') {
+    sendJson(res, 405, { error: 'method_not_allowed' });
+    return true;
+  }
+  const rangeStr = query.get('range') ?? undefined;
+  const nowDate = now();
+  const range = parseRange(rangeStr, nowDate);
+  // Single cache key — /  and  /overview  produce the same payload.
+  const cacheKey = `html|/overview|${range.label}`;
+  const cached = deps.cache.get(cacheKey);
+  if (cached !== undefined) {
+    sendHtml(res, 200, cached as string);
+    return true;
+  }
+  try {
+    const snap = buildOverviewSnapshot({
+      collectorDir: deps.collectorDir,
+      range,
+      now: nowDate,
+      mainProjects: deps.mainProjects,
+    });
+    const html = renderOverview(snap);
+    deps.cache.set(cacheKey, html);
+    sendHtml(res, 200, html);
+  } catch {
+    sendHtml(res, 500, render404('Overview (server error)'));
+  }
+  return true;
+}
+
+/**
+ * Render a minimal "尚未实现" placeholder page for the People / Projects /
+ * Activity / Insights tabs (P-B2). Inner content arrives in Phase 3.
+ */
+function renderStubTab(active: ActiveTab, title: string): string {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)} · Matrix·Riven</title>
+<style>${LEADERSHIP_CSS}</style>
+</head>
+<body>
+<div class="shell">
+  ${renderNav(active)}
+  <div style="padding:80px 40px;text-align:center;color:var(--ink-3);">
+    <div class="serif" style="font-size:24px;color:var(--ink-2);margin-bottom:8px;">尚未实现</div>
+    <div>${escapeHtml(title)} tab 计划在 Phase 3 上线</div>
+  </div>
+</div>
+</body>
+</html>`;
+}
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);

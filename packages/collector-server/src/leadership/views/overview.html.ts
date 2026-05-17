@@ -10,6 +10,7 @@
 
 import type { OverviewSnapshot, MemberSnapshot, ProjectSnapshot, CollabHit } from '../types.js';
 import { LEADERSHIP_CSS, avatarColor, emailInitials } from './styles.css.js';
+import { renderNav } from './_nav.html.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -49,6 +50,8 @@ export function renderOverview(snapshot: OverviewSnapshot): string {
     : `<div class="lh-section-h">协作机会（${collaboration.length}）</div>
        <div class="lh-collab-list">${collaboration.slice(0, 10).map(renderCollabCard).join('')}</div>`;
 
+  const navRangeLabel = rangeToNavLabel(range.label);
+
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -57,6 +60,8 @@ export function renderOverview(snapshot: OverviewSnapshot): string {
 <style>${LEADERSHIP_CSS}</style>
 </head>
 <body>
+<div class="shell">
+${renderNav('overview', { rangeLabel: navRangeLabel })}
 <div class="lh-container">
   <div class="lh-topbar">
     <h1>团队 leadership 视图</h1>
@@ -72,9 +77,21 @@ export function renderOverview(snapshot: OverviewSnapshot): string {
   <div class="lh-project-list">${projectsHtml}</div>
   ${collabHtml}
 </div>
+</div>
 <script>${REFRESH_SCRIPT}</script>
 </body>
 </html>`;
+}
+
+/** Map a DateRange.label (`7d` / `24h` / `today` / `30d`) to a CJK nav label. */
+function rangeToNavLabel(label: string): string {
+  switch (label) {
+    case '24h': return '24 小时';
+    case 'today': return '今日';
+    case '30d': return '30 日窗口';
+    case '7d':
+    default: return '7 日窗口';
+  }
 }
 
 // ---------------------------------------------------------------------------

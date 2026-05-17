@@ -285,8 +285,20 @@ describe('mock-server dashboard', () => {
     await server.close();
   });
 
-  it('GET / returns the HTML dashboard', async () => {
+  // P-B2: GET / now serves the leadership Overview tab. The legacy
+  // "Matrix Riven Collector" Phase-1 dashboard is reached via `?sid=<...>`
+  // (the P-A4 "查看 raw ↗" link relies on this deferral).
+  it('GET / returns the leadership Overview tab (P-B2)', async () => {
     const res = await fetch(`${server.url}/`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type') ?? '').toContain('text/html');
+    const body = await res.text();
+    expect(body).toContain('class="nav');
+    expect(body).toContain('Overview');
+  });
+
+  it('GET /?sid=XYZ still serves the Phase-1 dashboard (P-A4 raw link)', async () => {
+    const res = await fetch(`${server.url}/?sid=01ABC`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type') ?? '').toContain('text/html');
     const body = await res.text();
