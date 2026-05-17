@@ -8,6 +8,7 @@ import type {
   ParsedToolUse,
   ParsedToolResult,
 } from './types.js';
+import { loadIndexSync, INDEX_FILENAME, type IndexEntry } from './index.js';
 
 /**
  * Parse one on-disk envelope JSON (the format collector-server writes).
@@ -396,31 +397,90 @@ export function scanAllSessions(collectorDir: string, opts: ScanOptions = {}): P
       if (opts.fromDate && dateDir < opts.fromDate) continue;
       if (opts.toDate && dateDir > opts.toDate) continue;
       const datePath = path.join(userPath, dateDir);
-      let files: string[];
-      try {
-        files = readdirSync(datePath);
-      } catch {
-        continue;
-      }
-      for (const f of files) {
-        const filePath = path.join(datePath, f);
-        let buf: Buffer;
-        try {
-          buf = readFileSync(filePath);
-        } catch {
-          continue;
-        }
-        if (f.endsWith('.json')) {
-          const parsed = parseEnvelopeBuffer(buf);
-          if (parsed) out.push(parsed);
-        } else if (f.endsWith('.jsonl')) {
-          // Raw Claude Code transcript format (snapshot / direct-copy layout)
-          const sessionId = f.slice(0, -'.jsonl'.length);
-          const parsed = parseRawJsonlBuffer(buf, userDir, dateDir, sessionId);
-          if (parsed) out.push(parsed);
-        }
-      }
+      scanLeafDir(datePath, userDir, dateDir, out);
     }
   }
   return out;
+}
+
+/**
+ * P-D1 — Scan one leaf `<user>/<date>` directory, preferring the on-disk
+ * index when present and current. The index lets us skip `readdirSync` plus
+ * a per-file `statSync`; falling back to the legacy enumeration if the index
+ * is missing, empty, or has any mtime mismatch keeps correctness intact.
+ *
+ * Output is appended to `out` to keep allocation patterns identical to the
+ * pre-index loop (caller batches a single array across all leaves).
+ */
+function scanLeafDir(
+  datePath: string,
+  userDir: string,
+  dateDir: string,
+  out: ParsedSession[],
+): void {
+  const idx = loadIndexSync(datePath);
+  if (idx.entries.length > 0 && indexLooksCurrent(datePath, idx.entries)) {
+    for (const e of idx.entries) {
+      parseAndPush(path.join(datePath, e.file), e.file, userDir, dateDir, out);
+    }
+    return;
+  }
+  // Legacy enumeration path — used when no index exists yet or any entry
+  // has a stale mtime (a new file may have landed between rebuilds).
+  let files: string[];
+  try {
+    files = readdirSync(datePath);
+  } catch {
+    return;
+  }
+  for (const f of files) {
+    if (f === INDEX_FILENAME) continue;
+    parseAndPush(path.join(datePath, f), f, userDir, dateDir, out);
+  }
+}
+
+/**
+ * Returns true iff every indexed file still exists with the recorded mtime.
+ * One mismatch → fall back to a full scan (cheap: a stat call per indexed
+ * file, no parsing). This avoids serving stale data when a transcript was
+ * overwritten or a new file appeared since the last index rebuild.
+ */
+function indexLooksCurrent(datePath: string, entries: IndexEntry[]): boolean {
+  for (const e of entries) {
+    try {
+      const st = statSync(path.join(datePath, e.file));
+      if (st.mtimeMs !== e.mtime) return false;
+    } catch {
+      return false; // file disappeared since the index was built
+    }
+  }
+  return true;
+}
+
+/**
+ * Read + parse a single session file, then push to `out`. Used by both the
+ * index fast path and the legacy enumeration fallback so format dispatch
+ * lives in exactly one place.
+ */
+function parseAndPush(
+  filePath: string,
+  fileName: string,
+  userDir: string,
+  dateDir: string,
+  out: ParsedSession[],
+): void {
+  let buf: Buffer;
+  try {
+    buf = readFileSync(filePath);
+  } catch {
+    return;
+  }
+  if (fileName.endsWith('.json')) {
+    const parsed = parseEnvelopeBuffer(buf);
+    if (parsed) out.push(parsed);
+  } else if (fileName.endsWith('.jsonl')) {
+    const sessionId = fileName.slice(0, -'.jsonl'.length);
+    const parsed = parseRawJsonlBuffer(buf, userDir, dateDir, sessionId);
+    if (parsed) out.push(parsed);
+  }
 }
