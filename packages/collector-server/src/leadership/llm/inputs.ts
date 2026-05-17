@@ -29,6 +29,12 @@ import {
   buildT5InputFromSnapshot,
 } from '../aggregator.js';
 import type { T1Input, T2Input, T3Input, T4Input } from './prompts/index.js';
+import {
+  t1CacheKey,
+  t2CacheKey,
+  t3CacheKey,
+  t4CacheKey,
+} from './cache-keys.js';
 
 export interface CollectInputsDeps {
   /** Same directory the leadership routes scan — sessions are loaded relative to here. */
@@ -118,6 +124,8 @@ export async function collectWorkerInputs(
   }
 
   // --- T2: one input per snapshot member --------------------------------------
+  // Eager version uses empty sessionDigests; the `rebuildMembers` callback
+  // below produces a populated version the worker can use after T1 fills.
   const t2Inputs: T2Input[] = [];
   for (const m of snap.members) {
     if (!m.email) continue;
@@ -135,6 +143,40 @@ export async function collectWorkerInputs(
     if (t3) t3Inputs.push(t3);
   }
 
+  // Hydrate a sessions→digest map from the cache, then re-run buildT2/T3 with
+  // it. Same builders as the aggregator's render path, so the cache keys
+  // collide exactly. Returns the rebuilt input list.
+  const rebuildSessionsMap = (lookup: (key: string) => string | undefined): Map<string, string> => {
+    const m = new Map<string, string>();
+    for (const t1 of t1Inputs) {
+      const v = lookup(t1CacheKey(t1));
+      if (v !== undefined) m.set(t1.id, v);
+    }
+    return m;
+  };
+  const rebuildMembers = (lookup: (key: string) => string | undefined): T2Input[] => {
+    const sm = rebuildSessionsMap(lookup);
+    const out: T2Input[] = [];
+    for (const m of snap.members) {
+      if (!m.email) continue;
+      const memSessions = sessionsByEmail.get(m.email) ?? [];
+      const t2 = buildT2InputForMember(m, memSessions, sm);
+      if (t2) out.push(t2);
+    }
+    return out;
+  };
+  const rebuildProjects = (lookup: (key: string) => string | undefined): T3Input[] => {
+    const sm = rebuildSessionsMap(lookup);
+    const out: T3Input[] = [];
+    for (const p of snap.projects) {
+      if (!p.name) continue;
+      const psess = sessionsByProject.get(p.name) ?? [];
+      const t3 = buildT3InputForProject(p, psess, sm);
+      if (t3) out.push(t3);
+    }
+    return out;
+  };
+
   // --- T4: one input per attention item ---------------------------------------
   const t4Inputs: T4Input[] = [];
   for (const it of snap.attention) {
@@ -143,12 +185,18 @@ export async function collectWorkerInputs(
   }
 
   // --- T5: one daily-brief input ----------------------------------------------
-  // Pass empty projectsMap + attentionRewrites because the worker hasn't run
-  // T2/T3/T4 yet on the first cycle. After the cache fills, the aggregator's
-  // render-path constructs T5 with the same empty maps too (it reads from
-  // cache, not from a live worker state), so the key alignment holds.
+  // Two paths:
+  //   - `brief` (eager): built now with empty maps + `[]`, so a worker that
+  //     doesn't use `rebuildBrief` (and the in-process unit tests) still get
+  //     a serviceable T5 input without a second pass.
+  //   - `rebuildBrief` (lazy): called by the worker AFTER T1/T3/T4 have
+  //     filled the cache. The callback re-reads each tier's outputs via the
+  //     supplied `lookup(key)` and rebuilds the T5 input with populated
+  //     `sessionsMap` / `projectsMap` / `attentionRewrites`. This is what
+  //     keeps the worker-write cache key aligned with the aggregator-read
+  //     key — both sides see the same populated state.
   const todayKey = deps.todayKey ? deps.todayKey() : defaultTodayKey(now);
-  const briefInput = buildT5InputFromSnapshot(
+  const eagerBrief = buildT5InputFromSnapshot(
     snap,
     sessionsByProject,
     sessionsMap,
@@ -157,11 +205,42 @@ export async function collectWorkerInputs(
     todayKey,
   );
 
+  const rebuildBrief = (lookup: (key: string) => string | undefined) => {
+    const sessions = rebuildSessionsMap(lookup);
+    // T3 was rebuilt with the populated sessionsMap above; use those
+    // rebuilt inputs to recompute the T3 cache keys for projectsMap lookups.
+    const projects = new Map<string, string>();
+    for (const t3 of rebuildProjects(lookup)) {
+      const v = lookup(t3CacheKey(t3));
+      if (v !== undefined) projects.set(t3.project, v);
+    }
+    const attentionRewrites: string[] = [];
+    for (const t4 of t4Inputs) {
+      const v = lookup(t4CacheKey(t4));
+      if (v !== undefined) attentionRewrites.push(v);
+    }
+    // `t2CacheKey` import isn't strictly needed for T5 (T5 doesn't read T2
+    // narratives), but it's imported above for symmetry with the other
+    // tiers — silence the lint warning by referencing it once.
+    void t2CacheKey;
+    return buildT5InputFromSnapshot(
+      snap,
+      sessionsByProject,
+      sessions,
+      projects,
+      attentionRewrites,
+      todayKey,
+    );
+  };
+
   return {
     sessions: t1Inputs,
     members: t2Inputs,
     projects: t3Inputs,
     attention: t4Inputs,
-    brief: briefInput,
+    brief: eagerBrief,
+    rebuildMembers,
+    rebuildProjects,
+    rebuildBrief,
   };
 }

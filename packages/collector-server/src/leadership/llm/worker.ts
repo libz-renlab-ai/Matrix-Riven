@@ -46,10 +46,34 @@ import type {
 
 export interface WorkerInputs {
   sessions: T1Input[];
+  /** Pre-built T2 input (empty sessionDigests). Used when `rebuildMembers` is absent. */
   members: T2Input[];
+  /** Pre-built T3 input (empty sessionDigests). Used when `rebuildProjects` is absent. */
   projects: T3Input[];
   attention: T4Input[];
+  /**
+   * Pre-built T5 input from collect-time. Used as a fallback when
+   * `rebuildBrief` is not provided so old tests / external callers don't
+   * need to wire the callback.
+   */
   brief: T5Input;
+  /**
+   * Optional: rebuild T2 input AFTER T1 has filled the cache. T2's payload
+   * includes `sessionDigests` — at collect-time those are empty; the
+   * aggregator's render path always reads them populated from the T1 cache,
+   * so without this rebuild the worker-write and aggregator-read T2 keys
+   * never match.
+   */
+  rebuildMembers?: (lookup: (key: string) => string | undefined) => T2Input[];
+  /** Same shape as `rebuildMembers`, for T3. */
+  rebuildProjects?: (lookup: (key: string) => string | undefined) => T3Input[];
+  /**
+   * Optional: rebuild T5 input after T1/T3/T4 have run and filled the
+   * cache. The worker calls this with a `keyLookup(cacheKey)` so the
+   * collector can re-resolve T1 digests / T3 narratives / T4 rewrites from
+   * the now-filled cache and feed them into the T5 prompt.
+   */
+  rebuildBrief?: (lookup: (key: string) => string | undefined) => T5Input;
 }
 
 export interface WorkerDeps {
@@ -191,8 +215,17 @@ export function startWorker(deps: WorkerDeps): WorkerHandle {
     };
 
     await runTier('t1', () => summarizeSessions(inputs.sessions, ctx));
-    await runTier('t2', () => summarizeMembers(inputs.members, ctx));
-    await runTier('t3', () => summarizeProjects(inputs.projects, ctx));
+    // T2 and T3 inputs include `sessionDigests` that depend on T1 outputs.
+    // Rebuild now that T1 has populated the cache so the worker-write keys
+    // match what the aggregator's render path will recompute.
+    const t2Inputs = inputs.rebuildMembers
+      ? inputs.rebuildMembers((k) => cache.get(k))
+      : inputs.members;
+    const t3Inputs = inputs.rebuildProjects
+      ? inputs.rebuildProjects((k) => cache.get(k))
+      : inputs.projects;
+    await runTier('t2', () => summarizeMembers(t2Inputs, ctx));
+    await runTier('t3', () => summarizeProjects(t3Inputs, ctx));
     await runTier('t4', () => summarizeAttention(inputs.attention, ctx));
 
     // T5 cadence: counter starts at 0 so tick #1 (counter 0) runs T5 — warm
@@ -201,7 +234,15 @@ export function startWorker(deps: WorkerDeps): WorkerHandle {
     const shouldRunT5 = tickCounter % briefEveryNTicks === 0;
     tickCounter = (tickCounter + 1) % briefEveryNTicks;
     if (shouldRunT5) {
-      await runTier('t5', () => summarizeDailyBrief(inputs.brief, ctx));
+      // Rebuild T5 input now that T1/T3/T4 may have populated the cache.
+      // This is what aligns the worker-write key with the aggregator-read
+      // key — both sides see the same populated maps. Fall back to the
+      // pre-built `inputs.brief` if no rebuild callback was supplied
+      // (legacy callers / direct unit tests).
+      const briefInput = inputs.rebuildBrief
+        ? inputs.rebuildBrief((k) => cache.get(k))
+        : inputs.brief;
+      await runTier('t5', () => summarizeDailyBrief(briefInput, ctx));
     }
 
     const costUsd = cache.stats().todayCostUsd - costBefore;

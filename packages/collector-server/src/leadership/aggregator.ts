@@ -331,22 +331,18 @@ function attachLlmFields(
   }
 
   // --- T5: daily leader brief ------------------------------------------------
-  // ALL of (sessionsMap, projectsMap, attentionRewrites) must be empty here.
-  // `llm/inputs.ts:collectWorkerInputs` builds the worker-side T5 input with
-  // empty maps + `[]` rewrites (T1..T4 haven't run yet at collect-time), so
-  // any non-empty value here would mint a different cache key and the
-  // worker's brief would never be readable. The trade-off is that the T5
-  // prompt doesn't get T1 digests or T3 narrative — it works off the raw
-  // snapshot's highlights/projects instead. Keep both sides empty to keep
-  // the spec's "worker writes, aggregator reads" cache contract intact.
+  // Render path uses the populated maps — sessionsMap (T1), projectsMap (T3),
+  // and the T4 rewrites we just collected. The worker side stays aligned via
+  // `WorkerInputs.rebuildBrief`, which re-reads the same tiers from cache
+  // after T1/T3/T4 fill, so both sides hash the same T5Input and the cache
+  // key collides.
   const today = input.today ?? new Date().toISOString().slice(0, 10);
-  const emptyMap = new Map<string, string>();
   const t5Input: T5Input = buildT5InputFromSnapshot(
     snap,
     byProject,
-    emptyMap,
-    emptyMap,
-    [],
+    sessionsMap,
+    projectsMap,
+    [...attentionMap.values()],
     today,
   );
   const briefRaw = cache.get(t5CacheKey(t5Input));
