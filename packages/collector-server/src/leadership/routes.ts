@@ -28,6 +28,9 @@ import {
   buildProjectDetail,
 } from './aggregator.js';
 import { renderOverview, renderStaleBanner } from './views/overview.html.js';
+import { renderLanding } from './views/_landing.html.js';
+import { renderSources } from './views/_sources.html.js';
+import { getDemoSnapshot } from './views/_demo-fixture.js';
 import {
   renderMemberSlideoverFragments,
   renderProjectSlideoverFragments,
@@ -89,6 +92,27 @@ export function handleLeadershipRequest(
   const qIdx = rawUrl.indexOf('?');
   const pathname = qIdx >= 0 ? rawUrl.slice(0, qIdx) : rawUrl;
   const query = qIdx >= 0 ? new URLSearchParams(rawUrl.slice(qIdx + 1)) : new URLSearchParams();
+
+  // ── Public unauth routes ────────────────────────────────────────────────────
+  // These render before the auth gate so a CTO clicking the link sees pages
+  // without 401: landing (marketing), sources (transparency), demo overview.
+  if (pathname === '/landing' && req.method === 'GET') {
+    sendHtml(res, 200, renderLanding({ hasAuth: !!deps.authToken }));
+    return true;
+  }
+  if (pathname === '/sources' && req.method === 'GET') {
+    sendHtml(res, 200, renderSources());
+    return true;
+  }
+  if (pathname === '/overview' && req.method === 'GET' && query.get('demo') === '1') {
+    const snap = getDemoSnapshot();
+    sendHtml(res, 200, renderOverview(snap));
+    return true;
+  }
+  if (pathname === '/api/overview' && req.method === 'GET' && query.get('demo') === '1') {
+    sendJson(res, 200, getDemoSnapshot());
+    return true;
+  }
 
   // Quick check: is this a leadership-owned path? If not, return false fast
   // (caller falls through). Doing the prefix match here lets us gate auth
