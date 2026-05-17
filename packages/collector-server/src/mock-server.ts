@@ -635,6 +635,11 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
     cache: leadershipCache,
     now,
     llmCache,
+    // Forward the same Bearer token to the leadership dispatcher so when the
+    // operator sets `RIVEN_AUTH_TOKEN`, the dashboard endpoints require auth
+    // too — not just `POST /v1/cc-sessions`. Empty string disables (LAN
+    // demos, localhost tests).
+    authToken: authToken || undefined,
   };
 
   const requestHandler = (req: IncomingMessage, res: ServerResponse): void => {

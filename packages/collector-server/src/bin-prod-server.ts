@@ -11,7 +11,10 @@
  * Env vars (legacy `TEAMAGENT_*` / `BPP_*` names accepted with a deprecation
  * warning — see compat.ts):
  *   PORT                       (default 8933)
- *   HOST                       (default 0.0.0.0)
+ *   HOST                       (default 127.0.0.1 — loopback only.
+ *                               Set HOST=0.0.0.0 explicitly to expose on LAN,
+ *                               and pair with RIVEN_AUTH_TOKEN since
+ *                               leadership endpoints surface team data.)
  *   RIVEN_COLLECTOR_DIR        (default $HOME/riven-collector;
  *                               legacy: TEAMAGENT_COLLECTOR_DIR / ~/teamagent-collector)
  *   RIVEN_AUTH_TOKEN           (optional — when set, POST /v1/cc-sessions
@@ -47,7 +50,19 @@ export async function runProdServer(deps: RunProdServerDeps = {}): Promise<() =>
     );
   }
   const port = portParsed;
-  const host = env.HOST ?? '0.0.0.0';
+  // Default to loopback so the leadership dashboard isn't exposed on the LAN
+  // by accident. To run on the network, the operator must set HOST=0.0.0.0
+  // explicitly — and should also set RIVEN_AUTH_TOKEN, which gates the
+  // leadership routes when present.
+  const host = env.HOST ?? '127.0.0.1';
+  if (host === '0.0.0.0' && !(env.RIVEN_AUTH_TOKEN || env.BPP_AUTH_TOKEN)) {
+    log(
+      '[riven-collector] WARNING: HOST=0.0.0.0 without RIVEN_AUTH_TOKEN ' +
+        '— leadership endpoints (/api/overview, /overview, /api/members/*, ' +
+        '/api/projects/*) are publicly reachable on this LAN. Set ' +
+        'RIVEN_AUTH_TOKEN=<random-32-bytes> to require Bearer auth.',
+    );
+  }
   // Resolve outputDir from env, with TeamBrain → Matrix-Riven legacy fallback.
   // If the env vars are unset, also fall back to the legacy default
   // (~/teamagent-collector) when that directory exists on disk — so a host
