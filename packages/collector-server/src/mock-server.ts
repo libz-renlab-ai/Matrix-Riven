@@ -90,6 +90,12 @@ export interface MockServerOptions {
    * Empty/undefined = auth disabled (dev/test default).
    */
   authToken?: string;
+  /**
+   * Comma-list of project names treated as "main" for slacking detection.
+   * Forwarded to `LeadershipRouteDeps.mainProjects`. Empty/undefined leaves
+   * the slacking signal dormant (no false positives in a fresh deploy).
+   */
+  mainProjects?: string[];
 }
 
 export interface MockServerHandle {
@@ -640,6 +646,8 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
     // too — not just `POST /v1/cc-sessions`. Empty string disables (LAN
     // demos, localhost tests).
     authToken: authToken || undefined,
+    // Forward main-project list so the slacking signal can fire.
+    mainProjects: opts.mainProjects,
   };
 
   const requestHandler = (req: IncomingMessage, res: ServerResponse): void => {

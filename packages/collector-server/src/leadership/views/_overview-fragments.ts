@@ -43,6 +43,55 @@ function safeHighlightDetail(s: string): string {
   return cleaned.length > 80 ? cleaned.slice(0, 77) + '…' : cleaned;
 }
 
+/**
+ * Per-member fallback narrative when no `llmWeekly` is cached. The historical
+ * code repeated the same phase + trend string for every row, making a
+ * 4-row team grid look identical. This builds a line that varies with the
+ * member's own numbers (today's session count, recency, rhythm delta).
+ *
+ * Returns two HTML-safe strings so the caller can drop them into the tile.
+ */
+function memberFallbackNarrative(
+  m: MemberSnapshot,
+  phaseText: string,
+  trendArr: string,
+  trendText: string,
+): { line1Html: string; line2Html: string } {
+  const sessionsToday = m.today?.sessions ?? 0;
+  const weekTotal = Array.isArray(m.trend7d) ? m.trend7d.reduce((a, b) => a + b, 0) : 0;
+  const line1Plain = sessionsToday > 0
+    ? `今日 ${sessionsToday} 会话 · ${phaseText}`
+    : `本周 ${weekTotal} 会话 · ${phaseText}`;
+  // Recency stamp on the second line — always varies because lastSessionAt
+  // varies. Falls back to the trend label when timestamp is unknown so the
+  // tile never reads "—".
+  let line2Plain: string;
+  if (m.lastSessionAt) {
+    const hours = Math.max(0, (Date.now() - Date.parse(m.lastSessionAt)) / 3_600_000);
+    let recency: string;
+    if (hours < 1) recency = '刚刚活跃';
+    else if (hours < 24) recency = `${Math.floor(hours)}h 前活跃`;
+    else {
+      const days = Math.floor(hours / 24);
+      recency = days === 1 ? '昨日活跃' : `${days}天前活跃`;
+    }
+    // Pair recency with rhythm delta when meaningful (>10% in either dir).
+    const delta = m.deltaVs7dAvgPct;
+    if (typeof delta === 'number' && Math.abs(delta) > 0.1) {
+      const sign = delta > 0 ? '+' : '';
+      line2Plain = `${recency} · 节奏 ${sign}${Math.round(delta * 100)}%`;
+    } else {
+      line2Plain = `${recency} · ${trendArr} ${trendText}`;
+    }
+  } else {
+    line2Plain = `${trendArr} ${trendText}`;
+  }
+  return {
+    line1Html: escapeHtml(line1Plain),
+    line2Html: escapeHtml(line2Plain),
+  };
+}
+
 export function renderHeroFragment(snap: OverviewSnapshot): string {
   // Hero copy must agree with the count rendered under the Attention section
   // header — otherwise a leader sees "5 件事需要留意" up top and "2" below it.
@@ -325,7 +374,7 @@ export function renderMembersFragment(snap: OverviewSnapshot, opts: FragmentOpts
     // T2 weekly digest: when present, the two LLM-authored sentences replace
     // the phase+trend template pair. Both lines are escaped (the LLM string
     // is plain text). Template fallback rendered below when `llmWeekly` is
-    // absent or empty — byte-identical to the pre-LLM contract.
+    // absent or empty — keeps the dashboard useful even with LLM_ENABLED=off.
     const llmLines = m.llmWeekly ? m.llmWeekly.split('\n') : [];
     let narrative: string;
     if (llmLines.length > 0 && llmLines[0]) {
@@ -335,8 +384,16 @@ export function renderMembersFragment(snap: OverviewSnapshot, opts: FragmentOpts
         : '';
       narrative = `<div class="m-llm" style="font-family:'Newsreader',serif;color:var(--ink-2);font-size:13px;line-height:1.5;margin-top:2px;padding-top:10px;border-top:1px solid var(--hairline);">${l1}${l2}</div>`;
     } else {
-      narrative = `<div class="mt-phase" style="font-size:12.5px;color:var(--ink-2);margin-top:2px;">${escapeHtml(phaseText)}</div>
-        <div class="mt-trend" style="font-size:12.5px;color:var(--ink-3);margin-top:6px;padding-top:10px;border-top:1px solid var(--hairline);">${escapeHtml(trendArr)} ${escapeHtml(trendText)}</div>`;
+      // LLM-off fallback. The historical version emitted the same
+      // `${phaseText} · ${trendArr} ${trendText}` for every member, so a
+      // team of 4 idle members all rendered the literal string "推进新功能
+      // ↘ 近期已收尾" — visually broken. Build a per-member line that
+      // carries a real, differentiable signal:
+      //   line1 = "今日 N 会话 · <phase>" (always varies because sessions vary)
+      //   line2 = recency stamp ("3h 前活跃") or rhythm tag ("节奏 +12%")
+      const fallback = memberFallbackNarrative(m, phaseText, trendArr, trendText);
+      narrative = `<div class="mt-phase" style="font-size:12.5px;color:var(--ink-2);margin-top:2px;">${fallback.line1Html}</div>
+        <div class="mt-trend" style="font-size:12.5px;color:var(--ink-3);margin-top:6px;padding-top:10px;border-top:1px solid var(--hairline);">${fallback.line2Html}</div>`;
     }
     return `
       <div class="member-tile" data-ref="member:${escapeHtml(m.email)}" data-attention="${attentionScore(m)}" data-activity="${m.today.sessions}" data-alpha="${escapeHtml(m.displayName)}" onclick="window.openSO('member', '${escapeHtml(m.email)}')">

@@ -94,16 +94,28 @@ export async function runProdServer(deps: RunProdServerDeps = {}): Promise<() =>
       ? { keyPath: httpsKeyPath, certPath: httpsCertPath }
       : undefined;
 
+  // Comma-separated list of "main" project names. Used by the slacking
+  // detector (signals/slacking.ts) to flag members whose recent work is
+  // off the company's primary repos. Empty/unset = signal stays dormant.
+  const mainProjects = (env.RIVEN_MAIN_PROJECTS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   const handle = await startMockServer({
     port,
     host,
     outputDir,
     authToken,
     tls,
+    mainProjects,
   });
   log(`[riven-collector] listening on ${handle.url}`);
   log(`[riven-collector] outputDir = ${handle.outputDir}`);
-  if (authToken) log(`[riven-collector] token auth ENABLED on POST /v1/cc-sessions`);
+  if (mainProjects.length > 0) {
+    log(`[riven-collector] main projects: ${mainProjects.join(', ')}`);
+  }
+  if (authToken) log(`[riven-collector] token auth ENABLED (POST /v1/cc-sessions + all leadership routes)`);
   if (tls) log(`[riven-collector] TLS ENABLED (key=${tls.keyPath})`);
   deps.onReady?.({ url: handle.url, outputDir: handle.outputDir });
 

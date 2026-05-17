@@ -189,12 +189,17 @@ export function startWorker(deps: WorkerDeps): WorkerHandle {
     let budgetExceeded = false;
     let unexpectedError = false;
 
+    // Stop firing new tiers once we're at 95% of the daily budget so a
+    // single batched call (haiku ~$0.02 baseline, sonnet T5 ~$0.10) can't
+    // push us materially over the cap. Spec §Cost discipline implies the
+    // budget is a HARD cap.
+    const budgetCeiling = cfg.dailyBudgetUsd * 0.95;
     const runTier = async (
       label: 't1' | 't2' | 't3' | 't4' | 't5',
       fn: () => Promise<unknown>,
     ): Promise<void> => {
       if (budgetExceeded || unexpectedError) return;
-      if (cache.stats().todayCostUsd >= cfg.dailyBudgetUsd) {
+      if (cache.stats().todayCostUsd >= budgetCeiling) {
         budgetExceeded = true;
         return;
       }
@@ -209,7 +214,7 @@ export function startWorker(deps: WorkerDeps): WorkerHandle {
       const entriesAfter = cache.stats().entries;
       filled[label] = Math.max(0, entriesAfter - entriesBefore);
       // Re-check budget after each tier so subsequent tiers know to abort.
-      if (cache.stats().todayCostUsd >= cfg.dailyBudgetUsd) {
+      if (cache.stats().todayCostUsd >= budgetCeiling) {
         budgetExceeded = true;
       }
     };
