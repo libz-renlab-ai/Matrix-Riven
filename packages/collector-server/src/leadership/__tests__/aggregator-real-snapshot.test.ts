@@ -127,4 +127,51 @@ describe('real snapshot data trust (data-layer rebuild)', () => {
       expect(p.name).not.toMatch(/^_/); // no underscore-prefix temps
     }
   });
+
+  // ── B-main: real-snapshot narrative validation ─────────────────────────────
+  // The leader-language render layer rewrote every attention `line2` so that
+  // the dashboard no longer surfaces percentages / token counts / "上次会话
+  // 03:12"-style technical lines. Validate the contract holds against the
+  // real frozen snapshot.
+  it.skipIf(!SNAPSHOT_AVAILABLE)('attention line2 has no raw percentages or engineer-speak', () => {
+    __resetParsedCacheForTests();
+    const sessions = scanAllSessions(REAL_DIR);
+    const snap = buildOverviewSnapshot({
+      sessions,
+      range: RANGE,
+      now: NOW,
+      collectorDir: REAL_DIR,
+    });
+    for (const a of snap.attention) {
+      // No "24%" / "0.42%" raw percentages.
+      expect(a.line2).not.toMatch(/\d+\.?\d*%/);
+      // No raw technical surfaces.
+      expect(a.line2).not.toMatch(/工具失败率/);
+      expect(a.line2).not.toMatch(/次 prompt/);
+      expect(a.line2).not.toMatch(/上次会话/);
+      // No full email addresses leaking through line2.
+      expect(a.line2).not.toMatch(/@[a-z0-9.-]+\.[a-z]{2,}/i);
+    }
+  });
+
+  it.skipIf(!SNAPSHOT_AVAILABLE)('highlights array populated when milestones exist', () => {
+    __resetParsedCacheForTests();
+    const sessions = scanAllSessions(REAL_DIR);
+    const snap = buildOverviewSnapshot({
+      sessions,
+      range: RANGE,
+      now: NOW,
+      collectorDir: REAL_DIR,
+    });
+    expect(Array.isArray(snap.highlights)).toBe(true);
+    expect(snap.highlights.length).toBeLessThanOrEqual(10);
+    for (const h of snap.highlights) {
+      // Newest-first sort
+      expect(typeof h.ts).toBe('string');
+      // Local-part-only authors
+      expect(h.by).not.toMatch(/@/);
+      // Known event types
+      expect(['commit', 'push', 'pr', 'release', 'tag', 'risky']).toContain(h.type);
+    }
+  });
 });

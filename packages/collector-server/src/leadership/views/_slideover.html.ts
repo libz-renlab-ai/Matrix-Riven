@@ -22,7 +22,17 @@ import type {
   ProjectSnapshot,
   ProjectDetail,
 } from '../types.js';
-import { idleCallout } from './_copy.js';
+import {
+  phaseLabel,
+  stateLabel,
+  trendLabel,
+  trendArrow,
+  healthLabel,
+  healthDotColor,
+  shortFile,
+  etaLabel,
+  idleSince,
+} from './_leader-lang.js';
 
 export interface SlideoverFragments {
   callout: string;
@@ -66,31 +76,71 @@ export function renderMemberSlideoverFragments(
   member: MemberSnapshot,
   detail: MemberDetail,
 ): SlideoverFragments {
+  // Member callout: build a one-sentence narrative from real fields rather
+  // than the generic "idle X hours" boilerplate. Branches on the (already
+  // distribution-calibrated) stateBadge so the message matches the leader's
+  // mental model of why this person is in the drawer.
   const idleHours = computeIdleHours(detail);
-  const lastFile = detail.topFiles[0]?.path ?? detail.sessions[0]?.firstPromptPreview;
-  // idleCallout returns HTML (with <em> tags) — do NOT escape it.
-  const calloutHtml = idleCallout({
-    displayName: member.displayName,
-    idleHours,
-    ...(lastFile !== undefined ? { lastFile } : {}),
-  });
+  const topFile = detail.topFiles[0]?.path;
+  const topProject = member.topProject ?? mostCommonProject(detail);
+  const shortTopFile = topFile ? shortFile(topFile) : '';
+  let calloutSentence: string;
+  if (member.stateBadge === 'needs_help') {
+    calloutSentence = topProject
+      ? `${escapeHtml(member.displayName)} 在 <em>${escapeHtml(topProject)}</em> 上反复受阻 — <em>看一眼是否需要支援</em>。`
+      : `${escapeHtml(member.displayName)} 工具调用反复失败 — <em>看一眼是否需要支援</em>。`;
+  } else if (member.stateBadge === 'stuck') {
+    if (shortTopFile) {
+      calloutSentence = `${escapeHtml(member.displayName)} 卡在 <em>${escapeHtml(shortTopFile)}</em> 已经 ${escapeHtml(idleSince(idleHours))} — <em>可能需要支援</em>。`;
+    } else {
+      calloutSentence = `${escapeHtml(member.displayName)} 在反复尝试相似问题 — <em>可能需要支援</em>。`;
+    }
+  } else if (member.stateBadge === 'low_activity') {
+    calloutSentence = `${escapeHtml(member.displayName)} 已经 ${escapeHtml(idleSince(idleHours))} 没有新动作 — <em>本周参与不多</em>。`;
+  } else if (member.stateBadge === 'quiet') {
+    calloutSentence = `${escapeHtml(member.displayName)} 本窗口无活动 — <em>暂无新工作</em>。`;
+  } else {
+    const trend = trendLabel(member.trend7d);
+    calloutSentence = topProject
+      ? `${escapeHtml(member.displayName)} 正常推进 <em>${escapeHtml(topProject)}</em>，本周 <em>${escapeHtml(trend)}</em>。`
+      : `${escapeHtml(member.displayName)} 正常推进，本周 <em>${escapeHtml(trend)}</em>。`;
+  }
   const callout = `<div class="so-callout">
     <div class="so-callout-icon">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
     </div>
-    <div class="so-callout-text serif">${calloutHtml}</div>
+    <div class="so-callout-text serif">${calloutSentence}</div>
   </div>`;
 
-  const healthPct = Math.max(0, Math.min(100, Math.round((1 - detail.toolFailureRate) * 100)));
+  // Stats block — 3 narrative phrases instead of raw numbers. Leader can
+  // still see counts on the member detail page (Phase 3); this drawer is
+  // editorial-first. CSS class `.so-stat-num` is preserved (test contract)
+  // even though the content is now a phrase, not a number.
+  const trendText = trendLabel(member.trend7d);
+  const focusProject = topProject ?? '—';
+  const focusPhase = '聚焦 ' + (focusProject === '—' ? '—' : focusProject);
+  const stateText = stateLabel(member.stateBadge);
   const stats = `<div class="so-stats">
-    <div class="so-stat"><div class="so-stat-num tnum">${member.today.sessions}</div><div class="so-stat-label">会话</div></div>
-    <div class="so-stat"><div class="so-stat-num tnum">¥${formatKilo(member.today.tokens)}</div><div class="so-stat-label">消耗</div></div>
-    <div class="so-stat"><div class="so-stat-num tnum">${healthPct}%</div><div class="so-stat-label">健康</div></div>
+    <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(trendText)}</div><div class="so-stat-label">本周节奏</div></div>
+    <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(focusPhase)}</div><div class="so-stat-label">焦点</div></div>
+    <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(stateText)}</div><div class="so-stat-label">状态</div></div>
   </div>`;
 
   const evolve = renderMemberEvolve(detail);
   const projects = renderMemberProjects(detail);
   return { callout, stats, evolve, projects };
+}
+
+/** Best-effort topProject fallback when MemberSnapshot.topProject is empty. */
+function mostCommonProject(detail: MemberDetail): string | undefined {
+  const counts = new Map<string, number>();
+  for (const s of detail.sessions) {
+    counts.set(s.projectName, (counts.get(s.projectName) ?? 0) + 1);
+  }
+  let top: string | undefined;
+  let topN = 0;
+  for (const [name, n] of counts) if (n > topN) { topN = n; top = name; }
+  return top;
 }
 
 function renderMemberEvolve(detail: MemberDetail): string {
@@ -160,18 +210,33 @@ export function renderProjectSlideoverFragments(
   project: ProjectSnapshot,
   detail: ProjectDetail,
 ): SlideoverFragments {
+  // Callout — composed entirely from leader-language helpers. Names the
+  // project, what phase it's in, the trajectory this week, who's actively
+  // touching it today, and a calibrated ETA. No "phase=implement" or
+  // "healthScore=7/10" surfaces here — those are engineer-speak.
+  const phaseText = phaseLabel(project.phaseGuess);
+  const trendText = trendLabel(project.trend7d);
+  const etaText = etaLabel(project.etaDays);
+  const activeCount = project.activeTodayCount ?? 0;
+  // ETA "暂无预估" reads awkwardly when concatenated as "预计 暂无预估"; in
+  // that case we use the underlying phrase as a standalone sentence end.
+  const etaClause = project.etaDays == null ? etaText : `预计 ${etaText}`;
+  const calloutText = `<em>${escapeHtml(project.name)}</em> ${escapeHtml(phaseText)}，${escapeHtml(trendText)}。当前 <em>${activeCount} 人在做</em>，${escapeHtml(etaClause)}。`;
+  const dotColor = healthDotColor(project.healthScore);
   const callout = `<div class="so-callout">
-    <div class="so-callout-icon">
+    <div class="so-callout-icon" style="color:${dotColor};">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
     </div>
-    <div class="so-callout-text serif">${escapeHtml(project.name)} 当前在 <em>${escapeHtml(project.phaseGuess)}</em> 阶段，健康分 <em>${project.healthScore}/10</em>。</div>
+    <div class="so-callout-text serif">${calloutText}</div>
   </div>`;
 
-  const etaText = project.etaDays == null ? '—' : String(project.etaDays);
+  // Stats — 3 narrative phrases instead of raw counts.
+  const teamSize = `${project.contributors.length} 位贡献者${project.contributors.length === 1 ? '（单人项目）' : ''}`;
+  const healthText = healthLabel(project.healthScore);
   const stats = `<div class="so-stats">
-    <div class="so-stat"><div class="so-stat-num tnum">${project.contributors.length}</div><div class="so-stat-label">贡献者</div></div>
-    <div class="so-stat"><div class="so-stat-num tnum">${detail.weekFiles.length}</div><div class="so-stat-label">本周文件</div></div>
-    <div class="so-stat"><div class="so-stat-num tnum">${etaText}</div><div class="so-stat-label">ETA (天)</div></div>
+    <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(trendArrow(project.trend7d))} ${escapeHtml(trendText)}</div><div class="so-stat-label">本周节奏</div></div>
+    <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(teamSize)}</div><div class="so-stat-label">团队规模</div></div>
+    <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(healthText)}</div><div class="so-stat-label">整体健康</div></div>
   </div>`;
 
   const evolve = renderProjectEvolve(detail);
@@ -224,11 +289,6 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function formatKilo(n: number): string {
-  if (!Number.isFinite(n) || n < 1000) return String(Math.max(0, Math.round(n)));
-  return (n / 1000).toFixed(1) + 'k';
 }
 
 function formatHHMM(ts: string): string {

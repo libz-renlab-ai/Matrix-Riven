@@ -155,6 +155,14 @@ export interface ProjectSnapshot {
   activeTodayPct: number;
   /** Count of contributors who had ≥1 session in the last 24h. */
   activeTodayCount: number;
+  /**
+   * Most-recently edited file in the range, with author + timestamp. Set by
+   * the aggregator for Overview's project narrative ("最近: api/x.ts (hrdai
+   * · 2h 前)"). Absent when no Edit/Write/MultiEdit tool fired across the
+   * project's sessions; the renderer falls back to a short "暂无最近编辑"
+   * line in that case.
+   */
+  lastTouch?: { filePath: string; by: string; ts: string };
   detail?: ProjectDetail;
 }
 
@@ -218,12 +226,32 @@ export interface OverviewSnapshot {
   collaboration: CollabHit[];
   attention: AttentionItem[];
   /**
+   * Recent-week key events across all projects (B-main "本周关键进展"). At
+   * most ~10 entries, newest first. Source: ProjectDetail.milestones from
+   * each project filtered to the trailing 7-day window.
+   */
+  highlights: HighlightEvent[];
+  /**
    * Present when the freshest in-range session is more than ~1 day old
    * relative to `computedAt`. Renderer surfaces this as a banner so the
    * leader knows "today" KPIs are relative to a stale capture rather than
    * live data. Absent when data is fresh (≤ 1 day old).
    */
   staleness?: { ageDays: number; lastActivityAt: string };
+}
+
+/**
+ * Team-wide editorial event for the "本周关键进展" section (B-main). Built
+ * by aggregating each project's milestones within the trailing 7 days and
+ * normalising the author email to its local-part so the renderer doesn't
+ * have to know about email shapes.
+ */
+export interface HighlightEvent {
+  ts: string;
+  type: 'commit' | 'push' | 'pr' | 'release' | 'tag' | 'risky';
+  by: string;       // local-part of the author email
+  project: string;
+  detail: string;   // short description; aggregator-controlled, safe HTML when escaped
 }
 
 // =====================================================================

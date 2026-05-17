@@ -8,10 +8,18 @@
  * XSS hygiene: every user-controlled string passes through escapeHtml().
  */
 
-import type { OverviewSnapshot, CollabHit } from '../types.js';
+import type { OverviewSnapshot } from '../types.js';
 import { LEADERSHIP_CSS } from './styles.css.js';
 import { renderNav } from './_nav.html.js';
-import { renderHeroFragment, renderKpisFragment, renderAttentionFragment, renderMembersFragment, renderProjectsFragment } from './_overview-fragments.js';
+import {
+  renderHeroFragment,
+  renderKpisFragment,
+  renderAttentionFragment,
+  renderMembersFragment,
+  renderProjectsFragment,
+  renderHighlightsFragment,
+  renderCollabFragment,
+} from './_overview-fragments.js';
 import { renderSlideoverShell } from './_slideover.html.js';
 import { CLIENT_REFRESH_SCRIPT } from './_refresh.js.js';
 
@@ -20,7 +28,7 @@ import { CLIENT_REFRESH_SCRIPT } from './_refresh.js.js';
 // ---------------------------------------------------------------------------
 
 export function renderOverview(snapshot: OverviewSnapshot): string {
-  const { members, projects, collaboration, range, computedAt } = snapshot;
+  const { members, projects, range } = snapshot;
 
   const membersSection = members.length === 0
     ? `<section id="members" class="section fade-in"><div class="lh-empty">这个窗口内没有成员活动</div></section>`
@@ -29,11 +37,6 @@ export function renderOverview(snapshot: OverviewSnapshot): string {
   const projectsSection = projects.length === 0
     ? `<section id="projects" class="section fade-in"><div class="lh-empty">这个窗口内没有项目活动</div></section>`
     : renderProjectsFragment(snapshot, { limit: 4 });
-
-  const collabHtml = collaboration.length === 0
-    ? ''
-    : `<div class="lh-section-h">协作机会（${collaboration.length}）</div>
-       <div class="lh-collab-list">${collaboration.slice(0, 10).map(renderCollabCard).join('')}</div>`;
 
   const navRangeLabel = rangeToNavLabel(range.label);
 
@@ -53,16 +56,8 @@ ${renderKpisFragment(snapshot)}
 ${renderAttentionFragment(snapshot, { limit: 3 })}
 ${membersSection}
 ${projectsSection}
-<div class="lh-container">
-  <div class="lh-topbar">
-    <h1>团队 leadership 视图</h1>
-    <div class="lh-meta">
-      过去 ${escapeHtml(range.label)} · 截至 ${escapeHtml(computedAt.slice(11, 19))} UTC
-      <span class="lh-refresh-tag">🔄 30s</span>
-    </div>
-  </div>
-  ${collabHtml}
-</div>
+${renderHighlightsFragment(snapshot)}
+${renderCollabFragment(snapshot)}
 </div>
 ${renderSlideoverShell()}
 <script>${CLIENT_REFRESH_SCRIPT}</script>
@@ -112,15 +107,6 @@ export function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-// ---------------------------------------------------------------------------
-// Collaboration card (Phase-1 contract — kept until P-B7 surfaces collab in v7)
-// ---------------------------------------------------------------------------
-
-function renderCollabCard(c: CollabHit): string {
-  return `<div class="lh-collab-card">
-    <div class="lh-member-info">
-      <div class="lh-member-name">${escapeHtml(c.members.map(e => e.split('@')[0] ?? e).join(' · '))}</div>
-      <div class="lh-member-meta">→ ${escapeHtml(c.filePath)} · 最后触碰 ${escapeHtml(c.lastTouched.slice(0, 10))}</div>
-    </div>
-  </div>`;
-}
+// Collaboration is rendered by `renderCollabFragment` in `_overview-fragments.ts`
+// (B-main, "合作热点"). The Phase-1 `.lh-collab-card` helper retired with that
+// migration — keep the section here as a comment marker for git-blame archaeology.

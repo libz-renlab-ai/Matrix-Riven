@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderHeroFragment, renderKpisFragment, renderAttentionFragment, renderMembersFragment, renderProjectsFragment, sparkFromTrend } from '../_overview-fragments.js';
+import { renderHeroFragment, renderKpisFragment, renderAttentionFragment, renderMembersFragment, renderProjectsFragment, renderHighlightsFragment, renderCollabFragment, sparkFromTrend } from '../_overview-fragments.js';
 import type { OverviewSnapshot } from '../../types.js';
 
 function makeSnapshot(overrides: Partial<OverviewSnapshot> = {}): OverviewSnapshot {
@@ -19,6 +19,7 @@ function makeSnapshot(overrides: Partial<OverviewSnapshot> = {}): OverviewSnapsh
     projects: [],
     collaboration: [],
     attention: [],
+    highlights: [],
     ...overrides,
   };
 }
@@ -105,7 +106,7 @@ describe('renderKpisFragment — placeholder replacements (P2)', () => {
     expect(html).not.toContain('对比 7 日均值</span></div>\n      <svg');
   });
 
-  it('renders "无" when highOutput.count === 0', () => {
+  it('renders "无突出" trend + "无" big number when highOutput.count === 0 (B-main)', () => {
     const html = renderKpisFragment(makeSnapshot({
       kpis: {
         teamActivity: { value: 1, deltaVsAvg: 0 },
@@ -116,8 +117,12 @@ describe('renderKpisFragment — placeholder replacements (P2)', () => {
         todayCostUsd: 0,
       },
     }));
-    // good card (count=0) → trend says "无"
-    expect(html).toMatch(/kpi-good[\s\S]*?<span>无<\/span>/);
+    // good card (count=0) → big number says "无" instead of "0", trend "无突出"
+    expect(html).toMatch(/kpi-good[\s\S]*?kpi-num">无</);
+    expect(html).toContain('无突出');
+    // spend card (0 → "—"), so "$0" no longer appears
+    expect(html).toMatch(/kpi-spend[\s\S]*?kpi-num">—</);
+    expect(html).not.toMatch(/\$0\.00/);
   });
 
   it('spend card shows real $ from todayCostUsd, not ¥k tokens', () => {
@@ -238,10 +243,24 @@ describe('renderMembersFragment (P-B5)', () => {
   it('renders a tile per member', () => {
     expect((renderMembersFragment(snapWithMembers(6)).match(/class="member-tile"/g) ?? []).length).toBe(6);
   });
-  it('each tile has 3 stat numbers + 1 sparkline', () => {
+  it('B-main: tile drops 3 stat numbers in favor of phase + trend narrative', () => {
     const html = renderMembersFragment(snapWithMembers(2));
-    expect((html.match(/class="mt-stat-num"/g) ?? []).length).toBe(6);
+    // Old 3-cell stat grid retired
+    expect(html).not.toContain('class="mt-stat-num"');
+    expect(html).not.toContain('mt-stat-label');
+    expect(html).not.toContain('mt-stats');
+    // Spark line + phase + trend still present
     expect((html.match(/class="mt-spark"/g) ?? []).length).toBe(2);
+    expect((html.match(/class="mt-phase"/g) ?? []).length).toBe(2);
+    expect((html.match(/class="mt-trend"/g) ?? []).length).toBe(2);
+    // Narrative phrases from _leader-lang.ts
+    expect(html).toMatch(/推进|集中|整理|完善|梳理|规划|多线/); // phaseLabel branches
+    expect(html).toMatch(/加速|稳步|放缓|收尾|未活跃|才开始/); // trendLabel branches
+  });
+  it('B-main: tile head has a colored health dot', () => {
+    const html = renderMembersFragment(snapWithMembers(1));
+    expect(html).toContain('class="mt-health-dot"');
+    expect(html).toMatch(/var\(--accent\)|var\(--warn\)|var\(--danger\)/);
   });
   it('includes sort buttons with data-sort attributes', () => {
     const html = renderMembersFragment(snapWithMembers(1));
@@ -285,13 +304,19 @@ describe('renderProjectsFragment (P-B5)', () => {
   it('renders a row per project', () => {
     expect((renderProjectsFragment(snapWithProjects(5)).match(/class="proj-row"/g) ?? []).length).toBe(5);
   });
-  it('each row has progress bar + avatar stack', () => {
-    const html = renderProjectsFragment(snapWithProjects(2));
-    expect((html.match(/class="proj-bar"/g) ?? []).length).toBe(2);
-    expect((html.match(/class="proj-people-stack"/g) ?? []).length).toBe(2);
+
+  // B-main: the progress-bar / avatar-stack treatment is retired in favor of
+  // a 3-line narrative row (phase · trend → latest file → N/M 人 · ETA).
+  it('B-main: row shows phase + trend narrative in line 1', () => {
+    const html = renderProjectsFragment(snapWithProjects(1));
+    expect(html).toContain('推进新功能'); // phaseLabel(implement)
+    expect(html).toMatch(/加速|稳步|放缓|收尾|未活跃|才开始/); // trendLabel
+    // Old visual progress bar gone
+    expect(html).not.toContain('class="proj-bar"');
+    expect(html).not.toContain('proj-people-stack');
   });
 
-  it('progress label shows "N / M 人在做" not raw "X%"', () => {
+  it('B-main: row shows N/M 人在做 + etaLabel in line 3', () => {
     const html = renderProjectsFragment(makeSnapshot({
       projects: [{
         name: 'mr', state: 'active', contributors: [
@@ -303,22 +328,121 @@ describe('renderProjectsFragment (P-B5)', () => {
         activeTodayPct: 2 / 3, activeTodayCount: 2,
       }],
     }));
-    expect(html).toContain('2 / 3 人在做');
-    // The progress label should no longer end in just "%"
-    expect(html).not.toMatch(/class="proj-progress-label tnum">\d+%</);
+    expect(html).toContain('2/3 人在做');
+    // etaDays 5 → 约 1 周
+    expect(html).toContain('约 1 周');
   });
 
-  it('progress bar width tracks activeTodayPct, not trend7d', () => {
+  it('B-main: row shows latest-file narrative when lastTouch is present', () => {
     const html = renderProjectsFragment(makeSnapshot({
+      computedAt: '2026-05-17T12:00:00.000Z',
       projects: [{
         name: 'mr', state: 'active', contributors: [
           { email: 'a@x.com', sharePct: 1 },
-        ], busFactorWarning: false, trend7d: [10, 10, 10, 10, 10, 10, 10], phaseGuess: 'implement',
+        ], busFactorWarning: false, trend7d: [1,1,2,2,3,3,4], phaseGuess: 'implement',
         healthScore: 7, etaDays: 5, etaConfidence: 'low',
         activeTodayPct: 1, activeTodayCount: 1,
+        lastTouch: { filePath: '/work/proj/api/overview.ts', by: 'hrdai@example.com', ts: '2026-05-17T10:00:00.000Z' },
       }],
     }));
-    expect(html).toContain('width:100%');
+    expect(html).toContain('api/overview.ts');
+    expect(html).toContain('hrdai');
+    expect(html).toMatch(/小时前|刚刚|今天/);
+  });
+
+  it('B-main: row falls back gracefully when lastTouch is absent', () => {
+    const html = renderProjectsFragment(snapWithProjects(1));
+    expect(html).toContain('暂无最近编辑');
+  });
+
+  it('B-main: row has a colored health dot', () => {
+    const html = renderProjectsFragment(snapWithProjects(1));
+    expect(html).toContain('class="proj-health-dot"');
+    expect(html).toMatch(/var\(--accent\)|var\(--warn\)|var\(--danger\)/);
+  });
+});
+
+// ── B-main: 本周关键进展 + 合作热点 ─────────────────────────────────────────
+
+describe('renderHighlightsFragment (B-main)', () => {
+  it('returns empty section when no highlights', () => {
+    const html = renderHighlightsFragment(makeSnapshot({ highlights: [] }));
+    expect(html).toContain('id="highlights"');
+    expect(html).not.toContain('highlights-list');
+  });
+
+  it('renders rows with icon + project + author + relative time', () => {
+    const html = renderHighlightsFragment(makeSnapshot({
+      computedAt: '2026-05-17T12:00:00.000Z',
+      highlights: [
+        { ts: '2026-05-17T10:00:00.000Z', type: 'commit', by: 'hrdai', project: 'Matrix-Riven', detail: 'fix: x' },
+        { ts: '2026-05-16T08:00:00.000Z', type: 'push', by: 'liusy', project: 'TeamBrain', detail: 'feat: y' },
+      ],
+    }));
+    expect(html).toContain('hrdai');
+    expect(html).toContain('Matrix-Riven');
+    expect(html).toContain('liusy');
+    expect(html).toContain('TeamBrain');
+    expect(html).toMatch(/✓|↑|◆|★|#|⚠/); // icon glyphs
+    expect((html.match(/class="hl-row"/g) ?? []).length).toBe(2);
+  });
+
+  it('caps at 10 entries', () => {
+    const highlights = Array.from({ length: 15 }, (_, i) => ({
+      ts: `2026-05-1${i % 7}T10:00:00.000Z`, type: 'commit' as const,
+      by: 'u' + i, project: 'p' + i, detail: 'd',
+    }));
+    const html = renderHighlightsFragment(makeSnapshot({ highlights }));
+    expect((html.match(/class="hl-row"/g) ?? []).length).toBe(10);
+  });
+
+  it('escapes user-supplied detail / project / author (XSS)', () => {
+    const html = renderHighlightsFragment(makeSnapshot({
+      computedAt: '2026-05-17T12:00:00.000Z',
+      highlights: [{
+        ts: '2026-05-17T10:00:00.000Z', type: 'commit',
+        by: '<script>', project: '<bad>', detail: '<x>',
+      }],
+    }));
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('<bad>');
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).toContain('&lt;bad&gt;');
+  });
+});
+
+describe('renderCollabFragment (B-main)', () => {
+  it('returns empty section when no collaboration data', () => {
+    const html = renderCollabFragment(makeSnapshot({ collaboration: [] }));
+    expect(html).toContain('id="collab"');
+    expect(html).not.toContain('collab-list');
+  });
+
+  it('renders top 3 collisions with member list and short file path', () => {
+    const html = renderCollabFragment(makeSnapshot({
+      collaboration: [
+        { filePath: 'packages/server/src/config.ts', members: ['liboze@x.com', 'liusy@x.com'], lastTouched: '2026-05-15T08:00:00Z' },
+        { filePath: 'packages/server/src/index.ts',  members: ['alice@x.com',  'bob@x.com'],   lastTouched: '2026-05-14T08:00:00Z' },
+        { filePath: 'packages/cli/src/main.ts',      members: ['carol@x.com',  'dave@x.com'],  lastTouched: '2026-05-13T08:00:00Z' },
+        { filePath: 'packages/cli/src/util.ts',      members: ['eve@x.com',    'frank@x.com'], lastTouched: '2026-05-12T08:00:00Z' },
+      ],
+    }));
+    expect((html.match(/class="collab-row"/g) ?? []).length).toBe(3);
+    expect(html).toContain('src/config.ts');
+    expect(html).toContain('liboze · liusy');
+    // 4 total → footer link visible
+    expect(html).toContain('看全部 4 处');
+  });
+
+  it('escapes user-supplied file path / members (XSS)', () => {
+    const html = renderCollabFragment(makeSnapshot({
+      collaboration: [
+        { filePath: '<bad>/x.ts', members: ['<script>@x.com', 'b@x.com'], lastTouched: '2026-05-15T08:00:00Z' },
+      ],
+    }));
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).not.toContain('<bad>');
   });
 });
 

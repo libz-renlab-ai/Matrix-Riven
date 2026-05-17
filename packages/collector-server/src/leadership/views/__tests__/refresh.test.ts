@@ -57,11 +57,15 @@ describe('overview live polling (P-C2)', () => {
   it('handles 304 by short-circuiting (no body parse)', () => {
     expect(CLIENT_REFRESH_SCRIPT).toMatch(/status\s*===\s*304/);
   });
-  it('swaps 5 fragments via outerHTML', () => {
-    for (const id of ['hero', 'kpis', 'attention', 'members', 'projects']) {
-      expect(CLIENT_REFRESH_SCRIPT).toContain(`getElementById('${id}')`);
+  it('swaps Overview fragments via outerHTML (B-main: 7 slots incl. highlights + collab)', () => {
+    // The refresh script now drives swap from a `slots` array rather than a
+    // hard-coded switch — verify each slot id appears in that array so the
+    // outerHTML swap can find it.
+    for (const id of ['hero', 'kpis', 'attention', 'members', 'projects', 'highlights', 'collab']) {
+      expect(CLIENT_REFRESH_SCRIPT).toContain(`'${id}'`);
     }
     expect(CLIENT_REFRESH_SCRIPT).toContain('outerHTML');
+    expect(CLIENT_REFRESH_SCRIPT).toContain('getElementById');
   });
   it('reads/writes lastKpis from localStorage for delta badges', () => {
     expect(CLIENT_REFRESH_SCRIPT).toContain('localStorage');

@@ -36,6 +36,8 @@ import {
   renderAttentionFragment,
   renderMembersFragment,
   renderProjectsFragment,
+  renderHighlightsFragment,
+  renderCollabFragment,
 } from './views/_overview-fragments.js';
 import { renderNav, type ActiveTab } from './views/_nav.html.js';
 import { renderSlideoverShell } from './views/_slideover.html.js';
@@ -106,6 +108,8 @@ export function handleLeadershipRequest(
           attention: renderAttentionFragment(snap, { limit: 3 }),
           members: renderMembersFragment(snap, { limit: 4 }),
           projects: renderProjectsFragment(snap, { limit: 4 }),
+          highlights: renderHighlightsFragment(snap),
+          collab: renderCollabFragment(snap),
         };
         const body = { ...snap, _html } as Record<string, unknown>;
         entry = { body, etag: etagFor(body) };

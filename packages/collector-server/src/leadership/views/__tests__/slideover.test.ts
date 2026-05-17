@@ -159,9 +159,16 @@ describe('renderMemberSlideoverFragments (P-B6)', () => {
     expect(nums).toBe(3);
   });
 
-  it('stats includes sessions count and a percentage health number', () => {
-    expect(f.stats).toContain('>88<');     // sessions
-    expect(f.stats).toMatch(/\d+%/);       // health pct
+  it('B-main: stats block is narrative (本周节奏 / 焦点 / 状态), not raw numbers', () => {
+    // Labels remain editorial; the values are now short phrases like
+    // "正常推进" / "聚焦 mr" / "本周参与不多" rather than counts.
+    expect(f.stats).toContain('本周节奏');
+    expect(f.stats).toContain('焦点');
+    expect(f.stats).toContain('状态');
+    expect(f.stats).toMatch(/加速|稳步|放缓|收尾|未活跃|才开始/);
+    // The old "¥" cost and bare "88 会话" surfaces are gone.
+    expect(f.stats).not.toContain('¥');
+    expect(f.stats).not.toMatch(/<div class="so-stat-num tnum">/);
   });
 
   it('evolve renders one row per prompt', () => {
@@ -222,27 +229,44 @@ describe('renderProjectSlideoverFragments (P-B6)', () => {
     expect(Object.keys(f).sort()).toEqual(['callout', 'evolve', 'projects', 'stats']);
   });
 
-  it('callout names the project and its phase', () => {
+  it('B-main: callout names the project + phaseLabel narrative (not enum)', () => {
     expect(f.callout).toContain('class="so-callout');
     expect(f.callout).toContain('serif');
     expect(f.callout).toContain('Matrix-Riven');
-    expect(f.callout).toContain('implement');
+    expect(f.callout).toContain('推进新功能'); // phaseLabel(implement)
+    // No "implement" or "healthScore=7/10" engineer-speak
+    expect(f.callout).not.toMatch(/<em>implement<\/em>/);
+    expect(f.callout).not.toMatch(/healthScore/);
   });
 
-  it('stats has 3 numbers (contributors / weekFiles / ETA)', () => {
-    const nums = (f.stats.match(/class="so-stat-num/g) ?? []).length;
-    expect(nums).toBe(3);
-    expect(f.stats).toContain('>2<');     // contributors
-    expect(f.stats).toContain('>3<');     // weekFiles
-    expect(f.stats).toContain('>5<');     // etaDays
+  it('B-main: stats block is narrative (本周节奏 / 团队规模 / 整体健康)', () => {
+    expect(f.stats).toContain('本周节奏');
+    expect(f.stats).toContain('团队规模');
+    expect(f.stats).toContain('整体健康');
+    expect(f.stats).toContain('位贡献者');
+    expect(f.stats).toMatch(/健康|需关注|亟需介入/);
   });
 
-  it('stats falls back to "—" when etaDays is null', () => {
+  it('B-main: single-contributor projects show "（单人项目）"', () => {
+    const solo = renderProjectSlideoverFragments(
+      {
+        ...makeProject(),
+        contributors: [{ email: 'a@x.com', sharePct: 1 }],
+      },
+      makeProjectDetail(),
+    );
+    expect(solo.stats).toContain('单人项目');
+  });
+
+  it('B-main: callout reads cleanly when etaDays is null', () => {
     const nullEta = renderProjectSlideoverFragments(
       { ...makeProject(), etaDays: null },
       makeProjectDetail(),
     );
-    expect(nullEta.stats).toContain('—');
+    // etaLabel(null) → '暂无预估', surfaced as a standalone clause (no
+    // "预计 暂无预估" double-up).
+    expect(nullEta.callout).toContain('暂无预估');
+    expect(nullEta.callout).not.toContain('预计 暂无预估');
   });
 
   it('evolve renders one row per milestone, top one marked latest', () => {

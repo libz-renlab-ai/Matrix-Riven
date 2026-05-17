@@ -338,7 +338,7 @@ describe('Phase 2 P2 — placeholder → real data (P-A2)', () => {
     }
   });
 
-  it('low_activity attention line2 contains "小时" with real idle hours', () => {
+  it('B-main: low_activity line2 is a relative-time phrase with "无新动作"', () => {
     const snap = buildOverviewSnapshot({
       sessions: makeMixedFixture(),
       range: RANGE,
@@ -348,12 +348,16 @@ describe('Phase 2 P2 — placeholder → real data (P-A2)', () => {
     });
     const low = snap.attention.find((a) => a.kind === 'member' && a.tag === '闲置');
     if (low) {
-      expect(low.line2).toMatch(/小时/);
-      expect(low.line2).not.toMatch(/7 日活跃低于均值$/);
+      // narrativeIdleSince → "刚刚" | "N 小时前" | "今天早些时候" | "昨天" | "N 天前" | …
+      expect(low.line2).toContain('无新动作');
+      expect(low.line2).toMatch(/刚刚|小时前|今天早些时候|昨天|天前|周前|一个月以上/);
+      // No raw "07:42" timestamps / "上次会话" technical surface
+      expect(low.line2).not.toMatch(/上次会话/);
+      expect(low.line2).not.toMatch(/\d\d:\d\d/);
     }
   });
 
-  it('stuck attention line2 contains "次 prompt" with real iteration density', () => {
+  it('B-main: stuck attention line2 is narrative — "卡在 <file>" or "反复尝试"', () => {
     const snap = buildOverviewSnapshot({
       sessions: makeMixedFixture(),
       range: RANGE,
@@ -363,12 +367,14 @@ describe('Phase 2 P2 — placeholder → real data (P-A2)', () => {
     });
     const stuck = snap.attention.find((a) => a.kind === 'member' && a.tag === '疑似卡住');
     if (stuck) {
-      expect(stuck.line2).toMatch(/次 prompt/);
-      expect(stuck.line2).toMatch(/均长 \d+ 字/);
+      expect(stuck.line2).toMatch(/卡在|反复尝试相似问题/);
+      // No raw iteration-density / prompt-length engineer-speak
+      expect(stuck.line2).not.toMatch(/次 prompt/);
+      expect(stuck.line2).not.toMatch(/均长 \d+ 字/);
     }
   });
 
-  it('busFactor attention line2 names the top contributor email + real percent', () => {
+  it('B-main: busFactor attention line2 reads "<name> 一人独撑" — no raw percent', () => {
     const snap = buildOverviewSnapshot({
       sessions: makeFixtureWithBusFactorProject(),
       range: RANGE,
@@ -377,8 +383,11 @@ describe('Phase 2 P2 — placeholder → real data (P-A2)', () => {
     });
     const bf = snap.attention.find((a) => a.kind === 'project' && a.tag === '单点依赖');
     expect(bf).toBeDefined();
-    expect(bf!.line2).toMatch(/whale@x\.com/);
-    expect(bf!.line2).toMatch(/占 \d+%/);
+    // Local-part-only ("whale"), not full email; no "占 N%" technical line.
+    expect(bf!.line2).toMatch(/whale/);
+    expect(bf!.line2).toContain('一人独撑');
+    expect(bf!.line2).not.toMatch(/占 \d+%/);
+    expect(bf!.line2).not.toMatch(/@x\.com/);
   });
 });
 
@@ -520,6 +529,55 @@ describe('P-D2 — attention queue folding + cap', () => {
     const busAttn = snap.attention.filter((a) => a.tag === '单点依赖');
     expect(busAttn.length).toBe(1);
     expect(busAttn[0]!.displayName).toMatch(/5 个单点依赖/);
+  });
+});
+
+// =============================================================================
+// B-main: leader-language render layer (2026-05-17)
+// =============================================================================
+
+describe('B-main — OverviewSnapshot.highlights', () => {
+  it('always populated as an array (possibly empty)', () => {
+    const snap = buildOverviewSnapshot({ sessions: FIXTURE, range: RANGE, now: NOW, collectorDir: '' });
+    expect(Array.isArray(snap.highlights)).toBe(true);
+  });
+
+  it('contains entries normalised to email local-parts only (no full emails)', () => {
+    // Build a fixture where a session fires a `git commit` (matched by
+    // extractMilestones). The author email's local-part must show up; the
+    // domain portion must not.
+    const startTs = new Date(NOW.getTime() - 2 * 60 * 60 * 1000);
+    const commitSession: ParsedSession = {
+      envelope: {
+        id: 'env-c1', userId: 'hrdai@example.com', machineId: 'm', sessionId: 'c1',
+        cwd: '/home/hrdai/projects/proj-x', projectName: 'proj-x',
+        capturedAt: startTs.toISOString(), rivenVersion: '1', consentedAt: null,
+      },
+      l1RedactionCount: 0,
+      messages: [
+        {
+          role: 'assistant', text: '', toolUses: [
+            { name: 'Bash', input: { command: 'git commit -m "fix: x"' } },
+          ],
+          toolResults: [],
+        },
+      ],
+      durationMs: 60_000, startTs, endTs: new Date(startTs.getTime() + 60_000),
+      model: 'claude-sonnet-4-6',
+      tokens: { input: 1000, output: 500, cacheRead: 0, cacheCreation: 0 },
+    };
+    // Pad to ≥ 5 sessions so the project survives the noise filter.
+    const sessions = [commitSession];
+    for (let i = 1; i <= 4; i++) {
+      sessions.push(makeSession('hrdai@example.com', 'proj-x', `p-${i}`, i * 60 * 60 * 1000));
+    }
+    const snap = buildOverviewSnapshot({ sessions, range: RANGE, now: NOW, collectorDir: '' });
+    expect(snap.highlights.length).toBeGreaterThanOrEqual(1);
+    const commit = snap.highlights.find((h) => h.type === 'commit');
+    expect(commit).toBeDefined();
+    expect(commit!.by).toBe('hrdai');
+    expect(commit!.by).not.toMatch(/@/);
+    expect(commit!.project).toBe('proj-x');
   });
 });
 

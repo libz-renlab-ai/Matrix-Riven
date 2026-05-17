@@ -218,14 +218,10 @@ export const CLIENT_REFRESH_SCRIPT = `
       if (!resp.ok) return;
       overviewEtag = resp.headers.get('etag');
       var snap = await resp.json();
-      var slots = ['hero', 'kpis', 'attention', 'members', 'projects'];
+      var slots = ['hero', 'kpis', 'attention', 'members', 'projects', 'highlights', 'collab'];
       for (var i = 0; i < slots.length; i++) {
         var slot = slots[i];
-        var el = slot === 'hero' ? document.getElementById('hero')
-              : slot === 'kpis' ? document.getElementById('kpis')
-              : slot === 'attention' ? document.getElementById('attention')
-              : slot === 'members' ? document.getElementById('members')
-              : document.getElementById('projects');
+        var el = document.getElementById(slot);
         if (el && snap && snap._html && snap._html[slot]) {
           el.outerHTML = snap._html[slot];
         }

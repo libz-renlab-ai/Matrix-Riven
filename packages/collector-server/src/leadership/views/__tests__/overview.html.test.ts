@@ -26,6 +26,7 @@ function fixture(): OverviewSnapshot {
       { filePath: 'packages/shared/src/config.ts', members: ['liboze@x.com', 'liusy@x.com'], lastTouched: '2026-05-14T22:00:00.000Z' },
     ],
     attention: [],
+    highlights: [],
   };
 }
 
@@ -76,10 +77,17 @@ describe('renderOverview', () => {
     expect(html).toMatch(/没有项目活动/);
   });
 
-  it('shows collaboration section when hits exist', () => {
+  it('shows the B-main 合作热点 section when collab hits exist', () => {
     const html = renderOverview(fixture());
-    expect(html).toContain('协作机会');
-    expect(html).toContain('packages/shared/src/config.ts');
+    expect(html).toContain('合作热点');
+    expect(html).toContain('id="collab"');
+    // Short file rendering — last two path segments.
+    expect(html).toContain('src/config.ts');
+  });
+
+  it('mounts the B-main 本周关键进展 section (empty when no highlights)', () => {
+    const html = renderOverview(fixture());
+    expect(html).toContain('id="highlights"');
   });
 });
 

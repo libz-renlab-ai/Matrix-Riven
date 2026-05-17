@@ -15,6 +15,7 @@ import type {
   SessionSummary,
   DateRange,
   AttentionItem,
+  HighlightEvent,
 } from './types.js';
 import { computeActivity, computeFocus, computeRhythmDelta } from './signals/activity.js';
 import { detectLowActivity } from './signals/slacking.js';
@@ -93,7 +94,7 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
 
   // Attention items (P-B4) — derived from member badges + project signals,
   // sorted by severity desc, folded by shape, and globally capped (P-D2).
-  const attention: AttentionItem[] = deriveAttention(members, projects, input.now, byProject);
+  const attention: AttentionItem[] = deriveAttention(members, projects, input.now, byProject, byEmail);
 
   // Team-wide pace: today vs prior-7-day daily-average tokens.
   // Uses the same computeRhythmDelta helper that powers per-member delta,
@@ -142,6 +143,35 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
   // same session set the dashboard renders.
   const staleness = computeStaleness(inRange, input.now);
 
+  // "本周关键进展" (B-main, new section A) — aggregate milestones across
+  // every surviving project's sessions within the trailing 7-day window so
+  // the Overview can surface a single editorial feed of commits / pushes /
+  // PRs without per-project drill-down. ProjectSnapshot doesn't carry the
+  // milestones list (those live on ProjectDetail), so we run the same
+  // extractor used by buildProjectDetail directly on the per-project
+  // session groups. Author emails are normalised to local-part here so the
+  // renderer never sees a full address.
+  const weekAgo = input.now.getTime() - 7 * 24 * 60 * 60 * 1000;
+  const highlights: HighlightEvent[] = [];
+  for (const p of projects) {
+    const psess = byProject.get(p.name) ?? [];
+    if (psess.length === 0) continue;
+    const milestones = extractMilestones(psess);
+    for (const m of milestones) {
+      const tsMs = Date.parse(m.ts);
+      if (!Number.isFinite(tsMs) || tsMs < weekAgo) continue;
+      highlights.push({
+        ts: m.ts,
+        type: m.type,
+        by: localPart(m.by),
+        project: p.name,
+        detail: m.detail,
+      });
+    }
+  }
+  highlights.sort((a, b) => b.ts.localeCompare(a.ts));
+  const highlightsTop = highlights.slice(0, 10);
+
   const snap: OverviewSnapshot = {
     schemaVersion: 1,
     range: {
@@ -155,6 +185,7 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
     projects,
     collaboration,
     attention,
+    highlights: highlightsTop,
   };
   if (staleness) snap.staleness = staleness;
   return snap;
@@ -333,49 +364,57 @@ function computeStaleness(
 /**
  * Derive an attention list from member badges + project signals.
  * Output is sorted by severity DESC so the editorial card renders the most
- * urgent rows first. line2 strings now interpolate real per-member /
- * per-project values (iteration density, idle hours, contributor email, etc.)
- * Email values are escaped before embedding — anything else interpolated is
- * a number or controlled string, safe to emit unescaped by the renderer.
+ * urgent rows first. line2 is leader-narrative — no raw percentages, token
+ * counts, or technical jargon. We extract one real fact (a risky-action
+ * pattern, the top file, hours-since-activity, etc.) and dress it in a
+ * sentence the dashboard's non-technical reader can act on.
+ *
+ * Email values are escaped before embedding (the renderer emits line2
+ * unescaped so callers can include inline `<span class="mono">`). Everything
+ * else interpolated is a number or controlled string from `_leader-lang.ts`.
  */
 function deriveAttention(
   members: MemberSnapshot[],
   projects: ProjectSnapshot[],
   now: Date,
   projectSessionsByName?: Map<string, ParsedSession[]>,
+  memberSessionsByEmail?: Map<string, ParsedSession[]>,
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
 
   for (const m of members) {
     const initials = m.displayName.slice(0, 2).toLowerCase();
+    const memSessions = memberSessionsByEmail?.get(m.email) ?? [];
     if (m.stateBadge === 'stuck') {
-      const dens = m.iterationDensity ?? 0;
-      const len = m.meanPromptLen ?? 0;
+      const topFile = topEditedFile(memSessions);
+      const line2 = topFile
+        ? `卡在 <span class="mono">${escapeHtmlEmail(shortFilePath(topFile))}</span>`
+        : `反复尝试相似问题`;
       items.push({
         kind: 'member', refId: m.email, displayName: m.displayName, initials,
         tag: '疑似卡住', tagSeverity: 'urgent',
-        line2: `最近 ${dens.toFixed(1)} 次 prompt · 均长 ${len} 字`,
+        line2,
         time: '—', severity: 9,
       });
     }
     if (m.stateBadge === 'needs_help') {
-      const failPct = ((m.toolFailureRate ?? 0) * 100).toFixed(0);
-      const risky = m.riskyActionCount ?? 0;
+      const topRisky = topRiskyPattern(memSessions);
+      const line2 = topRisky
+        ? `${riskyPatternLabel(topRisky)} 等高风险操作`
+        : `Bash 命令反复受阻`;
       items.push({
         kind: 'member', refId: m.email, displayName: m.displayName, initials,
         tag: '求助', tagSeverity: 'urgent',
-        line2: `工具失败率 ${failPct}% · ${risky} 次风险动作`,
+        line2,
         time: '—', severity: 8,
       });
     }
     if (m.stateBadge === 'low_activity') {
-      let line2 = `近期活动低于均值`;
+      let line2 = `本周参与不多`;
       if (m.lastSessionAt) {
         const last = new Date(m.lastSessionAt);
-        const idleHours = Math.max(0, Math.round((now.getTime() - last.getTime()) / 3_600_000));
-        const hh = last.getUTCHours().toString().padStart(2, '0');
-        const mm = last.getUTCMinutes().toString().padStart(2, '0');
-        line2 = `未活跃 ${idleHours} 小时 · 上次会话 ${hh}:${mm}`;
+        const idleHours = Math.max(0, (now.getTime() - last.getTime()) / 3_600_000);
+        line2 = `${narrativeIdleSince(idleHours)}无新动作`;
       }
       items.push({
         kind: 'member', refId: m.email, displayName: m.displayName, initials,
@@ -390,22 +429,21 @@ function deriveAttention(
     const initials = p.name.slice(0, 2).toUpperCase();
     if (p.busFactorWarning && p.contributors[0]) {
       const top = p.contributors[0];
-      const pct = Math.round(top.sharePct * 100);
       items.push({
         kind: 'project', refId: p.name, displayName: p.name, initials,
         tag: '单点依赖', tagSeverity: 'calm',
-        line2: `顶贡献者 ${escapeHtmlEmail(top.email)} 占 ${pct}%`,
+        line2: `${escapeHtmlEmail(localPart(top.email))} 一人独撑`,
         time: '—', severity: 4,
       });
     }
     if (p.state === 'dormant' && p.contributors.length > 0) {
-      let line2 = `近期无活动`;
+      let line2 = `上次活动已久`;
       const sessions = projectSessionsByName?.get(p.name);
       if (sessions && sessions.length > 0) {
         let latest = sessions[0]!.startTs;
         for (const s of sessions) if (s.startTs > latest) latest = s.startTs;
-        const days = Math.max(0, Math.floor((now.getTime() - latest.getTime()) / 86_400_000));
-        line2 = `上次活动 ${days} 天前`;
+        const hours = Math.max(0, (now.getTime() - latest.getTime()) / 3_600_000);
+        line2 = `上次活动 ${narrativeIdleSince(hours)}`;
       }
       items.push({
         kind: 'project', refId: p.name, displayName: p.name, initials,
@@ -417,6 +455,107 @@ function deriveAttention(
   }
 
   return foldSameShape(items);
+}
+
+// ---------------------------------------------------------------------------
+// Leader-narrative helpers (B-main render rewrite)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pick the file path the member edited most often across their sessions in
+ * the current range. Returns `undefined` when no Edit/Write/MultiEdit tool
+ * calls fired. Used by `stuck` attention line2 to put a concrete file name
+ * in front of the leader instead of an iteration-density number.
+ */
+function topEditedFile(sessions: ParsedSession[]): string | undefined {
+  const counts = new Map<string, number>();
+  for (const s of sessions) {
+    for (const m of s.messages) {
+      for (const tu of m.toolUses) {
+        if (tu.name === 'Edit' || tu.name === 'Write' || tu.name === 'MultiEdit') {
+          const fp = typeof tu.input.file_path === 'string' ? tu.input.file_path : undefined;
+          if (fp) counts.set(fp, (counts.get(fp) ?? 0) + 1);
+        }
+      }
+    }
+  }
+  let top: string | undefined;
+  let topN = 0;
+  for (const [path, n] of counts) if (n > topN) { topN = n; top = path; }
+  return top;
+}
+
+/**
+ * Pick the most recent risky-action pattern (if any) detected across the
+ * member's sessions. Returns the same string keys as `RiskyAction['pattern']`.
+ * Used by `needs_help` line2 to name the actual operation that tripped the
+ * detector rather than a percentage failure rate.
+ */
+function topRiskyPattern(sessions: ParsedSession[]): string | undefined {
+  // Match the Bash-pattern detection done by extractRiskyActions but stop at
+  // the first match so we avoid a second linear pass per member.
+  const PATTERNS: Array<[RegExp, string]> = [
+    [/\brm\s+-rf\b/i,         'rm -rf'],
+    [/\bgit\s+push\b.*--force/i, 'force push'],
+    [/\bgit\s+reset\s+--hard/i, 'reset --hard'],
+    [/\bdrop\s+table\b/i,     'drop table'],
+  ];
+  for (const s of sessions) {
+    for (const m of s.messages) {
+      for (const tu of m.toolUses) {
+        if (tu.name !== 'Bash') continue;
+        const cmd = typeof tu.input.command === 'string' ? tu.input.command : '';
+        for (const [re, label] of PATTERNS) {
+          if (re.test(cmd)) return label;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Friendly label for a risky-action pattern key. */
+function riskyPatternLabel(pattern: string): string {
+  if (pattern === 'rm -rf')         return '强删文件';
+  if (pattern === 'force push')     return '强推分支';
+  if (pattern === 'reset --hard')   return '硬重置';
+  if (pattern === 'drop table')     return '删表';
+  return '高风险命令';
+}
+
+/** Local-part extractor (no leak of full email to the dashboard reader). */
+function localPart(email: string): string {
+  const at = email.indexOf('@');
+  return at >= 0 ? email.slice(0, at) : email;
+}
+
+/**
+ * Trim a long absolute path to its last two segments so the dashboard can
+ * surface a recognisable filename without the home/cwd noise. Mirrors
+ * `shortFile` in `views/_leader-lang.ts`; duplicated here to avoid a
+ * leadership/views ↔ leadership/aggregator cycle.
+ */
+function shortFilePath(path: string): string {
+  if (!path) return '';
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+  if (parts.length <= 1) return parts[0] ?? path;
+  return parts.slice(-2).join('/');
+}
+
+/**
+ * Idle-hours → leader-friendly phrase. Mirrors `idleSince` in `_leader-lang.ts`
+ * (duplicated to avoid cycle). Used inside the attention `line2` builder.
+ */
+function narrativeIdleSince(idleHours: number): string {
+  if (idleHours < 1) return '刚刚';
+  if (idleHours < 4) return `${Math.round(idleHours)} 小时前`;
+  if (idleHours < 24) return `今天早些时候`;
+  const days = Math.round(idleHours / 24);
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
+  if (days < 14) return '一周前';
+  if (days < 30) return `${Math.floor(days / 7)} 周前`;
+  return '一个月以上';
 }
 
 /**
@@ -605,6 +744,33 @@ function buildProjectSnapshotInner(name: string, projectSessions: ParsedSession[
     ? 0
     : Math.round((activeTodayCount / contributors.length) * 1000) / 1000;
 
+  // Most-recently edited file across this project's sessions, with the
+  // user who fired the Edit/Write/MultiEdit tool call and the message
+  // timestamp. Drives the "最近: <file> (<author> · <时间>)" narrative line
+  // on the Overview project row. Walks newest-session-first and returns at
+  // the first edit tool found so we don't iterate the whole project body.
+  let lastTouch: { filePath: string; by: string; ts: string } | undefined;
+  const sorted = projectSessions.slice().sort((a, b) => b.startTs.getTime() - a.startTs.getTime());
+  outer: for (const s of sorted) {
+    for (let i = s.messages.length - 1; i >= 0; i--) {
+      const m = s.messages[i]!;
+      for (let j = m.toolUses.length - 1; j >= 0; j--) {
+        const tu = m.toolUses[j]!;
+        if (tu.name === 'Edit' || tu.name === 'Write' || tu.name === 'MultiEdit') {
+          const fp = typeof tu.input.file_path === 'string' ? tu.input.file_path : undefined;
+          if (fp) {
+            lastTouch = {
+              filePath: fp,
+              by: s.envelope.userId,
+              ts: (m.ts ?? s.startTs).toISOString(),
+            };
+            break outer;
+          }
+        }
+      }
+    }
+  }
+
   return {
     name,
     state,
@@ -617,6 +783,7 @@ function buildProjectSnapshotInner(name: string, projectSessions: ParsedSession[
     etaConfidence: eta.confidence,
     activeTodayPct,
     activeTodayCount,
+    ...(lastTouch ? { lastTouch } : {}),
   };
 }
 
