@@ -239,46 +239,6 @@ describe('HTML routes', () => {
     expect(text).toContain('lh-kpi-card');
   });
 
-  it('GET /members/:id returns 200 text/html for known member', async () => {
-    const res = await fetch(`${baseUrl}/members/alice2026`);
-    expect(res.status).toBe(200);
-    const ct = res.headers.get('content-type');
-    expect(ct).toContain('text/html');
-    const text = await res.text();
-    expect(text).toContain('<!DOCTYPE html>');
-    expect(text).toContain('lh-kpi-card');
-  });
-
-  it('GET /members/:id returns 404 text/html for unknown member', async () => {
-    const res = await fetch(`${baseUrl}/members/unknown-user-xyz`);
-    expect(res.status).toBe(404);
-    const ct = res.headers.get('content-type');
-    expect(ct).toContain('text/html');
-    const text = await res.text();
-    expect(text).toContain('<!DOCTYPE html>');
-    expect(text).toContain('不存在');
-  });
-
-  it('GET /projects/:name returns 200 text/html for known project', async () => {
-    const res = await fetch(`${baseUrl}/projects/${encodeURIComponent(PROJECT_A)}`);
-    expect(res.status).toBe(200);
-    const ct = res.headers.get('content-type');
-    expect(ct).toContain('text/html');
-    const text = await res.text();
-    expect(text).toContain('<!DOCTYPE html>');
-    expect(text).toContain('lh-kpi-card');
-  });
-
-  it('GET /projects/:name returns 404 text/html for unknown project', async () => {
-    const res = await fetch(`${baseUrl}/projects/nonexistent-project-xyz`);
-    expect(res.status).toBe(404);
-    const ct = res.headers.get('content-type');
-    expect(ct).toContain('text/html');
-    const text = await res.text();
-    expect(text).toContain('<!DOCTYPE html>');
-    expect(text).toContain('不存在');
-  });
-
   it('non-leadership route is NOT handled (returns false)', async () => {
     // The test server returns "not handled" (404) for unhandled routes
     const res = await fetch(`${baseUrl}/some-other-route`);
@@ -355,13 +315,79 @@ describe('5 leadership tab routes (P-B2)', () => {
     expect(text).toBe('not handled');
   });
 
-  it('GET /projects/:name still routes to project detail (not the stub tab)', async () => {
+  it('GET /projects/:name is intercepted by the P-B6 redirect (not the stub tab)', async () => {
     // Regression: the literal /projects route must not shadow the
-    // /projects/<name> regex below it.
-    const res = await fetch(`${baseUrl}/projects/${encodeURIComponent(PROJECT_A)}`);
+    // /projects/<name> regex below it — even though the regex now redirects.
+    const res = await fetch(`${baseUrl}/projects/${encodeURIComponent(PROJECT_A)}`, {
+      redirect: 'manual',
+    });
+    expect([301, 302]).toContain(res.status);
+    expect(res.headers.get('location')).toBe('/projects');
+  });
+});
+
+// ── P-B6: slide-over API enrichment + retired full-page routes ───────────────
+
+describe('detail API _html fragments (P-B6)', () => {
+  it('GET /api/members/<id> returns JSON with _html: { callout, stats, evolve, projects }', async () => {
+    const res = await fetch(`${baseUrl}/api/members/alice2026`);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    const html = data._html as Record<string, unknown> | undefined;
+    expect(html).toBeDefined();
+    expect(typeof html!.callout).toBe('string');
+    expect(typeof html!.stats).toBe('string');
+    expect(typeof html!.evolve).toBe('string');
+    expect(typeof html!.projects).toBe('string');
+    // Sanity: the callout fragment is the so-callout block, not a full page.
+    expect(html!.callout).toContain('so-callout');
+    expect(html!.callout).not.toContain('<!DOCTYPE');
+  });
+
+  it('GET /api/projects/<name> returns JSON with _html fragments', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(PROJECT_A)}`);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    const html = data._html as Record<string, unknown> | undefined;
+    expect(html).toBeDefined();
+    expect(typeof html!.callout).toBe('string');
+    expect(typeof html!.stats).toBe('string');
+    expect(typeof html!.evolve).toBe('string');
+    expect(typeof html!.projects).toBe('string');
+    expect(html!.callout).toContain(PROJECT_A);
+  });
+
+  it('GET /members/<id> is retired — redirects (or 410s) away from a full page', async () => {
+    const res = await fetch(`${baseUrl}/members/alice2026`, { redirect: 'manual' });
+    expect([301, 302, 404, 410]).toContain(res.status);
+    // No HTML body — we should NOT be serving the Phase-1 detail page.
+    if (res.status === 301 || res.status === 302) {
+      expect(res.headers.get('location')).toBe('/people');
+    }
+  });
+
+  it('GET /projects/<name> is retired — redirects (or 410s) away from a full page', async () => {
+    const res = await fetch(`${baseUrl}/projects/${encodeURIComponent(PROJECT_A)}`, {
+      redirect: 'manual',
+    });
+    expect([301, 302, 404, 410]).toContain(res.status);
+    if (res.status === 301 || res.status === 302) {
+      expect(res.headers.get('location')).toBe('/projects');
+    }
+  });
+});
+
+// ── P-B6: Overview HTML mounts the slide-over shell ──────────────────────────
+
+describe('Overview HTML mounts slideover shell (P-B6)', () => {
+  it('GET /overview includes the scrim + slideover panel + 4 empty fragment slots', async () => {
+    const res = await fetch(`${baseUrl}/overview`);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('lh-kpi-card');
-    expect(html).not.toContain('尚未实现');
+    expect(html).toContain('id="scrim"');
+    expect(html).toContain('id="so"');
+    for (const slot of ['so-callout', 'so-stats', 'so-evolve', 'so-projects']) {
+      expect(html).toContain(`id="${slot}"`);
+    }
   });
 });

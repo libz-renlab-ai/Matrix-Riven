@@ -8,11 +8,11 @@
  *
  * Endpoints:
  *   GET /api/overview[?range=7d|24h|today|30d]  → OverviewSnapshot JSON
- *   GET /api/members/:emailLocalPart             → MemberSnapshot + detail JSON
- *   GET /api/projects/:name                      → ProjectSnapshot + detail JSON
- *   GET /overview                                → HTML placeholder
- *   GET /members/:id                             → HTML placeholder
- *   GET /projects/:name                          → HTML placeholder
+ *   GET /api/members/:emailLocalPart             → MemberSnapshot + detail + _html JSON
+ *   GET /api/projects/:name                      → ProjectSnapshot + detail + _html JSON
+ *   GET /overview                                → HTML page (Overview tab)
+ *   GET /members/:id                             → 301 → /people (P-B6: retired)
+ *   GET /projects/:name                          → 301 → /projects (P-B6: retired)
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -25,8 +25,10 @@ import {
   buildProjectDetail,
 } from './aggregator.js';
 import { renderOverview } from './views/overview.html.js';
-import { renderMemberDetail } from './views/member-detail.html.js';
-import { renderProjectDetail } from './views/project-detail.html.js';
+import {
+  renderMemberSlideoverFragments,
+  renderProjectSlideoverFragments,
+} from './views/_slideover.html.js';
 import { renderNav, type ActiveTab } from './views/_nav.html.js';
 import { LEADERSHIP_CSS } from './views/styles.css.js';
 
@@ -125,8 +127,12 @@ export function handleLeadershipRequest(
         sendJson(res, 404, { error: 'not_found' });
         return true;
       }
-      deps.cache.set(cacheKey, detail);
-      sendJson(res, 200, detail);
+      // P-B6: enrich the API response with pre-rendered slide-over fragments
+      // so the client can swap them in without a second round-trip.
+      const _html = renderMemberSlideoverFragments(detail, detail.detail);
+      const payload = { ...detail, _html };
+      deps.cache.set(cacheKey, payload);
+      sendJson(res, 200, payload);
     } catch {
       sendJson(res, 500, { error: 'internal' });
     }
@@ -161,8 +167,11 @@ export function handleLeadershipRequest(
         sendJson(res, 404, { error: 'not_found' });
         return true;
       }
-      deps.cache.set(cacheKey, detail);
-      sendJson(res, 200, detail);
+      // P-B6: enrich the API response with pre-rendered slide-over fragments.
+      const _html = renderProjectSlideoverFragments(detail, detail.detail);
+      const payload = { ...detail, _html };
+      deps.cache.set(cacheKey, payload);
+      sendJson(res, 200, payload);
     } catch {
       sendJson(res, 500, { error: 'internal' });
     }
@@ -206,45 +215,17 @@ export function handleLeadershipRequest(
     return true;
   }
 
+  // P-B6: full-page detail routes retired. The drawer is now mounted in the
+  // Overview shell and populated via /api/members/:id and /api/projects/:name.
+  // Anyone still hitting the old URLs (bookmarks, stale links) is redirected
+  // to the corresponding tab.
   const membersHtmlMatch = /^\/members\/([^/]+)$/.exec(pathname);
   if (membersHtmlMatch) {
     if (req.method !== 'GET') {
       sendJson(res, 405, { error: 'method_not_allowed' });
       return true;
     }
-    const localPart = decodeURIComponent(membersHtmlMatch[1]!);
-    const rangeStr = query.get('range') ?? undefined;
-    const nowDate = now();
-    const range = parseRange(rangeStr, nowDate);
-    const cacheKey = `html|${pathname}|${range.label}`;
-    const cached = deps.cache.get(cacheKey);
-    if (cached !== undefined) {
-      sendHtml(res, 200, cached as string);
-      return true;
-    }
-    const email = resolveEmailByLocalPart(deps.collectorDir, localPart);
-    if (!email) {
-      sendHtml(res, 404, render404(`成员 ${localPart}`));
-      return true;
-    }
-    try {
-      const detail = buildMemberDetail({
-        collectorDir: deps.collectorDir,
-        email,
-        range,
-        now: nowDate,
-        mainProjects: deps.mainProjects,
-      });
-      if (!detail) {
-        sendHtml(res, 404, render404(`成员 ${localPart}`));
-        return true;
-      }
-      const html = renderMemberDetail(detail);
-      deps.cache.set(cacheKey, html);
-      sendHtml(res, 200, html);
-    } catch {
-      sendHtml(res, 500, render404(`成员 ${localPart} (server error)`));
-    }
+    sendRedirect(res, 301, '/people');
     return true;
   }
 
@@ -254,33 +235,7 @@ export function handleLeadershipRequest(
       sendJson(res, 405, { error: 'method_not_allowed' });
       return true;
     }
-    const projectName = decodeURIComponent(projectsHtmlMatch[1]!);
-    const rangeStr = query.get('range') ?? undefined;
-    const nowDate = now();
-    const range = parseRange(rangeStr, nowDate);
-    const cacheKey = `html|${pathname}|${range.label}`;
-    const cached = deps.cache.get(cacheKey);
-    if (cached !== undefined) {
-      sendHtml(res, 200, cached as string);
-      return true;
-    }
-    try {
-      const detail = buildProjectDetail({
-        collectorDir: deps.collectorDir,
-        projectName,
-        range,
-        now: nowDate,
-      });
-      if (!detail) {
-        sendHtml(res, 404, render404(`项目 ${projectName}`));
-        return true;
-      }
-      const html = renderProjectDetail(detail);
-      deps.cache.set(cacheKey, html);
-      sendHtml(res, 200, html);
-    } catch {
-      sendHtml(res, 500, render404(`项目 ${projectName} (server error)`));
-    }
+    sendRedirect(res, 301, '/projects');
     return true;
   }
 
@@ -326,7 +281,7 @@ function renderOverviewTab(
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);
   } catch {
-    sendHtml(res, 500, render404('Overview (server error)'));
+    sendHtml(res, 500, renderOverviewError());
   }
   return true;
 }
@@ -370,6 +325,13 @@ function sendHtml(res: ServerResponse, status: number, html: string): void {
   res.end(html);
 }
 
+function sendRedirect(res: ServerResponse, status: 301 | 302, location: string): void {
+  res.statusCode = status;
+  res.setHeader('location', location);
+  res.setHeader('content-length', 0);
+  res.end();
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
@@ -378,8 +340,8 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function render404(what: string): string {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>404</title><style>${LEADERSHIP_CSS}</style></head><body><div class="lh-container"><div class="lh-empty">${escapeHtml(what)} 不存在<br><a href="/overview">← Overview</a></div></div></body></html>`;
+function renderOverviewError(): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Overview · 500</title><style>${LEADERSHIP_CSS}</style></head><body><div class="lh-container"><div class="lh-empty">Overview (server error)<br><a href="/overview">重试</a></div></div></body></html>`;
 }
 
 /**

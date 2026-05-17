@@ -12,6 +12,7 @@ import type { OverviewSnapshot, CollabHit } from '../types.js';
 import { LEADERSHIP_CSS } from './styles.css.js';
 import { renderNav } from './_nav.html.js';
 import { renderHeroFragment, renderKpisFragment, renderAttentionFragment, renderMembersFragment, renderProjectsFragment } from './_overview-fragments.js';
+import { renderSlideoverShell } from './_slideover.html.js';
 import { CLIENT_REFRESH_SCRIPT } from './_refresh.js.js';
 
 // ---------------------------------------------------------------------------
@@ -62,6 +63,7 @@ ${projectsSection}
   ${collabHtml}
 </div>
 </div>
+${renderSlideoverShell()}
 <script>${CLIENT_REFRESH_SCRIPT}</script>
 </body>
 </html>`;
