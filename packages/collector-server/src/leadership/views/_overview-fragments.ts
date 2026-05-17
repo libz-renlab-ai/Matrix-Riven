@@ -13,6 +13,7 @@
 import type { OverviewSnapshot, MemberSnapshot, ProjectSnapshot, HighlightEvent } from '../types.js';
 import { heroHeadline, attentionLead } from './_copy.js';
 import { avatarColor } from './_helpers.js';
+import { redactForLLM } from '../llm/redact.js';
 import {
   phaseLabel,
   trendLabel,
@@ -24,8 +25,31 @@ import {
   shortFile,
 } from './_leader-lang.js';
 
+/**
+ * Sanitize a highlight `detail` (raw shell command from a session's Bash
+ * tool use) before rendering. The PII redactor strips emails, absolute
+ * paths, secrets, JWTs, etc. — same patterns we apply on the LLM-bound
+ * path. Without this, a `git push` invocation can render as
+ * `cd /Users/alice/projects/secret && git push origin main 2>&1 | tail -5`
+ * exposing both the absolute path and the branch name in the dashboard's
+ * highlight feed.
+ *
+ * Also truncates at 80 chars per spec §Rendering — the CSS ellipsis already
+ * visually clips, but the wire format should not carry the full string.
+ */
+function safeHighlightDetail(s: string): string {
+  if (!s) return '';
+  const cleaned = redactForLLM(s);
+  return cleaned.length > 80 ? cleaned.slice(0, 77) + '…' : cleaned;
+}
+
 export function renderHeroFragment(snap: OverviewSnapshot): string {
-  const attentionCount = snap.kpis.attention.value;
+  // Hero copy must agree with the count rendered under the Attention section
+  // header — otherwise a leader sees "5 件事需要留意" up top and "2" below it.
+  // `snap.kpis.attention.value` historically included risky-action counts
+  // that aren't surfaced as attention rows; the rendered section uses
+  // `snap.attention.length`, so drive both from the same source.
+  const attentionCount = snap.attention.length;
   const highOutputCount = classifyHighOutput(snap.members);
   const headline = heroHeadline({ attentionCount, highOutputCount });
   const d = new Date(snap.computedAt);
@@ -498,9 +522,12 @@ export function renderHighlightsFragment(snap: OverviewSnapshot): string {
     const hours = Math.max(0, (resolveNow(now) - Date.parse(h.ts)) / 3_600_000);
     const since = idleSince(hours);
     // T1 digest: prefer the LLM-authored one-liner over the raw command in
-    // `h.detail`. Both fields are user-content-derived (the LLM string is
-    // external content, the raw command is shell text); always escape.
-    const text = h.llmDigest ?? h.detail;
+    // `h.detail`. The LLM digest already went through the PII redactor at
+    // prompt-build time; the raw `h.detail` is shell text straight from a
+    // session's Bash tool use, so we redact it here before rendering to
+    // strip absolute paths / emails / secrets that would otherwise leak
+    // into the public dashboard surface.
+    const text = h.llmDigest ?? safeHighlightDetail(h.detail);
     const detail = text && text.length > 0 ? ' · ' + escapeHtml(text) : '';
     return `<div class="hl-row" style="display:grid;grid-template-columns:24px 1fr auto;gap:12px;align-items:center;padding:12px 24px;border-bottom:1px solid var(--hairline);">
       <div class="hl-icon" style="font-size:13px;color:var(--accent-ink);width:24px;text-align:center;">${escapeHtml(highlightIcon(h.type))}</div>
@@ -515,7 +542,7 @@ export function renderHighlightsFragment(snap: OverviewSnapshot): string {
   }).join('');
   return `<section id="highlights" class="section fade-in">
     <div class="section-head">
-      <div class="section-title">本周关键进展 <span class="section-count">${all.length}</span></div>
+      <div class="section-title">近期关键进展 <span class="section-count">${all.length}</span></div>
     </div>
     <div class="highlights-list" style="background:var(--surface);border-radius:var(--r-xl);box-shadow:var(--shadow-1);overflow:hidden;">${rows}</div>
   </section>`;

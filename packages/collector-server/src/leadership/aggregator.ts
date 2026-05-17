@@ -779,6 +779,27 @@ function deriveAttention(
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
 
+  // Format a "time ago" stamp from an ISO timestamp; never returns em-dash
+  // so the attention row's right-column always gives the reader a real
+  // recency signal. Falls back to "本周" when the timestamp is unknown.
+  const timeAgo = (iso?: string): string => {
+    if (!iso) return '本周';
+    const last = new Date(iso);
+    if (Number.isNaN(last.getTime())) return '本周';
+    const hours = Math.max(0, (now.getTime() - last.getTime()) / 3_600_000);
+    if (hours < 1) return '刚刚';
+    if (hours < 24) return `${Math.floor(hours)}h 前`;
+    const days = Math.floor(hours / 24);
+    return days === 1 ? '昨日' : `${days}天前`;
+  };
+  const projectLatest = (projectName: string): string | undefined => {
+    const sessions = projectSessionsByName?.get(projectName);
+    if (!sessions || sessions.length === 0) return undefined;
+    let latest = sessions[0]!.startTs;
+    for (const s of sessions) if (s.startTs > latest) latest = s.startTs;
+    return latest.toISOString();
+  };
+
   for (const m of members) {
     const initials = m.displayName.slice(0, 2).toLowerCase();
     const memSessions = memberSessionsByEmail?.get(m.email) ?? [];
@@ -791,7 +812,7 @@ function deriveAttention(
         kind: 'member', refId: m.email, displayName: m.displayName, initials,
         tag: '疑似卡住', tagSeverity: 'urgent',
         line2,
-        time: '—', severity: 9,
+        time: timeAgo(m.lastSessionAt), severity: 9,
       });
     }
     if (m.stateBadge === 'needs_help') {
@@ -803,7 +824,7 @@ function deriveAttention(
         kind: 'member', refId: m.email, displayName: m.displayName, initials,
         tag: '求助', tagSeverity: 'urgent',
         line2,
-        time: '—', severity: 8,
+        time: timeAgo(m.lastSessionAt), severity: 8,
       });
     }
     if (m.stateBadge === 'low_activity') {
@@ -817,7 +838,7 @@ function deriveAttention(
         kind: 'member', refId: m.email, displayName: m.displayName, initials,
         tag: '闲置', tagSeverity: 'normal',
         line2,
-        time: '—', severity: 5,
+        time: timeAgo(m.lastSessionAt), severity: 5,
       });
     }
   }
@@ -830,7 +851,7 @@ function deriveAttention(
         kind: 'project', refId: p.name, displayName: p.name, initials,
         tag: '单点依赖', tagSeverity: 'calm',
         line2: `${escapeHtmlEmail(localPart(top.email))} 一人独撑`,
-        time: '—', severity: 4,
+        time: timeAgo(projectLatest(p.name)), severity: 4,
       });
     }
     if (p.state === 'dormant' && p.contributors.length > 0) {
@@ -846,7 +867,7 @@ function deriveAttention(
         kind: 'project', refId: p.name, displayName: p.name, initials,
         tag: '沉睡', tagSeverity: 'calm',
         line2,
-        time: '—', severity: 3,
+        time: timeAgo(projectLatest(p.name)), severity: 3,
       });
     }
   }
