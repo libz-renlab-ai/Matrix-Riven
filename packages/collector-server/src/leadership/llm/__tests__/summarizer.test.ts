@@ -222,6 +222,60 @@ describe('summarizer', () => {
       expect(result.get('b')).toBeUndefined();
     });
 
+    // The local `claude -p` CLI sometimes wraps JSON in ```json fences plus
+    // prose, even when the system prompt asks for raw JSON. The summarizer
+    // strips that noise via `extractJsonBlock`; the next four tests pin that
+    // contract.
+    it('parses JSON wrapped in ```json fenced block', async () => {
+      mockedRun.mockResolvedValueOnce({
+        ok: true,
+        result:
+          'Sure! Here you go:\n```json\n{"results":[{"id":"a","line":"fenced ok"}]}\n```\nLet me know if you need more.',
+        costUsd: 0.01,
+        durationMs: 100,
+      });
+      const result = await summarizeSessions([t1('a')], ctx(cache));
+      expect(result.get('a')).toBe('fenced ok');
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('parses JSON wrapped in bare ``` fenced block', async () => {
+      mockedRun.mockResolvedValueOnce({
+        ok: true,
+        result: '```\n{"results":[{"id":"a","line":"bare fence"}]}\n```',
+        costUsd: 0.01,
+        durationMs: 100,
+      });
+      const result = await summarizeSessions([t1('a')], ctx(cache));
+      expect(result.get('a')).toBe('bare fence');
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('parses JSON surrounded by prose with no fence', async () => {
+      mockedRun.mockResolvedValueOnce({
+        ok: true,
+        result:
+          'Here is the summary: {"results":[{"id":"a","line":"no fence"}]} — hope that helps.',
+        costUsd: 0.01,
+        durationMs: 100,
+      });
+      const result = await summarizeSessions([t1('a')], ctx(cache));
+      expect(result.get('a')).toBe('no fence');
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('still parses clean JSON without any wrapping', async () => {
+      mockedRun.mockResolvedValueOnce({
+        ok: true,
+        result: JSON.stringify({ results: [{ id: 'a', line: 'clean' }] }),
+        costUsd: 0.01,
+        durationMs: 100,
+      });
+      const result = await summarizeSessions([t1('a')], ctx(cache));
+      expect(result.get('a')).toBe('clean');
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
     it('applies redactForLLM to input string fields before sending', async () => {
       mockedRun.mockResolvedValueOnce({
         ok: true,

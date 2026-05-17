@@ -67,9 +67,24 @@ export interface SummarizerContext {
 
 // ---- shared parse + warn helpers --------------------------------------------
 
+/**
+ * Strip markdown noise around a JSON object. The local `claude -p` CLI often
+ * wraps its answer in `​`​`​`json ... `​`​`​` fences plus prose, even when the system
+ * prompt asks for raw JSON. We accept (a) a fenced block, otherwise (b) the
+ * substring from the first `{` to the last `}`.
+ */
+function extractJsonBlock(raw: string): string {
+  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence?.[1]) return fence[1].trim();
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start >= 0 && end > start) return raw.slice(start, end + 1);
+  return raw;
+}
+
 function parseJsonOrWarn(tier: string, raw: string): unknown {
   try {
-    return JSON.parse(raw);
+    return JSON.parse(extractJsonBlock(raw));
   } catch (err) {
     const reason = err instanceof Error ? err.message : 'unknown';
     console.warn(`[summarizer:${tier}] malformed JSON from LLM: ${reason}`);
