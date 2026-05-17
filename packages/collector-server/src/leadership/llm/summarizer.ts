@@ -54,6 +54,14 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
+/**
+ * Max T1 sessions packed into a single `claude -p` call. Per spec §Tiers
+ * (`docs/superpowers/specs/2026-05-17-llm-narrative-design.md`). 470+ sessions
+ * in one prompt times out the haiku model well past 60s; 50/call keeps each
+ * call ≤ ~30s on real-world payloads.
+ */
+const T1_BATCH_SIZE = 50;
+
 export interface SummarizerContext {
   cache: LlmCache;
   /** Skip LLM calls and return cache-only results (used by aggregator render path). Defaults false (worker path). */
@@ -176,41 +184,49 @@ export async function summarizeSessions(
   }
   if (misses.length === 0 || ctx.cacheOnly) return hits;
 
-  const redactedInputs = misses.map((m) => redactT1(m.input));
-  const prompt = buildT1Prompt(redactedInputs);
-  const model = ctx.tier1Model ?? T1_MODEL;
-  const response = await runLocalClaude({
-    systemPrompt: prompt.system,
-    userPrompt: prompt.user,
-    model,
-    timeoutMs: ctx.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-  if (!response.ok || !response.result) {
-    console.warn(`[summarizer:t1] LLM call failed: ${response.error ?? 'unknown'}`);
-    return hits;
-  }
-  const parsed = parseJsonOrWarn('t1', response.result);
-  const rows = asResultsArray(parsed);
-  if (!rows) {
-    if (parsed !== undefined) {
-      console.warn(`[summarizer:t1] missing or non-array "results" field`);
-    }
-    return hits;
-  }
-
-  // Index misses by id for O(1) lookup of the cache key.
+  // Index ALL misses by id once so each chunk's response handler can find
+  // the right cache key in O(1).
   const keyById = new Map(misses.map((m) => [m.input.id, m.key]));
-  const perItemCost = response.costUsd / Math.max(1, rows.length);
-  for (const row of rows) {
-    if (row === null || typeof row !== 'object') continue;
-    const r = row as { id?: unknown; line?: unknown };
-    const id = asString(r.id);
-    const line = asString(r.line);
-    if (!id || !line) continue;
-    const key = keyById.get(id);
-    if (!key) continue; // result for an id we didn't ask about
-    await ctx.cache.put(key, line, perItemCost);
-    hits.set(id, line);
+  const model = ctx.tier1Model ?? T1_MODEL;
+
+  // Chunk misses into batches of T1_BATCH_SIZE so a single LLM call's prompt
+  // stays bounded and finishes inside the per-call timeout. Each chunk is
+  // independent — one bad chunk shouldn't kill the others.
+  for (let i = 0; i < misses.length; i += T1_BATCH_SIZE) {
+    const chunk = misses.slice(i, i + T1_BATCH_SIZE);
+    const redactedInputs = chunk.map((m) => redactT1(m.input));
+    const prompt = buildT1Prompt(redactedInputs);
+    const response = await runLocalClaude({
+      systemPrompt: prompt.system,
+      userPrompt: prompt.user,
+      model,
+      timeoutMs: ctx.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    });
+    if (!response.ok || !response.result) {
+      console.warn(`[summarizer:t1] LLM call failed: ${response.error ?? 'unknown'}`);
+      continue; // try the next chunk
+    }
+    const parsed = parseJsonOrWarn('t1', response.result);
+    const rows = asResultsArray(parsed);
+    if (!rows) {
+      if (parsed !== undefined) {
+        console.warn(`[summarizer:t1] missing or non-array "results" field`);
+      }
+      continue;
+    }
+
+    const perItemCost = response.costUsd / Math.max(1, rows.length);
+    for (const row of rows) {
+      if (row === null || typeof row !== 'object') continue;
+      const r = row as { id?: unknown; line?: unknown };
+      const id = asString(r.id);
+      const line = asString(r.line);
+      if (!id || !line) continue;
+      const key = keyById.get(id);
+      if (!key) continue; // result for an id we didn't ask about
+      await ctx.cache.put(key, line, perItemCost);
+      hits.set(id, line);
+    }
   }
   return hits;
 }

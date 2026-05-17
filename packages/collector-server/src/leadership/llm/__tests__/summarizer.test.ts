@@ -322,6 +322,66 @@ describe('summarizer', () => {
       expect(result.get('a')).toBe('seeded');
     });
 
+    it('chunks more than 50 misses into multiple batched calls', async () => {
+      // Build 120 sessions → expect 3 LLM calls of sizes 50, 50, 20.
+      const sessions = Array.from({ length: 120 }, (_, i) => t1(`s${i}`));
+      // Mock 3 responses, each returning lines for its own batch only.
+      const responder = (callIndex: number) => ({
+        ok: true,
+        result: JSON.stringify({
+          results: sessions
+            .slice(callIndex * 50, callIndex * 50 + 50)
+            .map((s) => ({ id: s.id, line: `line-${s.id}` })),
+        }),
+        costUsd: 0.01,
+        durationMs: 100,
+      });
+      mockedRun.mockResolvedValueOnce(responder(0));
+      mockedRun.mockResolvedValueOnce(responder(1));
+      mockedRun.mockResolvedValueOnce(responder(2));
+
+      const result = await summarizeSessions(sessions, ctx(cache));
+      expect(mockedRun).toHaveBeenCalledTimes(3);
+      // Each call's redacted input array length matches its batch size.
+      const batchSizes = mockedRun.mock.calls.map((c) => {
+        const u = (c[0] as { userPrompt: string }).userPrompt;
+        const nl = u.indexOf('\n');
+        const parsed = JSON.parse(u.slice(nl + 1)) as { items: unknown[] };
+        return parsed.items.length;
+      });
+      expect(batchSizes).toEqual([50, 50, 20]);
+      // All 120 sessions got a digest.
+      expect(result.size).toBe(120);
+      expect(result.get('s0')).toBe('line-s0');
+      expect(result.get('s119')).toBe('line-s119');
+    });
+
+    it('one bad chunk does not poison the rest', async () => {
+      const sessions = Array.from({ length: 75 }, (_, i) => t1(`s${i}`));
+      // First batch fails (timeout) — second batch succeeds.
+      mockedRun.mockResolvedValueOnce({
+        ok: false,
+        error: 'timeout',
+        costUsd: 0,
+        durationMs: 60_000,
+      });
+      mockedRun.mockResolvedValueOnce({
+        ok: true,
+        result: JSON.stringify({
+          results: sessions.slice(50, 75).map((s) => ({ id: s.id, line: `ok-${s.id}` })),
+        }),
+        costUsd: 0.01,
+        durationMs: 100,
+      });
+      const result = await summarizeSessions(sessions, ctx(cache));
+      expect(mockedRun).toHaveBeenCalledTimes(2);
+      expect(warnSpy).toHaveBeenCalled();
+      // First batch's 50 sessions missing — second batch's 25 landed.
+      expect(result.size).toBe(25);
+      expect(result.get('s50')).toBe('ok-s50');
+      expect(result.get('s0')).toBeUndefined();
+    });
+
     it('honours tier1Model override', async () => {
       mockedRun.mockResolvedValueOnce({
         ok: true,
