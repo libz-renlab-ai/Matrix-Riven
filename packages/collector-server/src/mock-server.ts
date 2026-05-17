@@ -60,8 +60,8 @@ import { LlmCache } from './leadership/llm/cache.js';
 import {
   startWorker,
   type WorkerHandle,
-  type WorkerInputs,
 } from './leadership/llm/worker.js';
+import { collectWorkerInputs } from './leadership/llm/inputs.js';
 
 /** Cap raw POST body to bound memory + reject obvious DoS payloads. */
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -956,24 +956,17 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
 
       // L-11 — start the LLM narrative worker AFTER `listen` resolves so its
       // first tick can never race the listen callback. `collectInputs` is
-      // currently a stub (returns null) — the worker handles this by short-
-      // circuiting the tick with `reason: 'no_inputs'` and never calling the
-      // LLM. L-12 will replace the stub with a real input collector that
-      // imports the aggregator's helpers. Wiring the worker now (rather than
-      // deferring everything to L-12) keeps the boot/teardown path honest:
-      // any startup/shutdown bug surfaces here, not in L-12.
+      // wired to the real input collector — each tick loads sessions from
+      // `outputDir`, builds the overview snapshot via the aggregator, and
+      // maps T1..T5 inputs using the SAME builders the aggregator's
+      // cache-only render path uses (so worker writes and aggregator reads
+      // hit the same cache keys).
       if (llmCfg.enabled && llmCache !== undefined) {
         const cache = llmCache;
         llmWorker = startWorker({
           cache,
           cfg: llmCfg,
-          collectInputs: async (): Promise<WorkerInputs | null> => {
-            // Stub — L-12 will wire real T1..T5 input collection. Returning
-            // null makes the worker tick report `no_inputs` without any LLM
-            // call or summarizer entry, so the boot path is exercised but
-            // no narrative is generated yet.
-            return null;
-          },
+          collectInputs: () => collectWorkerInputs({ collectorDir: outputDir, now }),
           log: (msg: string) => console.log(`[llm-worker] ${msg}`),
         });
       }

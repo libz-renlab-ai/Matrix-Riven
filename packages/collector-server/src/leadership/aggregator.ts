@@ -332,19 +332,14 @@ function attachLlmFields(
 
   // --- T5: daily leader brief ------------------------------------------------
   const today = input.today ?? new Date().toISOString().slice(0, 10);
-  const t5Input: T5Input = {
-    date: today,
-    topHighlights: snap.highlights.slice(0, 5).map((h) => {
-      const sid = findSessionIdForHighlight(h, byProject);
-      const fromT1 = sid ? sessionsMap.get(sid) : undefined;
-      return fromT1 ?? h.detail.slice(0, 80);
-    }),
-    attentionRewrites: [...attentionMap.values()],
-    topProjects: snap.projects.slice(0, 3).map((p) => ({
-      name: p.name,
-      digest: projectsMap.get(p.name) ?? '',
-    })),
-  };
+  const t5Input: T5Input = buildT5InputFromSnapshot(
+    snap,
+    byProject,
+    sessionsMap,
+    projectsMap,
+    [...attentionMap.values()],
+    today,
+  );
   const briefRaw = cache.get(t5CacheKey(t5Input));
   if (briefRaw !== undefined) {
     try {
@@ -361,8 +356,12 @@ function attachLlmFields(
 /**
  * Build a T1 input from a parsed session. Mirrors the data the worker (L-9)
  * will pack; key shape MUST match exactly so cache lookups hit.
+ *
+ * Exported so the worker's input collector (`llm/inputs.ts`) can reuse the
+ * exact same packing — the aggregator-render and worker-fill paths MUST
+ * produce identical T1 inputs for the cache to deduplicate.
  */
-function buildT1InputFromSession(s: ParsedSession): T1Input | null {
+export function buildT1InputFromSession(s: ParsedSession): T1Input | null {
   const id = s.envelope.sessionId;
   if (!id) return null;
 
@@ -421,7 +420,12 @@ function buildT1InputFromSession(s: ParsedSession): T1Input | null {
   };
 }
 
-function buildT2InputForMember(
+/**
+ * Build a T2 input for one member from their week's sessions. `sessionsMap`
+ * maps `sessionId` → T1 digest so the prompt can include the member's
+ * already-cached session lines. Exported for `llm/inputs.ts`.
+ */
+export function buildT2InputForMember(
   m: MemberSnapshot,
   memberSessions: ParsedSession[],
   sessionsMap: Map<string, string>,
@@ -442,7 +446,11 @@ function buildT2InputForMember(
   };
 }
 
-function buildT3InputForProject(
+/**
+ * Build a T3 input for one project. `sessionsMap` is the same T1 digest map
+ * used by `buildT2InputForMember`. Exported for `llm/inputs.ts`.
+ */
+export function buildT3InputForProject(
   p: ProjectSnapshot,
   projectSessions: ParsedSession[],
   sessionsMap: Map<string, string>,
@@ -462,7 +470,11 @@ function buildT3InputForProject(
   };
 }
 
-function buildT4InputForAttention(it: AttentionItem): T4Input | null {
+/**
+ * Build a T4 input from one attention item. Strips HTML wrapping tags from
+ * `line2` so the redactor only sees plain text. Exported for `llm/inputs.ts`.
+ */
+export function buildT4InputForAttention(it: AttentionItem): T4Input | null {
   if (!it.refId) return null;
   // Strip HTML tags from line2 — attention.line2 may contain `<span class="mono">`.
   const evidence = it.line2 ? [it.line2.replace(/<[^>]+>/g, '')] : [];
@@ -472,6 +484,38 @@ function buildT4InputForAttention(it: AttentionItem): T4Input | null {
     displayName: it.displayName,
     signal: it.tag,
     evidence,
+  };
+}
+
+/**
+ * Build a T5 daily-brief input from the snapshot plus the per-session and
+ * per-project T1/T3 digest maps. Exported so `llm/inputs.ts` can construct
+ * the same shape the aggregator reads — key MUST match for the cache to hit.
+ *
+ * `attentionRewrites` is passed in (rather than derived from `snap.attention`)
+ * because the aggregator already computed it during its T4 cache lookups; the
+ * worker path passes whatever T4 outputs it just summarised.
+ */
+export function buildT5InputFromSnapshot(
+  snap: OverviewSnapshot,
+  byProject: Map<string, ParsedSession[]>,
+  sessionsMap: Map<string, string>,
+  projectsMap: Map<string, string>,
+  attentionRewrites: string[],
+  today: string,
+): T5Input {
+  return {
+    date: today,
+    topHighlights: snap.highlights.slice(0, 5).map((h) => {
+      const sid = findSessionIdForHighlight(h, byProject);
+      const fromT1 = sid ? sessionsMap.get(sid) : undefined;
+      return fromT1 ?? h.detail.slice(0, 80);
+    }),
+    attentionRewrites,
+    topProjects: snap.projects.slice(0, 3).map((p) => ({
+      name: p.name,
+      digest: projectsMap.get(p.name) ?? '',
+    })),
   };
 }
 
