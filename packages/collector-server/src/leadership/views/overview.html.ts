@@ -11,31 +11,14 @@
 import type { OverviewSnapshot, MemberSnapshot, ProjectSnapshot, CollabHit } from '../types.js';
 import { LEADERSHIP_CSS, avatarColor, emailInitials } from './styles.css.js';
 import { renderNav } from './_nav.html.js';
+import { renderHeroFragment, renderKpisFragment } from './_overview-fragments.js';
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 export function renderOverview(snapshot: OverviewSnapshot): string {
-  const { kpis, members, projects, collaboration, range, computedAt } = snapshot;
-
-  const kpiHtml = `
-    <div class="lh-kpi-card">
-      <div class="label">团队活跃</div>
-      <div class="value" data-kpi="teamActivity">${kpis.teamActivity.value}</div>
-      <div class="sub">sessions · ${escapeHtml(range.label)}</div>
-    </div>
-    <div class="lh-kpi-card">
-      <div class="label">需关注</div>
-      <div class="value" data-kpi="attention">${kpis.attention.value}</div>
-      <div class="sub">${kpis.attention.breakdown.stuck} 卡点 · ${kpis.attention.breakdown.needsHelp} 求助 · ${kpis.attention.breakdown.riskyAction} 风险</div>
-    </div>
-    <div class="lh-kpi-card">
-      <div class="label">项目</div>
-      <div class="value" data-kpi="projects">${kpis.projects.active + kpis.projects.maintaining}</div>
-      <div class="sub">${kpis.projects.active} 活跃 · ${kpis.projects.maintaining} 维护 · ${kpis.projects.dormant} 沉睡</div>
-    </div>
-  `;
+  const { members, projects, collaboration, range, computedAt } = snapshot;
 
   const membersHtml = members.length === 0
     ? `<div class="lh-empty">这个窗口内没有成员活动</div>`
@@ -62,6 +45,8 @@ export function renderOverview(snapshot: OverviewSnapshot): string {
 <body>
 <div class="shell">
 ${renderNav('overview', { rangeLabel: navRangeLabel })}
+${renderHeroFragment(snapshot)}
+${renderKpisFragment(snapshot)}
 <div class="lh-container">
   <div class="lh-topbar">
     <h1>团队 leadership 视图</h1>
@@ -70,7 +55,6 @@ ${renderNav('overview', { rangeLabel: navRangeLabel })}
       <span class="lh-refresh-tag">🔄 30s</span>
     </div>
   </div>
-  <div class="lh-kpi-row">${kpiHtml}</div>
   <div class="lh-section-h">成员（${members.length}）</div>
   <div class="lh-member-list">${membersHtml}</div>
   <div class="lh-section-h">项目（${projects.length}）</div>

@@ -30,7 +30,7 @@ describe('renderOverview', () => {
     const html = renderOverview(fixture());
     expect(html).toContain('<!DOCTYPE html>');
     expect(html).toContain('</html>');
-    expect(html).toContain('.lh-kpi-card');  // CSS class from styles.css.ts
+    expect(html).toContain('.kpis');  // v7 KPI CSS class from _css.ts
     expect(html).toContain('<script>');  // refresh script
     expect(html).not.toContain('<script src=');  // no external scripts
   });
@@ -41,10 +41,12 @@ describe('renderOverview', () => {
     expect(html).toContain('>liusy<');
   });
 
-  it('includes KPI values', () => {
+  it('mounts the v7 hero and KPI fragments', () => {
     const html = renderOverview(fixture());
-    expect(html).toContain('>147<');
-    expect(html).toContain('>3<');
+    expect(html).toMatch(/id="hero"/);
+    expect(html).toMatch(/id="kpis"/);
+    // The attention KPI value (fixture: 3) shows on the kpi-num
+    expect(html).toMatch(/class="kpi-num"[^>]*>\s*3/);
   });
 
   it('shows ETA disclaimer when etaDays is set', () => {
