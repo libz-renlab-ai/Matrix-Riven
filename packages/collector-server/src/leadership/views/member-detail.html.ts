@@ -48,6 +48,7 @@ export function renderMemberDetail(snap: MemberSnapshot & { detail: MemberDetail
             s => `
           <div class="lh-session-item">
             <div class="lh-session-meta">${escapeHtml(s.capturedAt.slice(0, 19))} · ${escapeHtml(s.projectName)} · ${s.totalTokens.toLocaleString()} tok</div>
+            <a class="view-raw" href="/?sid=${escapeHtml(s.sessionId)}" title="到 Browse tab 查看完整原始记录">查看 raw ↗</a>
             <div class="lh-session-preview">${escapeHtml(s.firstPromptPreview)}${s.firstPromptFull.length > s.firstPromptPreview.length ? '…' : ''}</div>
             <details><summary>展开全文（${s.allPrompts.length} 条 prompt）</summary>
               <div class="lh-prompts-list">${s.allPrompts

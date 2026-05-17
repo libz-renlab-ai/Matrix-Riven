@@ -166,4 +166,21 @@ describe('renderMemberDetail', () => {
     expect(html).toContain('second preview');
     expect(html).toContain('third preview');
   });
+
+  it('each session row renders a view-raw link with sid query (P-A4)', () => {
+    const session: SessionSummary = {
+      sessionId: '01JXYZABC',
+      capturedAt: '2026-05-17T03:12:00Z',
+      projectName: 'mr',
+      totalTokens: 100,
+      firstPromptPreview: 'p',
+      firstPromptFull: 'p',
+      allPrompts: [{ ts: '2026-05-17T03:12:00Z', preview: 'p', full: 'p' }],
+    };
+    const snap = makeSnapshot({ sessions: [session] });
+    const html = renderMemberDetail(snap);
+    // Verify the deep-link query format
+    expect(html).toMatch(/href="\/\?sid=01JXYZABC"/);
+    expect(html).toContain('查看 raw');
+  });
 });
