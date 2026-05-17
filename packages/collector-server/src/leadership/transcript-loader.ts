@@ -11,6 +11,45 @@ import type {
 import { loadIndexSync, INDEX_FILENAME, type IndexEntry } from './index.js';
 
 /**
+ * P-D1 follow-up — In-process parsed-session cache.
+ *
+ * The on-disk index (P-D1) shaved off `readdirSync` + per-file `statSync`
+ * but the dominant cold-start cost remains JSON parse + gunzip per
+ * transcript. This module-level Map keeps every successfully-parsed
+ * session in memory keyed on `${absPath}|${mtimeMs}` so the second and
+ * subsequent `scanAllSessions` calls in a server lifetime skip parsing
+ * entirely — only `readFileSync` and the cache lookup run.
+ *
+ * The key includes mtime so any file edit naturally invalidates the
+ * cached entry. Stale-mtime entries for the same path remain in memory
+ * (memory waste, not correctness) until the eviction sweep below trims
+ * them. Eviction drops oldest 20 % when size exceeds MAX_CACHE_ENTRIES;
+ * at ~100 KB per ParsedSession that caps memory around 500 MB.
+ */
+const parsedCache = new Map<string, ParsedSession>();
+const MAX_CACHE_ENTRIES = 5000;
+
+function cacheKey(absPath: string, mtimeMs: number): string {
+  return `${absPath}|${mtimeMs}`;
+}
+
+function maybeEvict(): void {
+  if (parsedCache.size <= MAX_CACHE_ENTRIES) return;
+  const toDelete = Math.floor(parsedCache.size * 0.2);
+  let i = 0;
+  for (const key of parsedCache.keys()) {
+    if (i >= toDelete) break;
+    parsedCache.delete(key);
+    i++;
+  }
+}
+
+/** Test-only — reset the parsed-session cache. Not exported via barrel. */
+export function __resetParsedCacheForTests(): void {
+  parsedCache.clear();
+}
+
+/**
  * Parse one on-disk envelope JSON (the format collector-server writes).
  * Returns null when the envelope is unparseable; callers skip-and-continue
  * because one corrupt file must not stop the scan.
@@ -420,8 +459,9 @@ function scanLeafDir(
 ): void {
   const idx = loadIndexSync(datePath);
   if (idx.entries.length > 0 && indexLooksCurrent(datePath, idx.entries)) {
+    // Index fast path: mtime is already in the index entry, no stat needed.
     for (const e of idx.entries) {
-      parseAndPush(path.join(datePath, e.file), e.file, userDir, dateDir, out);
+      parseAndPush(path.join(datePath, e.file), e.file, userDir, dateDir, out, e.mtime);
     }
     return;
   }
@@ -435,7 +475,15 @@ function scanLeafDir(
   }
   for (const f of files) {
     if (f === INDEX_FILENAME) continue;
-    parseAndPush(path.join(datePath, f), f, userDir, dateDir, out);
+    const filePath = path.join(datePath, f);
+    let mtimeMs: number | undefined;
+    try {
+      mtimeMs = statSync(filePath).mtimeMs;
+    } catch {
+      // File vanished between readdir and stat — skip silently.
+      continue;
+    }
+    parseAndPush(filePath, f, userDir, dateDir, out, mtimeMs);
   }
 }
 
@@ -461,6 +509,11 @@ function indexLooksCurrent(datePath: string, entries: IndexEntry[]): boolean {
  * Read + parse a single session file, then push to `out`. Used by both the
  * index fast path and the legacy enumeration fallback so format dispatch
  * lives in exactly one place.
+ *
+ * Consults the module-level `parsedCache` on entry: if a parsed session
+ * exists for this `(absPath, mtimeMs)` pair, we skip the disk read AND
+ * the parse and reuse the cached object directly. This is the P-D1
+ * follow-up optimization — most cold scans after the first land here.
  */
 function parseAndPush(
   filePath: string,
@@ -468,19 +521,30 @@ function parseAndPush(
   userDir: string,
   dateDir: string,
   out: ParsedSession[],
+  mtimeMs: number,
 ): void {
+  const key = cacheKey(filePath, mtimeMs);
+  const cached = parsedCache.get(key);
+  if (cached) {
+    out.push(cached);
+    return;
+  }
   let buf: Buffer;
   try {
     buf = readFileSync(filePath);
   } catch {
     return;
   }
+  let parsed: ParsedSession | null = null;
   if (fileName.endsWith('.json')) {
-    const parsed = parseEnvelopeBuffer(buf);
-    if (parsed) out.push(parsed);
+    parsed = parseEnvelopeBuffer(buf);
   } else if (fileName.endsWith('.jsonl')) {
     const sessionId = fileName.slice(0, -'.jsonl'.length);
-    const parsed = parseRawJsonlBuffer(buf, userDir, dateDir, sessionId);
-    if (parsed) out.push(parsed);
+    parsed = parseRawJsonlBuffer(buf, userDir, dateDir, sessionId);
+  }
+  if (parsed) {
+    parsedCache.set(key, parsed);
+    maybeEvict();
+    out.push(parsed);
   }
 }

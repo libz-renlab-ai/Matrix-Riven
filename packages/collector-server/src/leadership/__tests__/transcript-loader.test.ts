@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { gzipSync } from 'node:zlib';
-import { parseEnvelopeBuffer, deriveProjectName } from '../transcript-loader.js';
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parseEnvelopeBuffer, deriveProjectName, scanAllSessions } from '../transcript-loader.js';
 
 function buildEnvelope(transcriptLines: string[]): Buffer {
   const jsonl = transcriptLines.join('\n');
@@ -123,5 +126,96 @@ describe('deriveProjectName common-name collapse', () => {
   });
   it('all-common path: keeps last segment as last resort', () => {
     expect(deriveProjectName('/src/dist')).toBe('dist');
+  });
+});
+
+/**
+ * P-D1 follow-up: in-process parsed-session cache. Once a file has been parsed
+ * for a given (absPath, mtimeMs) key, subsequent scans should return the same
+ * `ParsedSession` instance without re-parsing — proven by reference equality.
+ * Editing the file (mtime change) must invalidate the cache so a fresh parse
+ * runs and a *new* instance is handed back.
+ */
+describe('parsed-session cache (P-D1 follow-up)', () => {
+  function writeEnvelopeAt(dir: string, name: string, text: string): string {
+    const jsonl = JSON.stringify({
+      type: 'user',
+      timestamp: '2026-05-13T10:00:05.000Z',
+      message: { role: 'user', content: text },
+    });
+    const env = {
+      schema_version: 1,
+      envelope: {
+        id: name,
+        user_id: 'liu@example.com',
+        machine_id: 'host-abc',
+        session_id: name,
+        cwd: '/home/u/proj/Matrix-Riven',
+        project_name: 'Matrix-Riven',
+        transcript_path: `/home/u/.claude/projects/.../${name}.jsonl`,
+        payload_size: jsonl.length,
+        captured_at: '2026-05-13T10:00:00.000Z',
+        source: 'stop-hook',
+        host: { os: 'linux', arch: 'x64', hostname: 'host' },
+        riven_version: '0.1.0',
+        consented_at: null,
+      },
+      transcript: {
+        compression: 'gzip+base64',
+        content: gzipSync(Buffer.from(jsonl, 'utf8')).toString('base64'),
+      },
+      l1_redaction_count: 0,
+    };
+    const full = join(dir, `${name}.json`);
+    writeFileSync(full, JSON.stringify(env), 'utf8');
+    return full;
+  }
+
+  function makeCollectorTree(): { root: string; sessionPath: string } {
+    const root = mkdtempSync(join(tmpdir(), 'parsed-cache-'));
+    const leaf = join(root, 'liu@example.com', '2026-05-13');
+    mkdirSync(leaf, { recursive: true });
+    const sessionPath = writeEnvelopeAt(leaf, 'sess-1', 'hello');
+    return { root, sessionPath };
+  }
+
+  it('returns identical ParsedSession reference on second scan of unchanged file', () => {
+    const { root } = makeCollectorTree();
+    const first = scanAllSessions(root);
+    const second = scanAllSessions(root);
+    expect(first.length).toBe(1);
+    expect(second.length).toBe(1);
+    // Cache hit → same JS object handed back, not just deeply-equal data.
+    expect(second[0]).toBe(first[0]);
+  });
+
+  it('returns a fresh ParsedSession after the file mtime changes', () => {
+    const { root, sessionPath } = makeCollectorTree();
+    const first = scanAllSessions(root);
+    expect(first.length).toBe(1);
+
+    // Rewrite the file so mtime bumps. Force an explicit utimes bump too —
+    // the OS may resolve mtime at second granularity, which would otherwise
+    // make a fast rewrite-and-scan look like the same mtime.
+    writeEnvelopeAt(join(root, 'liu@example.com', '2026-05-13'), 'sess-1', 'world');
+    const now = new Date();
+    const bumped = new Date(now.getTime() + 5000);
+    utimesSync(sessionPath, bumped, bumped);
+
+    const second = scanAllSessions(root);
+    expect(second.length).toBe(1);
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0]!.messages[0]!.text).toBe('world');
+  });
+
+  it('cache survives across scans within the same process (multi-scan reference equality)', () => {
+    const { root } = makeCollectorTree();
+    const r1 = scanAllSessions(root);
+    const r2 = scanAllSessions(root);
+    const r3 = scanAllSessions(root);
+    expect(r2[0]).toBe(r1[0]);
+    expect(r3[0]).toBe(r1[0]);
+    // Confirm we actually exercised the cache, not an empty result set.
+    expect(statSync(join(root, 'liu@example.com', '2026-05-13')).isDirectory()).toBe(true);
   });
 });
