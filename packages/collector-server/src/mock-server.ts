@@ -652,8 +652,13 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
 
   const requestHandler = (req: IncomingMessage, res: ServerResponse): void => {
     // Task 15 — Leadership API + HTML routes take precedence over the legacy
-    // GET handler so the new aggregator wins over /api/overview etc.
-    if (req.method === 'GET' && handleLeadershipRequest(req, res, leadershipDeps)) {
+    // handlers so the new aggregator wins over /api/overview etc.
+    //
+    // Pass non-GET requests too: the leadership dispatcher recognises its
+    // own paths and emits 405 (not_method_allowed) for POST/PUT/DELETE.
+    // Without that, `POST /api/overview` would fall through to the cc-
+    // session POST router and 404, which is REST-incorrect and confusing.
+    if (handleLeadershipRequest(req, res, leadershipDeps)) {
       return;
     }
     if (req.method === 'GET') {
