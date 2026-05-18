@@ -60,6 +60,9 @@ import type { FocusFilter, OverviewSnapshot } from './types.js';
 import { buildActivityFeed } from './activity-feed.js';
 import { renderActivityPage } from './views/activity.html.js';
 import { renderMemberDetail } from './views/member-detail.html.js';
+import { buildInsightsSnapshot } from './insights/index.js';
+import { renderInsightsPage } from './views/insights.html.js';
+import { scanAllSessions } from './transcript-loader.js';
 
 // ── public interface ──────────────────────────────────────────────────────────
 
@@ -515,8 +518,14 @@ export function handleLeadershipRequest(
       sendJson(res, 405, { error: 'method_not_allowed' });
       return true;
     }
-    sendHtml(res, 200, renderStubTab('insights', 'Insights'));
-    return true;
+    return renderInsightsTab(req, res, deps, query, now);
+  }
+  if (pathname === '/api/insights') {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'method_not_allowed' });
+      return true;
+    }
+    return handleInsightsApi(req, res, deps, query, now);
   }
   if (pathname === '/retro') {
     // Don't gate on method here — let the inner handler return 405 for
@@ -911,6 +920,125 @@ function renderMemberDetailPage(
       `[leadership] 500 on /people/${localPart}: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
     );
     sendHtml(res, 500, renderOverviewError());
+  }
+  return true;
+}
+
+/**
+ * Phase 3-D: /insights tab handler.
+ */
+function renderInsightsTab(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: LeadershipRouteDeps,
+  query: URLSearchParams,
+  now: () => Date,
+): boolean {
+  const nowDate = now();
+  const filter = parseFocusFromQuery(query);
+  const range = parseRange(filter.range === 'today' && !query.has('range') ? '30d' : filter.range, nowDate);
+  if (range === null) {
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    return true;
+  }
+  const isDemo = query.get('demo') === '1';
+  const axisRaw = query.get('axis');
+  const activeSubTab: 'time' | 'people' | 'projects' =
+    axisRaw === 'people' || axisRaw === 'projects' ? axisRaw : 'time';
+  const cacheKey = `html|/insights|${range.label}|${isDemo ? 'demo' : 'real'}|axis=${activeSubTab}${focusFilterCacheKey(filter)}`;
+  const cached = deps.cache.get(cacheKey);
+  if (cached !== undefined) {
+    sendHtml(res, 200, cached as string);
+    return true;
+  }
+  try {
+    const snap = isDemo
+      ? getDemoSnapshot()
+      : buildOverviewSnapshot({
+          collectorDir: deps.collectorDir,
+          range,
+          now: nowDate,
+          mainProjects: deps.mainProjects,
+          llmCache: deps.llmCache,
+        });
+    const sessions = isDemo
+      ? []
+      : scanAllSessions(deps.collectorDir, {
+          fromDate: range.start.toISOString().slice(0, 10),
+          toDate: range.end.toISOString().slice(0, 10),
+        });
+    const insights = buildInsightsSnapshot({
+      collectorDir: deps.collectorDir,
+      range,
+      now: nowDate,
+      sessions,
+      snapshot: snap,
+      filter,
+    });
+    const filterBarHtml = renderFilterBar({
+      filter,
+      members: extractMemberLocalParts(snap),
+      projects: snap.projects.map((p) => p.name),
+      tab: 'insights',
+      demo: isDemo,
+    });
+    const html = renderInsightsPage(insights, { filterBarHtml, activeSubTab });
+    deps.cache.set(cacheKey, html);
+    sendHtml(res, 200, html);
+  } catch (err) {
+    process.stderr.write(
+      `[leadership] 500 on /insights: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
+    );
+    sendHtml(res, 500, renderOverviewError());
+  }
+  return true;
+}
+
+function handleInsightsApi(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: LeadershipRouteDeps,
+  query: URLSearchParams,
+  now: () => Date,
+): boolean {
+  const nowDate = now();
+  const filter = parseFocusFromQuery(query);
+  const range = parseRange(filter.range === 'today' && !query.has('range') ? '30d' : filter.range, nowDate);
+  if (range === null) {
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    return true;
+  }
+  const isDemo = query.get('demo') === '1';
+  try {
+    const snap = isDemo
+      ? getDemoSnapshot()
+      : buildOverviewSnapshot({
+          collectorDir: deps.collectorDir,
+          range,
+          now: nowDate,
+          mainProjects: deps.mainProjects,
+          llmCache: deps.llmCache,
+        });
+    const sessions = isDemo
+      ? []
+      : scanAllSessions(deps.collectorDir, {
+          fromDate: range.start.toISOString().slice(0, 10),
+          toDate: range.end.toISOString().slice(0, 10),
+        });
+    const insights = buildInsightsSnapshot({
+      collectorDir: deps.collectorDir,
+      range,
+      now: nowDate,
+      sessions,
+      snapshot: snap,
+      filter,
+    });
+    sendJson(res, 200, insights);
+  } catch (err) {
+    process.stderr.write(
+      `[leadership] 500 on /api/insights: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
+    );
+    sendJson(res, 500, { error: 'internal' });
   }
   return true;
 }

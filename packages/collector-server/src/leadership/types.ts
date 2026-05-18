@@ -390,3 +390,79 @@ export interface ActivityFeedSnapshot {
   computedAt: string;
   appliedFilter?: FocusFilter;
 }
+
+// =====================================================================
+// Phase 3-D · Insights
+// =====================================================================
+
+export interface InsightsHealthScore {
+  value: number;                       // 0..100
+  deltaVsLastWeek: number;
+  breakdown: {
+    stuckRate: number;                 // 0..100 sub-score
+    rhythm: number;
+    output: number;
+    risk: number;
+  };
+  history30d: number[];                // 30 entries, oldest first
+}
+
+export interface InsightsAnomaly {
+  member: string;                      // local-part
+  signal: string;                      // e.g. "weekly_tokens"
+  direction: 'up' | 'down';
+  magnitudeRatio: number;              // e.g. 2.3 = 2.3x team baseline
+  narrative?: string;                  // LLM-filled when available
+}
+
+export interface InsightsRecommendation {
+  id: string;
+  severity: 'info' | 'warn' | 'critical';
+  headline: string;
+  body: string;
+  triggers: string[];
+}
+
+export interface InsightsTimeWeek {
+  weekStart: string;                   // ISO date
+  tokens: number;
+  sessions: number;
+  commits: number;
+}
+
+export interface InsightsPersonRow {
+  email: string;
+  displayName: string;
+  metrics: {
+    tokens: number;
+    sessions: number;
+    costUsd: number;
+    projectsTouched: number;
+    riskyActions: number;
+  };
+}
+
+export interface InsightsProjectRow {
+  name: string;
+  metrics: {
+    contributors: number;
+    sessions: number;
+    healthScore: number;
+    etaDays: number | null;
+  };
+}
+
+export interface InsightsSnapshot {
+  schemaVersion: 1;
+  computedAt: string;
+  range: { start: string; end: string; label: string };
+  healthScore: InsightsHealthScore;
+  recommendations: InsightsRecommendation[];
+  anomalies: InsightsAnomaly[];
+  axes: {
+    time: { weeks: InsightsTimeWeek[]; narrative?: string };
+    people: { rows: InsightsPersonRow[]; narrative?: string };
+    projects: { rows: InsightsProjectRow[]; narrative?: string };
+  };
+  appliedFilter?: FocusFilter;
+}

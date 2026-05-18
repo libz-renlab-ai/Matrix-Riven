@@ -380,11 +380,12 @@ describe('5 leadership tab routes (P-B2)', () => {
     expect(html).toMatch(/class="tab active"[^>]*>[^<]*Activity/);
   });
 
-  it('GET /insights is a stub page', async () => {
+  it('GET /insights is now a real page (Phase 3-D)', async () => {
     const res = await fetch(`${baseUrl}/insights`);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('尚未实现');
+    expect(html).not.toContain('尚未实现');
+    expect(html).toContain('团队健康总评分');
     expect(html).toMatch(/class="tab active"[^>]*>[^<]*Insights/);
   });
 

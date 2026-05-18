@@ -23,8 +23,8 @@ const TABS: readonly TabSpec[] = [
   { id: 'retro', label: 'Retro', href: '/retro' },
   // 2026-05-19 Phase 3-B: Activity promoted from stub to real page.
   { id: 'activity', label: 'Activity', href: '/activity' },
-  // Insights still phase-3 work in progress.
-  { id: 'insights', label: 'Insights · soon', href: '/insights' },
+  // 2026-05-19 Phase 3-D: Insights promoted from stub to real page.
+  { id: 'insights', label: 'Insights', href: '/insights' },
 ];
 
 export interface RenderNavOptions {

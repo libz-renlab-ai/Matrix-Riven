@@ -33,6 +33,7 @@ function mkDetail(overrides: Partial<MemberDetail> = {}): MemberDetail {
         totalTokens: 4500,
         firstPromptPreview: '修一下抽屉里的数字',
         firstPromptFull: '修一下抽屉里的数字，要显示今日 token 和消耗',
+        allPrompts: [],
       },
     ],
     heatmap7x24: Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0)),
@@ -67,9 +68,9 @@ describe('renderMemberDetail', () => {
   it('project breakdown sorts by tokens desc', () => {
     const detail = mkDetail({
       sessions: [
-        { sessionId: 's1', capturedAt: '2026-05-18T10:00:00Z', projectName: 'small', totalTokens: 1000, firstPromptPreview: 'a', firstPromptFull: 'a' },
-        { sessionId: 's2', capturedAt: '2026-05-18T11:00:00Z', projectName: 'big', totalTokens: 9000, firstPromptPreview: 'b', firstPromptFull: 'b' },
-        { sessionId: 's3', capturedAt: '2026-05-18T12:00:00Z', projectName: 'med', totalTokens: 3000, firstPromptPreview: 'c', firstPromptFull: 'c' },
+        { sessionId: 's1', capturedAt: '2026-05-18T10:00:00Z', projectName: 'small', totalTokens: 1000, firstPromptPreview: 'a', firstPromptFull: 'a', allPrompts: [] },
+        { sessionId: 's2', capturedAt: '2026-05-18T11:00:00Z', projectName: 'big', totalTokens: 9000, firstPromptPreview: 'b', firstPromptFull: 'b', allPrompts: [] },
+        { sessionId: 's3', capturedAt: '2026-05-18T12:00:00Z', projectName: 'med', totalTokens: 3000, firstPromptPreview: 'c', firstPromptFull: 'c', allPrompts: [] },
       ],
     });
     const html = renderMemberDetail(mkMember(), detail);
@@ -114,7 +115,7 @@ describe('renderMemberDetail', () => {
       mkMember({ displayName: '<script>alert(1)</script>' }),
       mkDetail({
         sessions: [
-          { sessionId: 's', capturedAt: '2026-05-18T10:00:00Z', projectName: 'p', totalTokens: 100, firstPromptPreview: '<img src=x>', firstPromptFull: '<img src=x onerror=alert(1)>' },
+          { sessionId: 's', capturedAt: '2026-05-18T10:00:00Z', projectName: 'p', totalTokens: 100, firstPromptPreview: '<img src=x>', firstPromptFull: '<img src=x onerror=alert(1)>', allPrompts: [] },
         ],
       }),
     );
