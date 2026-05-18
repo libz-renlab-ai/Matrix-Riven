@@ -304,10 +304,16 @@ export function getDemoProjectByName(
 }
 
 export function getDemoSnapshot(): OverviewSnapshot {
+  // QA round-2 P1 #3: demo snapshot used to freeze on 2026-05-18 even when
+  // the real clock said 2026-05-19, causing a date mismatch between the
+  // demo CTA flow and the real-data flow. Override `computedAt` to "now" so
+  // the hero shows today's date in demo; event timestamps stay as the
+  // hand-edited 7-day arc since they encode narrative, not absolute time.
+  const nowIso = new Date().toISOString();
   return {
     schemaVersion: 1,
-    range: { start: '2026-05-11T09:00:00Z', end: NOW, label: '7d' },
-    computedAt: NOW,
+    range: { start: '2026-05-11T09:00:00Z', end: nowIso, label: '7d' },
+    computedAt: nowIso,
     staleness: undefined,
     llmBrief: [
       '今日团队推进顺利：核心 dashboard 模块已上线，CI 全绿。',
