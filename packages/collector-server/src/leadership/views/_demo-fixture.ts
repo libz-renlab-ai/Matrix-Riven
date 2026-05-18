@@ -30,41 +30,138 @@ function emptyHeatmap(): number[][] {
   return Array.from({ length: 7 }, () => Array(24).fill(0));
 }
 
-function demoMemberDetail(): MemberDetail {
-  return {
-    toolFailureRate: 0,
+// 2026-05-18 round-9 audit P1: returning one static detail for every
+// demo member contradicted their top-level snapshots (e.g., blake top
+// "stuck · 0.31 failure" vs detail "matrix-riven hero work · 0 failures").
+// Now per-member, matching toolFailureRate / riskyActionCount / topProject
+// so a CEO clicking around sees coherent narratives.
+const MEMBER_DETAILS: Record<string, MemberDetail> = {
+  alex: {
+    toolFailureRate: 0.06,
     overContext200kCount: 0,
-    iterationDensity: 4,
+    iterationDensity: 5,
     riskyActions: [],
-    collaborators: [],
-    modelMix: { 'claude-sonnet-4-6': 0.78, 'claude-opus-4-7': 0.18, 'claude-haiku-4-5': 0.04 },
+    collaborators: [{ withEmail: 'blake@example.com', sharedFiles: ['src/leadership/views/_overview-fragments.ts'] }],
+    modelMix: { 'claude-sonnet-4-6': 0.82, 'claude-opus-4-7': 0.15, 'claude-haiku-4-5': 0.03 },
     webResearchCount: 2,
     sessions: [
       {
-        sessionId: 'demo-1',
+        sessionId: 'demo-alex-1',
         capturedAt: '2026-05-18T08:30:00Z',
         projectName: 'matrix-riven',
         totalTokens: 42_000,
         firstPromptPreview: '继续完善 overview 仪表盘的 hero 区',
         firstPromptFull: '继续完善 overview 仪表盘的 hero 区，把 KPI 卡的样式收尾。',
         allPrompts: [
-          {
-            ts: '2026-05-18T08:30:00Z',
-            preview: '继续完善 overview 仪表盘的 hero 区',
-            full: '继续完善 overview 仪表盘的 hero 区，把 KPI 卡的样式收尾。',
-          },
+          { ts: '2026-05-18T08:30:00Z', preview: '继续完善 overview 仪表盘的 hero 区', full: '继续完善 overview 仪表盘的 hero 区，把 KPI 卡的样式收尾。' },
         ],
       },
     ],
     heatmap7x24: emptyHeatmap(),
     topFiles: [
-      { path: 'src/leadership/views/_overview-fragments.ts', edits: 6 },
-      { path: 'src/leadership/aggregator.ts', edits: 3 },
+      { path: 'src/leadership/views/_overview-fragments.ts', edits: 9 },
+      { path: 'src/leadership/aggregator.ts', edits: 4 },
     ],
     focus: { distinctCwdsToday: 1, avgSessionMinutes: 22 },
     promptLengthSeries: [],
     newSurfaceCount: 2,
-  };
+  },
+  blake: {
+    toolFailureRate: 0.31,
+    overContext200kCount: 1,
+    iterationDensity: 9,
+    riskyActions: [
+      { ts: '2026-05-18T07:10:00Z', sessionId: 'demo-blake-1', pattern: 'other', snippet: 'tsc --noEmit (再次重试)' },
+    ],
+    collaborators: [],
+    modelMix: { 'claude-sonnet-4-6': 0.65, 'claude-opus-4-7': 0.32, 'claude-haiku-4-5': 0.03 },
+    webResearchCount: 11,
+    sessions: [
+      {
+        sessionId: 'demo-blake-1',
+        capturedAt: '2026-05-18T07:10:00Z',
+        projectName: 'matrix-riven',
+        totalTokens: 51_000,
+        firstPromptPreview: 'status/page.tsx 的 useEffect 依赖一直报错，能不能再看一下',
+        firstPromptFull: 'status/page.tsx 的 useEffect 依赖一直报错，能不能再看一下',
+        allPrompts: [
+          { ts: '2026-05-18T07:10:00Z', preview: 'status/page.tsx 的 useEffect 依赖一直报错', full: 'status/page.tsx 的 useEffect 依赖一直报错，能不能再看一下' },
+        ],
+      },
+    ],
+    heatmap7x24: emptyHeatmap(),
+    topFiles: [
+      { path: 'src/app/status/page.tsx', edits: 12 },
+      { path: 'src/app/status/hooks.ts', edits: 3 },
+    ],
+    focus: { distinctCwdsToday: 1, avgSessionMinutes: 35 },
+    promptLengthSeries: [],
+    newSurfaceCount: 0,
+  },
+  casey: {
+    toolFailureRate: 0.04,
+    overContext200kCount: 0,
+    iterationDensity: 4,
+    riskyActions: [],
+    collaborators: [{ withEmail: 'dana@example.com', sharedFiles: ['src/graph/render.ts'] }],
+    modelMix: { 'claude-sonnet-4-6': 0.84, 'claude-opus-4-7': 0.12, 'claude-haiku-4-5': 0.04 },
+    webResearchCount: 3,
+    sessions: [
+      {
+        sessionId: 'demo-casey-1',
+        capturedAt: '2026-05-18T08:48:00Z',
+        projectName: 'team-graph',
+        totalTokens: 38_000,
+        firstPromptPreview: '修一下 graph 视图渲染抖动',
+        firstPromptFull: '修一下 graph 视图渲染抖动，attention 编辑卡也需要联动。',
+        allPrompts: [
+          { ts: '2026-05-18T08:48:00Z', preview: '修一下 graph 视图渲染抖动', full: '修一下 graph 视图渲染抖动，attention 编辑卡也需要联动。' },
+        ],
+      },
+    ],
+    heatmap7x24: emptyHeatmap(),
+    topFiles: [
+      { path: 'src/graph/render.ts', edits: 7 },
+      { path: '.github/workflows/ci.yml', edits: 2 },
+    ],
+    focus: { distinctCwdsToday: 2, avgSessionMinutes: 26 },
+    promptLengthSeries: [],
+    newSurfaceCount: 1,
+  },
+  dana: {
+    toolFailureRate: 0.02,
+    overContext200kCount: 0,
+    iterationDensity: 2,
+    riskyActions: [],
+    collaborators: [],
+    modelMix: { 'claude-sonnet-4-6': 0.71, 'claude-opus-4-7': 0.05, 'claude-haiku-4-5': 0.24 },
+    webResearchCount: 1,
+    sessions: [
+      {
+        sessionId: 'demo-dana-1',
+        capturedAt: '2026-05-17T19:30:00Z',
+        projectName: 'team-graph',
+        totalTokens: 9_000,
+        firstPromptPreview: '帮我整理 README 的输入/输出格式说明',
+        firstPromptFull: '帮我整理 README 的输入/输出格式说明，让团队接入更顺。',
+        allPrompts: [
+          { ts: '2026-05-17T19:30:00Z', preview: '帮我整理 README 的输入/输出格式说明', full: '帮我整理 README 的输入/输出格式说明，让团队接入更顺。' },
+        ],
+      },
+    ],
+    heatmap7x24: emptyHeatmap(),
+    topFiles: [
+      { path: 'README.md', edits: 2 },
+      { path: 'docs/format.md', edits: 1 },
+    ],
+    focus: { distinctCwdsToday: 0, avgSessionMinutes: 18 },
+    promptLengthSeries: [],
+    newSurfaceCount: 0,
+  },
+};
+
+function demoMemberDetail(localPart: string): MemberDetail {
+  return MEMBER_DETAILS[localPart] ?? MEMBER_DETAILS.alex!;
 }
 
 function demoProjectDetail(): ProjectDetail {
@@ -97,11 +194,12 @@ export function getDemoMemberByLocalPart(
   localPart: string,
 ): (MemberSnapshot & { detail: MemberDetail }) | null {
   const snap = getDemoSnapshot();
+  const lp = localPart.toLowerCase();
   const member = snap.members.find(
-    (m) => (m.email.split('@')[0] ?? '').toLowerCase() === localPart.toLowerCase(),
+    (m) => (m.email.split('@')[0] ?? '').toLowerCase() === lp,
   );
   if (!member) return null;
-  return { ...member, detail: demoMemberDetail() };
+  return { ...member, detail: demoMemberDetail(lp) };
 }
 
 /**
@@ -206,7 +304,9 @@ export function getDemoSnapshot(): OverviewSnapshot {
         healthScore: 6.8, etaDays: 12, etaConfidence: 'low',
         activeTodayPct: 0, activeTodayCount: 0,
         lastTouch: { filePath: '.github/workflows/ci.yml', by: 'casey', ts: '2026-05-17T15:00:00Z' },
-        llmWeekly: '团队在做 CI 流水线优化\n进展缓存命中率 +12% / 待补充测试覆盖',
+        // 2026-05-18 round-9 audit P1: matches activeTodayCount:0 + yesterday
+        // lastTouch — was "团队在做 / 进展 +12%" which read as active work.
+        llmWeekly: '本周 CI 流水线无人推进\n缓存命中率 +12% 是上周成果；今天 0 人在动，需安排第二个 contributor',
       },
     ] as unknown as OverviewSnapshot['projects'],
     attention: [
