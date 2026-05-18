@@ -128,8 +128,16 @@ export function handleLeadershipRequest(
     return true;
   }
   if (pathname === '/overview' && req.method === 'GET' && query.get('demo') === '1') {
-    const snap = getDemoSnapshot();
-    sendHtml(res, 200, renderOverview(snap));
+    const filter = parseFocusFromQuery(query);
+    const snap = applyFilterToDemoSnapshot(getDemoSnapshot(), filter);
+    const filterBarHtml = renderFilterBar({
+      filter,
+      members: extractMemberLocalParts(getDemoSnapshot()),
+      projects: getDemoSnapshot().projects.map((p) => p.name),
+      tab: 'overview',
+      demo: true,
+    });
+    sendHtml(res, 200, renderOverview(snap, { filterBarHtml }));
     return true;
   }
   if (pathname === '/api/overview' && req.method === 'GET' && query.get('demo') === '1') {
@@ -138,7 +146,8 @@ export function handleLeadershipRequest(
     // pollOverview's 30-s tick (in _refresh.js.ts) finds snap._html
     // missing, skips every fragment swap, and live polling is silently
     // dead on every demo page.
-    const demoSnap = getDemoSnapshot();
+    const filter = parseFocusFromQuery(query);
+    const demoSnap = applyFilterToDemoSnapshot(getDemoSnapshot(), filter);
     const _html = {
       hero: renderHeroFragment(demoSnap),
       kpis: renderKpisFragment(demoSnap),
@@ -791,6 +800,54 @@ ${renderSlideoverShell()}
 <script>${FILTER_BAR_SCRIPT}</script>
 </body>
 </html>`;
+}
+
+/**
+ * Phase 3-A helper: apply a focus filter to a demo snapshot. Demo data is
+ * static (4 members / 3 projects) so we do a shallow slice — members and
+ * projects matching the filter survive, KPI / attention / highlights /
+ * collaboration are trimmed by the same predicates. KPI numeric recompute
+ * is skipped (demo KPIs are editorial, not derived); the chip bar provides
+ * the visual signal that filter is active.
+ */
+function applyFilterToDemoSnapshot(snap: OverviewSnapshot, filter: FocusFilter): OverviewSnapshot {
+  if (isDefaultFilter(filter)) return snap;
+  const focus = filter.focus?.toLowerCase();
+  const project = filter.project?.toLowerCase();
+  const state = filter.state;
+
+  let members = snap.members;
+  if (focus) members = members.filter((m) => (m.email.split('@')[0] ?? '').toLowerCase() === focus);
+  if (state) members = members.filter((m) => m.stateBadge === state);
+
+  let projects = snap.projects;
+  if (project) projects = projects.filter((p) => p.name.toLowerCase() === project);
+
+  const attention = snap.attention.filter((a) => {
+    if (focus && a.kind === 'member') {
+      const local = (a.refId.split('@')[0] ?? '').toLowerCase();
+      if (local !== focus) return false;
+    }
+    if (project && a.kind === 'project') {
+      if (a.refId.toLowerCase() !== project) return false;
+    }
+    return true;
+  });
+
+  const highlights = snap.highlights.filter((h) => {
+    if (focus && h.by.toLowerCase() !== focus) return false;
+    if (project && h.project.toLowerCase() !== project) return false;
+    return true;
+  });
+
+  const collaboration = snap.collaboration.filter((c) => {
+    if (focus) {
+      if (!c.members.some((email) => (email.split('@')[0] ?? '').toLowerCase() === focus)) return false;
+    }
+    return true;
+  });
+
+  return { ...snap, members, projects, attention, highlights, collaboration, appliedFilter: filter };
 }
 
 /**
