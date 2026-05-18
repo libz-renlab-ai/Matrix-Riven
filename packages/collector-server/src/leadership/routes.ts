@@ -56,7 +56,7 @@ import { LEADERSHIP_CSS } from './views/styles.css.js';
 import { renderFilterBar } from './views/_filter-bar.html.js';
 import { FILTER_BAR_CSS, FILTER_BAR_SCRIPT } from './views/_filter-bar.client.js';
 import { parseFocusFromQuery, focusFilterCacheKey, isDefaultFilter } from './focus-filter.js';
-import type { FocusFilter, OverviewSnapshot } from './types.js';
+import type { FocusFilter, OverviewSnapshot, ParsedSession } from './types.js';
 import { buildActivityFeed } from './activity-feed.js';
 import { renderActivityPage } from './views/activity.html.js';
 import { renderMemberDetail } from './views/member-detail.html.js';
@@ -962,7 +962,7 @@ function renderInsightsTab(
           llmCache: deps.llmCache,
         });
     const sessions = isDemo
-      ? []
+      ? synthesizeDemoSessions(snap, nowDate)
       : scanAllSessions(deps.collectorDir, {
           fromDate: range.start.toISOString().slice(0, 10),
           toDate: range.end.toISOString().slice(0, 10),
@@ -975,6 +975,11 @@ function renderInsightsTab(
       snapshot: snap,
       filter,
     });
+    // Demo: replace the all-zero history with a hand-shaped 30-day curve
+    // so the sparkline reads visually (QA P0).
+    if (isDemo) {
+      insights.healthScore.history30d = synthesizeDemoSparkline();
+    }
     const filterBarHtml = renderFilterBar({
       filter,
       members: extractMemberLocalParts(snap),
@@ -992,6 +997,81 @@ function renderInsightsTab(
     sendHtml(res, 500, renderOverviewError());
   }
   return true;
+}
+
+/**
+ * QA P0 fix: build a believable synthetic sessions list from a demo snapshot
+ * so the Insights time/people axes don't render with 0-everywhere.
+ *
+ * Each demo member gets N sessions proportional to their `today.tokens`,
+ * spread across the past 30 days with a slight weekly cycle so the 12-week
+ * time chart shows a recognisable trend.
+ */
+function synthesizeDemoSessions(snap: OverviewSnapshot, now: Date): ParsedSession[] {
+  const out: ParsedSession[] = [];
+  const nowMs = now.getTime();
+  for (let mIdx = 0; mIdx < snap.members.length; mIdx++) {
+    const m = snap.members[mIdx]!;
+    const baseTokens = (m.today?.tokens ?? 5000) || 5000;
+    const sessionsPerWeek = Math.max(2, Math.round((m.today?.sessions ?? 3) * 5));
+    // Spread 12 weeks of sessions with a gentle ramp (week 0 fewer, week 11 more)
+    for (let w = 0; w < 12; w++) {
+      const weekFactor = 0.5 + (w / 11) * 1.0; // 0.5 → 1.5 ramp
+      const count = Math.round(sessionsPerWeek * weekFactor / 4); // per-week mid-point
+      for (let i = 0; i < count; i++) {
+        const dayInWeek = (w * 7 + i) % 7;
+        const hour = 9 + ((mIdx + i) % 8); // 9..16 local
+        const tsMs = nowMs - (11 - w) * 7 * 86400000 - dayInWeek * 86400000 + hour * 3600000;
+        out.push({
+          envelope: {
+            id: `demo-${m.email}-${w}-${i}`,
+            userId: m.email,
+            machineId: 'demo-host',
+            sessionId: `demo-${m.email}-${w}-${i}`,
+            cwd: `/demo/${m.topProject ?? snap.projects[0]?.name ?? 'demo'}`,
+            projectName: m.topProject ?? snap.projects[0]?.name ?? 'demo',
+            capturedAt: new Date(tsMs).toISOString(),
+            rivenVersion: '0.1',
+            consentedAt: null,
+          },
+          l1RedactionCount: 0,
+          messages: [
+            {
+              role: 'assistant',
+              ts: new Date(tsMs + 60_000),
+              text: '',
+              toolUses: [{ name: 'Bash', input: { command: 'git commit -m "demo work"' } }],
+              toolResults: [],
+            },
+          ],
+          durationMs: 25 * 60 * 1000,
+          startTs: new Date(tsMs),
+          endTs: new Date(tsMs + 25 * 60 * 1000),
+          tokens: {
+            input: Math.round(baseTokens * weekFactor * 0.6),
+            output: Math.round(baseTokens * weekFactor * 0.4),
+            cacheRead: 0,
+            cacheCreation: 0,
+          },
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * QA P0 fix: 30-day sparkline values for the demo Insights health card.
+ * Hand-shaped so the curve reads as gentle ramp-up + recent dip + recovery,
+ * which is what the editorial demo narrative implies.
+ */
+function synthesizeDemoSparkline(): number[] {
+  const out: number[] = [];
+  for (let d = 0; d < 30; d++) {
+    const base = 40 + Math.sin(d / 4) * 18 + d * 1.2;
+    out.push(Math.round(Math.max(10, Math.min(100, base))));
+  }
+  return out;
 }
 
 function handleInsightsApi(
@@ -1020,7 +1100,7 @@ function handleInsightsApi(
           llmCache: deps.llmCache,
         });
     const sessions = isDemo
-      ? []
+      ? synthesizeDemoSessions(snap, nowDate)
       : scanAllSessions(deps.collectorDir, {
           fromDate: range.start.toISOString().slice(0, 10),
           toDate: range.end.toISOString().slice(0, 10),
@@ -1033,6 +1113,7 @@ function handleInsightsApi(
       snapshot: snap,
       filter,
     });
+    if (isDemo) insights.healthScore.history30d = synthesizeDemoSparkline();
     sendJson(res, 200, insights);
   } catch (err) {
     process.stderr.write(
@@ -1154,8 +1235,22 @@ function buildDemoActivityFeed(
   const snap = getDemoSnapshot();
   const events: import('./types.js').ActivityEvent[] = [];
   const nowMs = now.getTime();
+  // Editorial demo prompts — make rows read like a real audit trail, not
+  // generic "session #1 demo data" placeholders (QA P0 fix).
+  const PROMPTS_BY_MEMBER: Record<string, string[]> = {
+    alex: ['完善 hero 区域的标题文案', '修一下 KPI 卡的对齐', '搭骨架：3 列 stat 卡'],
+    blake: ['修 status/page.tsx 类型推导报错', '继续看为什么 stuck', '尝试改 generic 约束'],
+    casey: ['team-graph 视图渲染抖动调试', 'attention 卡 click 路由打通', 'SVG transform 抖动追因'],
+    dana: ['同步 README v0.3 段落', '改一下 onboarding 文档', '补 changelog 上一周项'],
+  };
   // Sessions: 3 per member over past 48h
   snap.members.forEach((m, mi) => {
+    const lp = (m.email.split('@')[0] ?? '').toLowerCase();
+    const prompts = PROMPTS_BY_MEMBER[lp] ?? [
+      `${m.displayName} · 调研`,
+      `${m.displayName} · 实现`,
+      `${m.displayName} · 调试`,
+    ];
     for (let i = 0; i < 3; i++) {
       const hoursAgo = mi * 6 + i * 8;
       const ts = new Date(nowMs - hoursAgo * 3600 * 1000).toISOString();
@@ -1164,12 +1259,17 @@ function buildDemoActivityFeed(
         type: 'session',
         by: m.email,
         project: m.topProject ?? snap.projects[0]?.name ?? 'demo',
-        summary: `${m.displayName} 的会话 #${i + 1} · 演示数据`,
+        summary: prompts[i % prompts.length]!,
         detail: { sessionId: `demo-${m.email}-${i}`, tokens: 1200 + i * 800, durationMs: 25 * 60 * 1000 },
       });
     }
   });
-  // Milestones: 1 commit per project
+  // Milestones: 1 commit per project — editorial messages, not "#1 / #2".
+  const COMMIT_MSGS = [
+    'feat: 完成 hero 区域骨架与 KPI 卡片',
+    'fix: 修复 team-graph 视图渲染抖动',
+    'chore: README v0.3 + onboarding 段落同步',
+  ];
   snap.projects.forEach((p, pi) => {
     const ts = new Date(nowMs - (4 + pi * 12) * 3600 * 1000).toISOString();
     events.push({
@@ -1177,7 +1277,7 @@ function buildDemoActivityFeed(
       type: 'commit',
       by: snap.members[pi % snap.members.length]!.email,
       project: p.name,
-      summary: `feat(${p.name}): 演示提交 #${pi + 1}`,
+      summary: COMMIT_MSGS[pi % COMMIT_MSGS.length]!,
     });
   });
   // Apply filter

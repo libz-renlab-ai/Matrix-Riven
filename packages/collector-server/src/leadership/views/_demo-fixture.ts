@@ -30,6 +30,33 @@ function emptyHeatmap(): number[][] {
   return Array.from({ length: 7 }, () => Array(24).fill(0));
 }
 
+/**
+ * QA P0 fix (2026-05-19): synthesize a believable work-hour heatmap so the
+ * demo member detail page's flagship 7×24 grid doesn't render 168 blank
+ * cells. Seeded by `key` so each demo member gets a slightly different
+ * pattern.
+ */
+function demoHeatmap(key: string): number[][] {
+  let seed = 0;
+  for (let i = 0; i < key.length; i++) seed = (seed * 31 + key.charCodeAt(i)) & 0xffffffff;
+  const out: number[][] = [];
+  for (let r = 0; r < 7; r++) {
+    const row: number[] = [];
+    for (let c = 0; c < 24; c++) {
+      let base = 0;
+      if (c >= 9 && c < 12) base = 6 + ((seed + c) % 5);
+      else if (c >= 14 && c < 18) base = 5 + ((seed + r) % 4);
+      else if (c >= 18 && c < 22) base = 2 + ((seed + r * c) % 3);
+      else if (c >= 8 && c < 9) base = 3;
+      if (r >= 5) base = Math.round(base * 0.3);
+      const jitter = ((seed * (r + 1) * (c + 1)) % 7) - 3;
+      row.push(Math.max(0, Math.round((base + jitter) * 350)));
+    }
+    out.push(row);
+  }
+  return out;
+}
+
 // 2026-05-18 round-9 audit P1: returning one static detail for every
 // demo member contradicted their top-level snapshots (e.g., blake top
 // "stuck · 0.31 failure" vs detail "matrix-riven hero work · 0 failures").
@@ -57,7 +84,7 @@ const MEMBER_DETAILS: Record<string, MemberDetail> = {
         ],
       },
     ],
-    heatmap7x24: emptyHeatmap(),
+    heatmap7x24: demoHeatmap('alex'),
     topFiles: [
       { path: 'src/leadership/views/_overview-fragments.ts', edits: 9 },
       { path: 'src/leadership/aggregator.ts', edits: 4 },
@@ -89,7 +116,7 @@ const MEMBER_DETAILS: Record<string, MemberDetail> = {
         ],
       },
     ],
-    heatmap7x24: emptyHeatmap(),
+    heatmap7x24: demoHeatmap('blake'),
     topFiles: [
       { path: 'src/app/status/page.tsx', edits: 12 },
       { path: 'src/app/status/hooks.ts', edits: 3 },
@@ -119,7 +146,7 @@ const MEMBER_DETAILS: Record<string, MemberDetail> = {
         ],
       },
     ],
-    heatmap7x24: emptyHeatmap(),
+    heatmap7x24: demoHeatmap('casey'),
     topFiles: [
       { path: 'src/graph/render.ts', edits: 7 },
       { path: '.github/workflows/ci.yml', edits: 2 },
@@ -149,7 +176,7 @@ const MEMBER_DETAILS: Record<string, MemberDetail> = {
         ],
       },
     ],
-    heatmap7x24: emptyHeatmap(),
+    heatmap7x24: demoHeatmap('dana'),
     topFiles: [
       { path: 'README.md', edits: 2 },
       { path: 'docs/format.md', edits: 1 },
@@ -183,7 +210,7 @@ const PROJECT_DETAILS: Record<string, ProjectDetail> = {
     testRatio: 0.42,
     milestones: [],
     webResearchShare: 0.08,
-    heatmap7x24: emptyHeatmap(),
+    heatmap7x24: demoHeatmap('matrix-riven'),
     recentFiles: [
       { path: 'src/leadership/views/_overview-fragments.ts', touches: 9 },
       { path: 'src/leadership/aggregator.ts', touches: 4 },
@@ -207,7 +234,7 @@ const PROJECT_DETAILS: Record<string, ProjectDetail> = {
     testRatio: 0.28,
     milestones: [],
     webResearchShare: 0.15,
-    heatmap7x24: emptyHeatmap(),
+    heatmap7x24: demoHeatmap('team-graph'),
     recentFiles: [
       { path: 'src/graph/render.ts', touches: 7 },
       { path: 'src/graph/layout.ts', touches: 3 },
@@ -232,7 +259,7 @@ const PROJECT_DETAILS: Record<string, ProjectDetail> = {
     testRatio: 0.0,
     milestones: [],
     webResearchShare: 0.05,
-    heatmap7x24: emptyHeatmap(),
+    heatmap7x24: demoHeatmap('devops-pipelines'),
     recentFiles: [
       { path: '.github/workflows/ci.yml', touches: 4 },
       { path: 'scripts/ci/cache-warm.sh', touches: 2 },
