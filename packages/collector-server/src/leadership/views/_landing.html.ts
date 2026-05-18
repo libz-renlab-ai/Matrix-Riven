@@ -115,8 +115,7 @@ export function renderLanding(opts: { hasAuth: boolean }): string {
     <div>
       <a href="/overview">实时看板</a> ·
       <a href="/retro">本周回顾</a> ·
-      <a href="/sources">数据来源</a> ·
-      <a href="/api/llm/status">LLM Status</a>
+      <a href="/sources">数据来源</a>
     </div>
   </footer>
 </div>

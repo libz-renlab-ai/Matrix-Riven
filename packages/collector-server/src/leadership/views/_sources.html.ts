@@ -8,55 +8,66 @@ import { LEADERSHIP_CSS } from './styles.css.js';
 
 interface SourceRow {
   source: string;
-  ingest: string;
+  // 2026-05-18 round-7 audit P2: `ingest` is now rendered as innerHTML so
+  // we can use <code> spans for paths/identifiers. Inputs come from the
+  // hardcoded list below — no user content reaches this field. If you
+  // add a row, sanitise any dynamic substrings yourself.
+  ingestHtml: string;
   signals: string;
 }
 
 const SOURCES: SourceRow[] = [
   { source: 'Claude Code transcript (.jsonl)',
-    ingest: 'Stop-hook uploads each session to collector at `POST /v1/cc-sessions`.',
+    ingestHtml: 'Stop-hook uploads each session to collector at <code>POST /v1/cc-sessions</code>.',
     signals: '活跃会话数 · tool 调用 · 失败率 · session 时长 · prompt 长度 · 改动文件' },
   { source: 'Envelope metadata',
-    ingest: '`user_id`, `machine_id`, `cwd`, `project_name`, `captured_at`, riven 客户端版本',
+    ingestHtml: '<code>user_id</code>, <code>machine_id</code>, <code>cwd</code>, <code>project_name</code>, <code>captured_at</code>, riven 客户端版本',
     signals: '成员归属 · 项目归属 · 时间窗口' },
-  { source: 'Git remote (`git remote -v` 抓自 transcript)',
-    ingest: '从会话里的 Bash 命令解析出 `owner/repo`',
+  { source: 'Git remote (<code>git remote -v</code> 抓自 transcript)',
+    ingestHtml: '从会话里的 Bash 命令解析出 <code>owner/repo</code>',
     signals: '项目识别（避免 cwd 噪音） · github 主项目区分' },
   { source: 'API token usage',
-    ingest: '每条 message 的 `tokens.{input,output,cacheRead,cacheCreation}`',
+    ingestHtml: '每条 message 的 <code>tokens.{input,output,cacheRead,cacheCreation}</code>',
     signals: '今日 $ 消耗 · model mix · 200k context 溢出 · 高产出判定' },
   { source: 'Tool-use 模式',
-    ingest: 'Edit/Write/MultiEdit 文件路径、Bash 命令文本、WebSearch query',
+    ingestHtml: 'Edit/Write/MultiEdit 文件路径、Bash 命令文本、WebSearch query',
     signals: '专注度 · 风险动作 · 学习面 · 协作热区（同文件 / 同 cwd）' },
   { source: 'LLM 叙事 cache',
-    ingest: '`~/.matrix-riven/llm-cache/v1.jsonl` · JSONL 增量 · 50MB 软上限 · 内容键',
+    ingestHtml: '<code>~/.matrix-riven/llm-cache/v1.jsonl</code> · JSONL 增量 · 50MB 软上限 · 内容键',
     signals: 'T1 session digest · T2 周报 · T3 项目 · T4 attention rewrite · T5 daily brief' },
 ];
 
+// 2026-05-18 round-7 audit: IDs dense-renumbered 1-16 so a customer
+// reading the table sees no gaps. The previous #1-5 / #10-18 / P*-*
+// numbering was internal (matched the design doc's signal IDs) but read
+// as "where are #6-#9?" + "#17/#18 exist while header says 16 个".
 const DETECTORS = [
-  { id: '#1',  name: '低活跃 (slacking)',  fires: '会话量 / 主项目命中率两条线都低于阈值' },
-  { id: '#2',  name: '卡住 (stuck)',       fires: '同 cwd 多次 session · 无 commit · 工具失败累计' },
-  { id: '#3',  name: '阻塞 (blockers)',    fires: 'Bash 失败率 > 阈值 · 反复同命令 · 缺权限错误' },
-  { id: '#4',  name: '求助 (help-needed)', fires: 'WebSearch + risky-action + 错误率同时升高' },
-  { id: '#5',  name: '协作命中',           fires: '同文件 / 同 cwd 在 24h 内被 ≥2 人触碰' },
-  { id: '#10', name: '工具失败率',         fires: '`tool.isError` 比例超过团队中位数 + 2σ' },
-  { id: '#11', name: '上下文溢出',         fires: 'input tokens ≥ 200k（接近 hard limit）' },
-  { id: '#12', name: '迭代密度',           fires: '同 session 内用户消息数 > 阈值' },
-  { id: '#13', name: 'Prompt 长度异常',    fires: '平均用户 prompt 字符数 > 团队 P90' },
-  { id: '#14', name: '风险动作',           fires: '危险 Bash 模式（rm -rf, force-push, drop, kill）' },
-  { id: '#15', name: 'L1 redaction 命中',  fires: 'session 内 PII 模式命中次数（envelope 已脱敏）' },
-  { id: '#16', name: '$ 成本异常',         fires: '今日单人花费 > 团队 P75 · 单 session 单价异常' },
-  { id: '#17', name: 'Model mix',          fires: 'opus / sonnet / haiku 选用比例（沉重模型偏好）' },
-  { id: '#18', name: '学习面 (learning)',  fires: '新出现的工具 / 库 / 文件夹（首次 touch）' },
-  { id: 'P1-3',name: '项目 status + ETA',  fires: 'phase 分类 · 健康分 · ETA 天数 · stale 判定' },
-  { id: 'P9-14',name:'项目 health + 节奏', fires: 'health 7d 平均 · 节奏升/稳/缓 · bus-factor' },
+  { id: '1',  name: '低活跃 (slacking)',  fires: '会话量 / 主项目命中率两条线都低于阈值' },
+  { id: '2',  name: '卡住 (stuck)',       fires: '同 cwd 多次 session · 无 commit · 工具失败累计' },
+  { id: '3',  name: '阻塞 (blockers)',    fires: 'Bash 失败率 > 阈值 · 反复同命令 · 缺权限错误' },
+  { id: '4',  name: '求助 (help-needed)', fires: 'WebSearch + risky-action + 错误率同时升高' },
+  { id: '5',  name: '协作命中',           fires: '同文件 / 同 cwd 在 24h 内被 ≥2 人触碰' },
+  { id: '6',  name: '工具失败率',         fires: 'tool.isError 比例超过团队中位数 + 2σ' },
+  { id: '7',  name: '上下文溢出',         fires: 'input tokens ≥ 200k（接近 hard limit）' },
+  { id: '8',  name: '迭代密度',           fires: '同 session 内用户消息数 > 阈值' },
+  { id: '9',  name: 'Prompt 长度异常',    fires: '平均用户 prompt 字符数 > 团队 P90' },
+  { id: '10', name: '风险动作',           fires: '危险 Bash 模式（rm -rf, force-push, drop, kill）' },
+  { id: '11', name: 'L1 redaction 命中',  fires: 'session 内 PII 模式命中次数（envelope 已脱敏）' },
+  { id: '12', name: '$ 成本异常',         fires: '今日单人花费 > 团队 P75 · 单 session 单价异常' },
+  { id: '13', name: 'Model mix',          fires: 'opus / sonnet / haiku 选用比例（沉重模型偏好）' },
+  { id: '14', name: '学习面 (learning)',  fires: '新出现的工具 / 库 / 文件夹（首次 touch）' },
+  { id: '15', name: '项目 status + ETA',  fires: 'phase 分类 · 健康分 · ETA 天数 · stale 判定' },
+  { id: '16', name: '项目 health + 节奏', fires: 'health 7d 平均 · 节奏升/稳/缓 · bus-factor' },
 ];
 
 export function renderSources(): string {
+  // Note: `source` and `ingestHtml` may contain <code> markup we own. They
+  // never accept user input — see SOURCES literal above. `signals` is plain
+  // text and escaped.
   const sources = SOURCES.map((s) => `
       <tr>
-        <td><strong>${escapeHtml(s.source)}</strong></td>
-        <td>${escapeHtml(s.ingest)}</td>
+        <td><strong>${s.source}</strong></td>
+        <td>${s.ingestHtml}</td>
         <td>${escapeHtml(s.signals)}</td>
       </tr>`).join('');
   const detectors = DETECTORS.map((d) => `
@@ -110,7 +121,7 @@ export function renderSources(): string {
     <tbody>
       <tr><td><strong>不读邮件 / 日历 / Slack</strong></td><td>这些数据从来不进 collector。</td></tr>
       <tr><td><strong>不外发给第三方</strong></td><td>除了 <code>claude -p</code> 本身访问 Anthropic API（脱敏后），不向任何外部服务转发。</td></tr>
-      <tr><td><strong>不持久化原始密钥 / token</strong></td><td>PII 脱敏管线 (\`packages/shared/src/pii/redactor.ts\`) 在写盘前去掉 emails / paths / secrets。</td></tr>
+      <tr><td><strong>不持久化原始密钥 / token</strong></td><td>PII 脱敏管线 (<code>packages/shared/src/pii/redactor.ts</code>) 在写盘前去掉 emails / paths / secrets。</td></tr>
       <tr><td><strong>不无限增长</strong></td><td>LLM cache 50MB 软上限 + 最老条目淘汰；transcript collector 由 ops 控制保留窗口。</td></tr>
     </tbody>
   </table>

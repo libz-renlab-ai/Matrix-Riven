@@ -35,7 +35,7 @@ export function getDemoSnapshot(): OverviewSnapshot {
     },
     members: [
       {
-        email: 'alex@demo.team', displayName: 'alex', stateBadge: 'active',
+        email: 'alex@example.com', displayName: 'alex', stateBadge: 'active',
         today: { sessions: 7, tokens: 84_000, estMinutes: 142, costUsd: 1.65 },
         trend7d: [5, 6, 7, 7, 8, 6, 7], deltaVs7dAvgPct: 0.12, warnings: [],
         topProject: 'matrix-riven', lastSessionAt: '2026-05-18T08:30:00Z',
@@ -43,7 +43,7 @@ export function getDemoSnapshot(): OverviewSnapshot {
         llmWeekly: '本周聚焦 overview 仪表盘\n已交付 hero 与 KPI 卡片骨架',
       },
       {
-        email: 'blake@demo.team', displayName: 'blake', stateBadge: 'stuck',
+        email: 'blake@example.com', displayName: 'blake', stateBadge: 'stuck',
         today: { sessions: 4, tokens: 51_000, estMinutes: 96, costUsd: 0.92 },
         trend7d: [3, 4, 5, 6, 7, 5, 4], deltaVs7dAvgPct: -0.18, warnings: ['卡 2 天'],
         topProject: 'matrix-riven', lastSessionAt: '2026-05-18T07:10:00Z',
@@ -51,7 +51,7 @@ export function getDemoSnapshot(): OverviewSnapshot {
         llmWeekly: '本周聚焦 status/page.tsx 报错\n卡在 类型推导，需要结对排查',
       },
       {
-        email: 'casey@demo.team', displayName: 'casey', stateBadge: 'active',
+        email: 'casey@example.com', displayName: 'casey', stateBadge: 'active',
         today: { sessions: 6, tokens: 72_000, estMinutes: 128, costUsd: 1.41 },
         trend7d: [4, 5, 5, 6, 7, 6, 6], deltaVs7dAvgPct: 0.21, warnings: [],
         topProject: 'team-graph', lastSessionAt: '2026-05-18T08:48:00Z',
@@ -59,7 +59,7 @@ export function getDemoSnapshot(): OverviewSnapshot {
         llmWeekly: '本周聚焦 LLM 叙事层 T1-T3\n已交付 worker collectInputs',
       },
       {
-        email: 'dana@demo.team', displayName: 'dana', stateBadge: 'low_activity',
+        email: 'dana@example.com', displayName: 'dana', stateBadge: 'low_activity',
         today: { sessions: 1, tokens: 9_000, estMinutes: 18, costUsd: 0.18 },
         trend7d: [4, 3, 2, 1, 1, 1, 1], deltaVs7dAvgPct: -0.55, warnings: ['节奏下滑'],
         topProject: 'team-graph', lastSessionAt: '2026-05-17T19:30:00Z',
@@ -71,8 +71,8 @@ export function getDemoSnapshot(): OverviewSnapshot {
       {
         name: 'matrix-riven', state: 'active', phaseGuess: 'implement',
         contributors: [
-          { email: 'alex@demo.team', sharePct: 0.55 },
-          { email: 'blake@demo.team', sharePct: 0.45 },
+          { email: 'alex@example.com', sharePct: 0.55 },
+          { email: 'blake@example.com', sharePct: 0.45 },
         ],
         busFactorWarning: false,
         trend7d: [4, 5, 6, 7, 6, 6, 6],
@@ -84,8 +84,8 @@ export function getDemoSnapshot(): OverviewSnapshot {
       {
         name: 'team-graph', state: 'active', phaseGuess: 'debug',
         contributors: [
-          { email: 'casey@demo.team', sharePct: 0.70 },
-          { email: 'dana@demo.team', sharePct: 0.30 },
+          { email: 'casey@example.com', sharePct: 0.70 },
+          { email: 'dana@example.com', sharePct: 0.30 },
         ],
         busFactorWarning: false,
         trend7d: [2, 3, 4, 3, 3, 2, 3],
@@ -97,7 +97,7 @@ export function getDemoSnapshot(): OverviewSnapshot {
       {
         name: 'devops-pipelines', state: 'maintaining', phaseGuess: 'refactor',
         contributors: [
-          { email: 'casey@demo.team', sharePct: 1.0 },
+          { email: 'casey@example.com', sharePct: 1.0 },
         ],
         busFactorWarning: true,
         trend7d: [1, 0, 1, 0, 1, 1, 0],
@@ -109,7 +109,7 @@ export function getDemoSnapshot(): OverviewSnapshot {
     ] as unknown as OverviewSnapshot['projects'],
     attention: [
       {
-        kind: 'member', refId: 'blake@demo.team', displayName: 'blake', initials: 'bl',
+        kind: 'member', refId: 'blake@example.com', displayName: 'blake', initials: 'bl',
         tag: '疑似卡住', tagSeverity: 'urgent',
         line2: '卡在 <span class="mono">status/page.tsx</span>',
         time: '2h 前', severity: 9,
