@@ -55,6 +55,7 @@ import { CLIENT_REFRESH_SCRIPT } from './views/_refresh.js.js';
 import { LEADERSHIP_CSS } from './views/styles.css.js';
 import { renderFilterBar } from './views/_filter-bar.html.js';
 import { FILTER_BAR_CSS, FILTER_BAR_SCRIPT } from './views/_filter-bar.client.js';
+import { CONSENT_BANNER_CSS, CONSENT_BANNER_SCRIPT, renderConsentBanner } from './views/_consent-banner.html.js';
 import { parseFocusFromQuery, focusFilterCacheKey, isDefaultFilter } from './focus-filter.js';
 import type { FocusFilter, OverviewSnapshot, ParsedSession } from './types.js';
 import { buildActivityFeed } from './activity-feed.js';
@@ -787,7 +788,7 @@ function renderPeopleTab(
       demo: isDemo,
       effectiveRange: range.label,
     });
-    const html = renderTabPage('people', rangeToNavLabelLocal(range.label), banner + tightHero + body, filterBarHtml);
+    const html = renderTabPage('people', rangeToNavLabelLocal(range.label), banner + tightHero + body, filterBarHtml, { demo: isDemo });
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);
   } catch {
@@ -848,7 +849,7 @@ function renderProjectsTab(
       demo: isDemo,
       effectiveRange: range.label,
     });
-    const html = renderTabPage('projects', rangeToNavLabelLocal(range.label), banner + tightHero + body, filterBarHtml);
+    const html = renderTabPage('projects', rangeToNavLabelLocal(range.label), banner + tightHero + body, filterBarHtml, { demo: isDemo });
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);
   } catch {
@@ -914,25 +915,37 @@ function renderRetroTab(
  * Projects visually consistent and lets the slide-over open from member tiles
  * / project rows without duplicating markup.
  */
-function renderTabPage(active: ActiveTab, rangeLabel: string, innerHtml: string, filterBarHtml: string = ''): string {
+function renderTabPage(active: ActiveTab, rangeLabel: string, innerHtml: string, filterBarHtml: string = '', opts: { demo?: boolean } = {}): string {
   const title = active.charAt(0).toUpperCase() + active.slice(1);
+  const isDemo = opts.demo === true;
+  // 2026-05-19 QA-7 P0: final acceptance review caught that /people and
+  // /projects rendered with NO consent banner — renderTabPage didn't
+  // import or call renderConsentBanner, and renderNav was called without
+  // demo: so neither tab showed the "演示数据 · 切换" pill either. /people
+  // is the highest-PII surface (raw prompt previews + email columns), so
+  // a CTO landing there first never saw the disclosure round-5 mandated.
+  // Now both ship from this single shell, matching /overview parity.
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(title)} · Matrix·Riven</title>
 <style>${LEADERSHIP_CSS}
-${FILTER_BAR_CSS}</style>
+${FILTER_BAR_CSS}
+${CONSENT_BANNER_CSS}</style>
 </head>
 <body>
 <div class="shell">
-${renderNav(active, { rangeLabel })}
+${renderNav(active, { rangeLabel, demo: isDemo })}
 ${filterBarHtml}
 ${innerHtml}
 </div>
 ${renderSlideoverShell()}
+${renderConsentBanner({ demo: isDemo })}
 <script>${CLIENT_REFRESH_SCRIPT}</script>
 <script>${FILTER_BAR_SCRIPT}</script>
+<script>${CONSENT_BANNER_SCRIPT}</script>
 </body>
 </html>`;
 }

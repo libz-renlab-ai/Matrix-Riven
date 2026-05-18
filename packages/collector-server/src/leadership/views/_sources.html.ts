@@ -143,8 +143,8 @@ ${CONSENT_BANNER_CSS}
   <p class="lead" style="margin-top:6px;">默认值如下，可通过环境变量覆盖。<strong>仅设置上限</strong>，没有上限不是产品行为而是 ops 失误，请告知团队。</p>
   <table>
     <tbody>
-      <tr><td><strong>session transcript（含 prompt 正文）</strong></td><td>默认 <strong>30 天</strong>；可通过 <code>RIVEN_TRANSCRIPT_RETENTION_DAYS</code> 缩短到 7 / 14 / 自定义。EU 部署建议 ≤ 14 天。到期后整文件删除（不可恢复）。</td></tr>
-      <tr><td><strong>聚合 envelope（无 prompt 正文）</strong></td><td>默认 <strong>180 天</strong>；可通过 <code>RIVEN_ENVELOPE_RETENTION_DAYS</code> 调整。包含 session 计数、token、project name 等，不含 prompt / Bash 文本。</td></tr>
+      <tr><td><strong>session transcript（含 prompt 正文）</strong></td><td>默认 <strong>30 天</strong>；可通过 <code>RIVEN_TRANSCRIPT_RETENTION_DAYS</code> 缩短到 7 / 14 / 自定义。EU 部署建议 ≤ 14 天。服务启动时 + 之后每 24 小时自动清理，到期后整文件删除（不可恢复）。</td></tr>
+      <tr><td><strong>聚合 envelope</strong></td><td>v1 不单独存储聚合 envelope —— 所有数据都从 transcript 文件计算。transcript 被清理后下次扫描时 envelope 数据自然消失。<em>envelope 的生命周期等于上一行的 transcript 保留窗口。</em>如需更长的聚合数据，请单独导出 <code>/api/overview</code> 快照。</td></tr>
       <tr><td><strong>LLM 叙事 cache</strong></td><td>50MB 硬上限 + LRU 淘汰；按内容键索引，不按时间。</td></tr>
       <tr><td><strong>L2 audit 日志</strong></td><td>记录 ingest + redaction 事件；默认与 transcript 同保留窗口。</td></tr>
     </tbody>

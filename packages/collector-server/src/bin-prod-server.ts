@@ -147,20 +147,42 @@ export async function runProdServer(deps: RunProdServerDeps = {}): Promise<() =>
   // recurring cron because every restart re-sweeps and the collector dir
   // doesn't grow fast enough to overflow between restarts.
   const transcriptRetentionDays = Number(env.RIVEN_TRANSCRIPT_RETENTION_DAYS ?? '30');
+  let retentionTimer: ReturnType<typeof setInterval> | undefined;
   if (Number.isFinite(transcriptRetentionDays) && transcriptRetentionDays > 0) {
-    try {
-      const removed = sweepRetention(handle.outputDir, transcriptRetentionDays);
-      if (removed > 0) {
-        log(`[riven-collector] retention sweep removed ${removed} files older than ${transcriptRetentionDays}d`);
+    const runSweep = (): void => {
+      try {
+        const removed = sweepRetention(handle.outputDir, transcriptRetentionDays);
+        if (removed > 0) {
+          log(`[riven-collector] retention sweep removed ${removed} files older than ${transcriptRetentionDays}d`);
+        }
+      } catch (err) {
+        log(`[riven-collector] retention sweep failed: ${err instanceof Error ? err.message : String(err)}`);
       }
-    } catch (err) {
-      log(`[riven-collector] retention sweep failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    };
+    runSweep();
+    // 2026-05-19 QA-7 P0: final acceptance review flagged that the
+    // startup-only sweep contradicted /sources copy implying continuous
+    // enforcement. Now also re-sweep every 24h so a long-running server
+    // keeps the retention promise as transcripts age in place.
+    retentionTimer = setInterval(runSweep, 24 * 3600 * 1000);
+    // Allow the process to exit even with the timer pending — unref so
+    // SIGTERM doesn't have to wait.
+    retentionTimer.unref?.();
   }
 
   deps.onReady?.({ url: handle.url, outputDir: handle.outputDir });
 
-  return handle.close;
+  // Compose the close handler: clear the retention timer (if any) then
+  // run the underlying server-close. Avoids leaking the interval in test
+  // teardown.
+  const close = async (): Promise<void> => {
+    if (retentionTimer !== undefined) {
+      clearInterval(retentionTimer);
+      retentionTimer = undefined;
+    }
+    await handle.close();
+  };
+  return close;
 }
 
 /**

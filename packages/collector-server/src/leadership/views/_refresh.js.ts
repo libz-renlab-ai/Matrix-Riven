@@ -244,16 +244,18 @@ export const CLIENT_REFRESH_SCRIPT = `
 
   async function pollOverview() {
     try {
-      // 2026-05-18 round-15 audit P0: same demo-flag propagation as
-      // pollSO (round-14). Without this, /overview?demo=1 silently
-      // self-destructs after 30 s -- the next tick fetches /api/overview
-      // (real, empty), the response has snap._html for every slot, and
-      // el.outerHTML = ... overwrites every demo fragment with empty
-      // "0 xiang" markup. Carry the flag through.
+      // 2026-05-18 round-15 audit P0: propagate the demo flag.
+      // 2026-05-19 QA-7 P1: propagate THE WHOLE query string. Previous
+      // version only carried "?demo=1", so a leader on
+      // /overview?demo=1&focus=alex&range=7d kept getting their filtered
+      // 1-member view silently swapped back to the unfiltered 4-member
+      // /api/overview?demo=1 response every 30 s. The chip stayed
+      // orange while the data underneath flipped. Now we forward
+      // location.search verbatim (drop hash; the API doesnt care).
       var ovQs = '';
       try {
-        if (typeof location !== 'undefined' && /(\\?|&)demo=1(&|$)/.test(location.search)) {
-          ovQs = '?demo=1';
+        if (typeof location !== 'undefined' && location.search) {
+          ovQs = location.search;
         }
       } catch (e) { /* SSR / non-browser fallback */ }
       var headers = overviewEtag ? { 'if-none-match': overviewEtag } : {};
