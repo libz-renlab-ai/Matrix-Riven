@@ -196,8 +196,13 @@ export interface ComputeExtrasInput {
   };
 }
 
-export function computeEnvelopeExtras(input: ComputeExtrasInput): EnvelopeExtras {
-  const home = homedir();
+export interface ComputeExtrasDeps {
+  /** Override `homedir()` for tests. Defaults to `node:os` homedir. */
+  home?: string;
+}
+
+export function computeEnvelopeExtras(input: ComputeExtrasInput, deps: ComputeExtrasDeps = {}): EnvelopeExtras {
+  const home = deps.home ?? homedir();
   const out: EnvelopeExtras = {};
   const host = computeHostInfo();
   if (Object.keys(host).length > 0) out.hostInfo = host;
