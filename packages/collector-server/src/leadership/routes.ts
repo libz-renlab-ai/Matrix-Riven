@@ -469,11 +469,13 @@ export function handleLeadershipRequest(
   }
 
   // P-B7: People + Projects are real pages — full unsliced grid/list with
-  // the same shell, nav, slide-over and 30 s polling as Overview.
-  if (pathname === '/people' && req.method === 'GET') {
+  // the same shell, nav, slide-over and 30 s polling as Overview. The
+  // method check lives inside renderPeopleTab / renderProjectsTab so
+  // non-GET returns 405 (not 404 via outer dispatcher fall-through).
+  if (pathname === '/people') {
     return renderPeopleTab(req, res, deps, query, now);
   }
-  if (pathname === '/projects' && req.method === 'GET') {
+  if (pathname === '/projects') {
     return renderProjectsTab(req, res, deps, query, now);
   }
   // Activity + Insights remain stubs — Phase 3 scope.
