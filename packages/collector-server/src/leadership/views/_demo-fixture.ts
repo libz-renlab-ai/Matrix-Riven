@@ -298,11 +298,12 @@ export function getDemoSnapshot(): OverviewSnapshot {
         email: 'blake@example.com', displayName: 'blake', stateBadge: 'stuck',
         today: { sessions: 4, tokens: 51_000, estMinutes: 96, costUsd: 0.92 },
         // 2026-05-18 round-11 audit P1: was [3,4,5,6,7,5,4] which
-        // trendLabel() classifies as "正在加速" (later=22 > earlier=12*1.5).
-        // That contradicted stateBadge=stuck + "卡 2 天". Shape now lands
-        // on "逐渐放缓" (later=10 < earlier=21*0.5=10.5) — matches the
-        // stuck narrative.
-        trend7d: [9, 7, 5, 4, 3, 2, 1], deltaVs7dAvgPct: -0.18, warnings: ['卡 2 天'],
+        // trendLabel() classified as "正在加速" while stateBadge=stuck.
+        // 2026-05-18 round-13 audit P1: trend7d[6] (today) must equal
+        // today.sessions (the dana fix's symmetric sibling). Shape now
+        // lands on "逐渐放缓" (earlier=21, later=10 < 10.5) AND ends at
+        // 4 — matches today.sessions=4 + stuck narrative.
+        trend7d: [9, 7, 5, 3, 2, 1, 4], deltaVs7dAvgPct: -0.18, warnings: ['卡 2 天'],
         topProject: 'matrix-riven', lastSessionAt: '2026-05-18T07:10:00Z',
         toolFailureRate: 0.31, riskyActionCount: 4,
         llmWeekly: '本周聚焦 status/page.tsx 报错\n卡在 类型推导，需要结对排查',
