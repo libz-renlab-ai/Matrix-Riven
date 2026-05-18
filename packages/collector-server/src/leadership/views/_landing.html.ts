@@ -10,6 +10,7 @@
  */
 
 import { LEADERSHIP_CSS } from './styles.css.js';
+import { CONSENT_BANNER_CSS, CONSENT_BANNER_SCRIPT, renderConsentBanner } from './_consent-banner.html.js';
 
 interface LandingFeature {
   icon: string;       // 1–2 char glyph
@@ -78,6 +79,7 @@ export function renderLanding(opts: { hasAuth: boolean }): string {
 <title>Matrix-Riven · 领导真正能用的工程团队仪表盘</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>${LEADERSHIP_CSS}
+${CONSENT_BANNER_CSS}
 .lc-page { max-width:1080px; margin:0 auto; padding:80px 40px 120px; }
 .lc-hero h1 { font-family:'Newsreader',serif; font-size:44px; line-height:1.2; color:var(--ink-1); margin:0 0 16px; font-weight:500; }
 .lc-hero h1 em { font-style:normal; color:var(--accent-ink); font-weight:600; }
@@ -114,12 +116,14 @@ export function renderLanding(opts: { hasAuth: boolean }): string {
     <div>Matrix-Riven · Leadership Edition · v0.1</div>
     <div>
       <a href="/overview">实时看板</a> ·
-      <a href="/retro?demo=1">本周回顾</a> ·
+      <a href="/retro">本周回顾</a> ·
       <a href="/sources">数据来源</a>
     </div>
   </footer>
 </div>
 </div>
+${renderConsentBanner({ demo: false })}
+<script>${CONSENT_BANNER_SCRIPT}</script>
 </body>
 </html>`;
 }

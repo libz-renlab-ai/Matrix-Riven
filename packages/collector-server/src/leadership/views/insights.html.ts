@@ -64,6 +64,33 @@ ${renderConsentBanner({ demo: opts.demo === true })}
 
 function renderHealthCard(snap: InsightsSnapshot): string {
   const h = snap.healthScore;
+  // 2026-05-19 QA-6 P1: daily-driver agent caught a fake-75 case. When the
+  // 30-day sparkline is nearly all zeros (no real ingest yet for this team),
+  // the composite score still defaults to ~75/100 because individual
+  // sub-scores fail-soft to "no risk found". Render an explicit
+  // "数据不足以打分" empty state when activity confidence is low — better
+  // than projecting a synthetic green-health number a new operator would
+  // act on.
+  const nonZeroWeeks = h.history30d.filter((v) => v > 0).length;
+  const totalWeeks = h.history30d.length;
+  const insufficientData = totalWeeks > 0 && nonZeroWeeks / totalWeeks < 0.3;
+  if (insufficientData) {
+    return `<section class="ins-health fade-in">
+      <h2 class="ins-section-title">🏥 团队健康总评分 <span class="ins-section-hint">（数据不足）</span></h2>
+      <div class="ins-health-body" style="grid-template-columns:140px 1fr;">
+        <div class="ins-health-ring" style="--ring-deg:0deg;opacity:.5;">
+          <div class="ins-health-num">—</div>
+          <div class="ins-health-unit">/100</div>
+        </div>
+        <div style="font-size:13.5px;color:var(--ink-2,#555);line-height:1.6;max-width:560px;">
+          过去 30 天里只有 <strong>${nonZeroWeeks}/${totalWeeks}</strong> 周有可统计的活动 —
+          样本太少，给出的分数会误导。等团队连续运行 2 周以上、收到至少 10 个 session
+          后，这里会出现真实的健康分。<br>
+          <span style="color:var(--ink-3,#888);font-size:12px;">如果你以为应该有数据，先去 <a href="/healthz" style="color:var(--ink-2);">/healthz</a> 看 envelopeCount，或检查 Claude Code hook 是否已上传。</span>
+        </div>
+      </div>
+    </section>`;
+  }
   const ringDeg = Math.round((h.value / 100) * 360);
   // 2026-05-19 QA-4 P0: journalist flagged "卡住率: 75" looking like
   // "75% of sessions are stuck" when it's actually a 0-100 health

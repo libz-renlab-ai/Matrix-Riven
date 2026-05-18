@@ -16,7 +16,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { readdirSync, existsSync } from 'node:fs';
+import { readdirSync, existsSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { TtlCache } from './cache.js';
 import type { DateRange } from './types.js';
@@ -137,15 +137,53 @@ export function handleLeadershipRequest(
       return true;
     }
     let collectorDirExists = false;
-    try { collectorDirExists = existsSync(deps.collectorDir); } catch { /* ignore */ }
+    let envelopeCount = 0;
+    let lastIngestAt: string | null = null;
+    try {
+      collectorDirExists = existsSync(deps.collectorDir);
+      if (collectorDirExists) {
+        // 2026-05-19 QA-6 P2: daily-driver agent flagged that "is the
+        // server up?" isn't enough — ops needs "is anyone actually
+        // uploading?" Walk the top-level user dirs and find newest file
+        // mtime + count envelopes. Cheap O(N members × M days) on a
+        // small team; if the collector grows beyond a few thousand
+        // sessions we'd cache this for 30 s.
+        let newestMs = 0;
+        for (const userDir of readdirSync(deps.collectorDir, { withFileTypes: true })) {
+          if (!userDir.isDirectory()) continue;
+          const userPath = `${deps.collectorDir}/${userDir.name}`;
+          for (const dateDir of readdirSync(userPath, { withFileTypes: true })) {
+            if (!dateDir.isDirectory()) continue;
+            const datePath = `${userPath}/${dateDir.name}`;
+            for (const f of readdirSync(datePath, { withFileTypes: true })) {
+              if (!f.isFile()) continue;
+              if (!f.name.endsWith('.jsonl') && !f.name.endsWith('.ogg')) continue;
+              envelopeCount += 1;
+              try {
+                const stat = statSync(`${datePath}/${f.name}`);
+                if (stat.mtimeMs > newestMs) newestMs = stat.mtimeMs;
+              } catch { /* skip */ }
+            }
+          }
+        }
+        if (newestMs > 0) lastIngestAt = new Date(newestMs).toISOString();
+      }
+    } catch { /* ignore — degrade gracefully if dir scan fails */ }
+    // Surface the ingest age so an ops query like "is anyone uploading?"
+    // is one HTTP GET away. null when no envelopes exist yet.
+    const lastIngestAgeSec = lastIngestAt
+      ? Math.max(0, Math.round((now().getTime() - new Date(lastIngestAt).getTime()) / 1000))
+      : null;
     sendJson(res, 200, {
       ok: true,
       service: 'matrix-riven-collector',
       now: now().toISOString(),
       uptimeSec: Math.round(process.uptime()),
       collectorDirExists,
+      envelopeCount,
+      lastIngestAt,
+      lastIngestAgeSec,
       cacheSize: deps.cache.size,
-      authConfigured: !!deps.authToken,
     });
     return true;
   }
@@ -171,6 +209,7 @@ export function handleLeadershipRequest(
       projects: getDemoSnapshot().projects.map((p) => p.name),
       tab: 'overview',
       demo: true,
+      effectiveRange: filter.range,
     });
     sendHtml(res, 200, renderOverview(snap, { filterBarHtml, demo: true }));
     return true;
@@ -673,6 +712,7 @@ function renderOverviewTab(
       projects: snap.projects.map((p) => p.name),
       tab: 'overview',
       demo: false,
+      effectiveRange: range.label,
     });
     const html = renderOverview(snap, { filterBarHtml });
     deps.cache.set(cacheKey, html);
@@ -736,6 +776,7 @@ function renderPeopleTab(
       projects: snap.projects.map((p) => p.name),
       tab: 'people',
       demo: isDemo,
+      effectiveRange: range.label,
     });
     const html = renderTabPage('people', rangeToNavLabelLocal(range.label), banner + tightHero + body, filterBarHtml);
     deps.cache.set(cacheKey, html);
@@ -796,6 +837,7 @@ function renderProjectsTab(
       projects: snap.projects.map((p) => p.name),
       tab: 'projects',
       demo: isDemo,
+      effectiveRange: range.label,
     });
     const html = renderTabPage('projects', rangeToNavLabelLocal(range.label), banner + tightHero + body, filterBarHtml);
     deps.cache.set(cacheKey, html);
@@ -930,6 +972,7 @@ function renderMemberDetailPage(
         projects: getDemoSnapshot().projects.map((p) => p.name),
         tab: 'people',
         demo: true,
+        effectiveRange: range.label,
       });
       const html = renderMemberDetail(demoMember, demoMember.detail, { filterBarHtml, demo: true });
       deps.cache.set(cacheKey, html);
@@ -1041,6 +1084,7 @@ function renderInsightsTab(
       projects: snap.projects.map((p) => p.name),
       tab: 'insights',
       demo: isDemo,
+      effectiveRange: range.label,
     });
     const html = renderInsightsPage(insights, { filterBarHtml, activeSubTab, demo: isDemo });
     deps.cache.set(cacheKey, html);
@@ -1227,6 +1271,7 @@ function renderActivityTab(
       projects: collectProjectsForFilterBar(deps, range, nowDate, isDemo),
       tab: 'activity',
       demo: isDemo,
+      effectiveRange: range.label,
     });
     const html = renderActivityPage(feed, { filterBarHtml, demo: isDemo });
     deps.cache.set(cacheKey, html);

@@ -114,6 +114,17 @@ const ID_RE = /^[A-Za-z0-9._-]+$/;
 
 function send(res: ServerResponse, status: number, body?: unknown): void {
   res.statusCode = status;
+  // 2026-05-19 QA-6 P2: every response — including outer-dispatcher 404 /
+  // 405 fall-throughs — gets the same defensive headers as the leadership
+  // routes. Previously HEAD / or POST /<unknown> returned the body or
+  // status code without nosniff / X-Frame / CSP, contradicting /landing's
+  // "all-routes carry security headers" copy.
+  if (!res.headersSent) {
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('x-frame-options', 'DENY');
+    res.setHeader('referrer-policy', 'no-referrer');
+    res.setHeader('cache-control', 'no-store');
+  }
   if (body !== undefined) {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(body));

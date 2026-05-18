@@ -5,6 +5,7 @@
  */
 
 import { LEADERSHIP_CSS } from './styles.css.js';
+import { CONSENT_BANNER_CSS, CONSENT_BANNER_SCRIPT, renderConsentBanner } from './_consent-banner.html.js';
 
 interface SourceRow {
   source: string;
@@ -84,6 +85,7 @@ export function renderSources(): string {
 <title>数据来源 · Matrix-Riven</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>${LEADERSHIP_CSS}
+${CONSENT_BANNER_CSS}
 .sp-page { max-width:1100px; margin:0 auto; padding:48px 40px; }
 .sp-page h1 { font-family:'Newsreader',serif; font-size:32px; color:var(--ink-1); margin:0 0 8px; font-weight:500; }
 .sp-page .lead { font-size:15px; color:var(--ink-2); margin:0 0 36px; max-width:760px; line-height:1.6; }
@@ -160,6 +162,8 @@ export function renderSources(): string {
   </table>
 </div>
 </div>
+${renderConsentBanner({ demo: false })}
+<script>${CONSENT_BANNER_SCRIPT}</script>
 </body>
 </html>`;
 }

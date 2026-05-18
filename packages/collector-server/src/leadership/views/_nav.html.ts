@@ -49,8 +49,13 @@ export function renderNav(active: ActiveTab, opts: RenderNavOptions = {}): strin
     return `<a class="${cls}" href="${t.href}">${t.label}</a>`;
   }).join('');
   const rangeLabel = opts.rangeLabel ?? '7 日窗口';
+  // 2026-05-19 QA-6 P1: demo pill used to hardcode href="/overview", which
+  // dropped the user from /insights?demo=1 onto /overview real (losing both
+  // the page context AND any filter chips). Now we render with href="#"
+  // and a small inline onclick that strips ?demo=1 from the current URL,
+  // so the pill takes you to the SAME page in real mode.
   const demoPill = opts.demo
-    ? `<a class="nav-demo-pill" href="/overview" data-real-link title="切换到真实数据" style="background:#fdf3e0;color:#8a6420;border:1px solid #e7c98f;padding:3px 10px;border-radius:999px;font-size:11.5px;text-decoration:none;letter-spacing:.02em;">演示数据 · 切换</a>`
+    ? `<a class="nav-demo-pill" href="#" data-real-link title="切换到真实数据（保留当前页面）" onclick="event.preventDefault();var u=new URL(location.href);u.searchParams.delete('demo');location.href=u.pathname+(u.search||'')+u.hash;" style="background:#fdf3e0;color:#8a6420;border:1px solid #e7c98f;padding:3px 10px;border-radius:999px;font-size:11.5px;text-decoration:none;letter-spacing:.02em;">演示数据 · 切换</a>`
     : '';
   return `
     <nav class="nav fade-in">

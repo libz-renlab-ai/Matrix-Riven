@@ -31,6 +31,14 @@ export interface FilterBarOptions {
   tab: 'overview' | 'people' | 'projects' | 'retro' | 'activity' | 'insights';
   /** Demo flag — appended to all chip links so demo mode survives navigation. */
   demo?: boolean;
+  /**
+   * QA-6 P1: when the caller's effective range differs from `filter.range`
+   * (e.g. /people defaults to 7d when no ?range=, but filter.range remains
+   * 'today'), pass the resolved bucket here so the chip displays the
+   * actual window — not the URL-stated one. Avoids the contradiction where
+   * the nav reads "实时 · 7 日窗口" but the chip reads "📅 今日".
+   */
+  effectiveRange?: RangeLabel;
 }
 
 const RANGE_LABELS: Record<RangeLabel, string> = {
@@ -62,13 +70,21 @@ export function renderFilterBar(opts: FilterBarOptions): string {
   const f = opts.filter;
   const focusActive = !!f.focus;
   const projectActive = !!f.project;
-  const rangeActive = f.range !== 'today';
+  // 2026-05-19 QA-6 P1: rangeActive used to mean "user picked something
+  // other than today", but on tabs that default to 7d (people/projects/
+  // activity/insights), the chip read "今日" while the page actually
+  // showed 7-day data. Now treat range as active iff the URL explicitly
+  // set ?range= AND the effective bucket differs from the page's default.
+  // The chip itself displays the effective bucket regardless, so the
+  // viewer always sees what window they're looking at.
+  const effRange = opts.effectiveRange ?? f.range;
+  const rangeActive = effRange !== 'today';
   const stateActive = !!f.state;
   const anyActive = focusActive || projectActive || rangeActive || stateActive;
 
   const focusLabel = focusActive ? escapeHtml(f.focus!) : '全部成员';
   const projectLabel = projectActive ? escapeHtml(f.project!) : '全部项目';
-  const rangeLabel = rangeActive ? RANGE_LABELS[f.range] ?? '自定义' : '今日';
+  const rangeLabel = RANGE_LABELS[effRange] ?? '自定义';
   const stateLabel = stateActive ? STATE_LABELS[f.state!] ?? f.state : '全部状态';
 
   // Build dropdown option lists. The client script reads these from
