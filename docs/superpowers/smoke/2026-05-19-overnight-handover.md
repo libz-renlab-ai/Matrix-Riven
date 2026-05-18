@@ -42,6 +42,7 @@ Phase 3 全部 4 个子功能 **A · 聚焦过滤 / B · Activity 活动流 / C 
 | `f2f9ba3` | QA round-1 P0 修复（insights/heatmap/landing/activity 文案） | 0 |
 | `0721759` | hero 加 filter crumb（QA P1 #7） | 0 |
 | `451232c` | QA round-2 P0：demo filter 重算 KPI · landing→/retro?demo=1 | 0 |
+| `5db29aa` | QA round-2 P1：demo `computedAt` 用 now，与真实时间对齐 | 0 |
 
 ---
 
