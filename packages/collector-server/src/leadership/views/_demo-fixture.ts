@@ -297,7 +297,12 @@ export function getDemoSnapshot(): OverviewSnapshot {
       {
         email: 'blake@example.com', displayName: 'blake', stateBadge: 'stuck',
         today: { sessions: 4, tokens: 51_000, estMinutes: 96, costUsd: 0.92 },
-        trend7d: [3, 4, 5, 6, 7, 5, 4], deltaVs7dAvgPct: -0.18, warnings: ['卡 2 天'],
+        // 2026-05-18 round-11 audit P1: was [3,4,5,6,7,5,4] which
+        // trendLabel() classifies as "正在加速" (later=22 > earlier=12*1.5).
+        // That contradicted stateBadge=stuck + "卡 2 天". Shape now lands
+        // on "逐渐放缓" (later=10 < earlier=21*0.5=10.5) — matches the
+        // stuck narrative.
+        trend7d: [9, 7, 5, 4, 3, 2, 1], deltaVs7dAvgPct: -0.18, warnings: ['卡 2 天'],
         topProject: 'matrix-riven', lastSessionAt: '2026-05-18T07:10:00Z',
         toolFailureRate: 0.31, riskyActionCount: 4,
         llmWeekly: '本周聚焦 status/page.tsx 报错\n卡在 类型推导，需要结对排查',
@@ -308,7 +313,12 @@ export function getDemoSnapshot(): OverviewSnapshot {
         trend7d: [4, 5, 5, 6, 7, 6, 6], deltaVs7dAvgPct: 0.21, warnings: [],
         topProject: 'team-graph', lastSessionAt: '2026-05-18T08:48:00Z',
         toolFailureRate: 0.04, riskyActionCount: 0,
-        llmWeekly: '本周聚焦 LLM 叙事层 T1-T3\n已交付 worker collectInputs',
+        // 2026-05-18 round-11 audit P1: was "LLM 叙事层 T1-T3 / worker
+        // collectInputs" which contradicted casey's topProject=team-graph
+        // and the actual session "修一下 graph 视图渲染抖动". Now matches
+        // the graph-rendering narrative threaded through the rest of the
+        // fixture.
+        llmWeekly: '本周聚焦 team-graph 视图渲染\n已交付 attention 编辑卡联动；修 SVG 抖动中',
       },
       {
         email: 'dana@example.com', displayName: 'dana', stateBadge: 'low_activity',
@@ -352,7 +362,11 @@ export function getDemoSnapshot(): OverviewSnapshot {
           { email: 'casey@example.com', sharePct: 1.0 },
         ],
         busFactorWarning: true,
-        trend7d: [1, 0, 1, 0, 1, 1, 0],
+        // 2026-05-18 round-11 audit P1: was [1,0,1,0,1,1,0] which lands
+        // on "稳步推进" (earlier=2, later=2). Reshape so the pace stat
+        // reads "逐渐放缓" (earlier=7, later=2) — matches "无人推进"
+        // copy + activeTodayCount=0.
+        trend7d: [3, 2, 2, 1, 0, 1, 0],
         healthScore: 6.8, etaDays: 12, etaConfidence: 'low',
         activeTodayPct: 0, activeTodayCount: 0,
         lastTouch: { filePath: '.github/workflows/ci.yml', by: 'casey', ts: '2026-05-17T15:00:00Z' },
