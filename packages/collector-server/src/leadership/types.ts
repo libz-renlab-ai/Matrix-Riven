@@ -292,10 +292,53 @@ export interface HighlightEvent {
 // Range / query types
 // =====================================================================
 
-export type RangeLabel = 'today' | '24h' | '7d' | '30d' | 'custom';
+export type RangeLabel = 'today' | 'yesterday' | '24h' | '7d' | '30d' | 'custom';
 
 export interface DateRange {
   start: Date;
   end: Date;
   label: RangeLabel | string;
+}
+
+// =====================================================================
+// Phase 3-A · Focus filter
+// =====================================================================
+
+/**
+ * Pinned at brainstorm `551-1779116287`. Filter applied at the aggregator
+ * before signal computation, so all downstream signal computers stay
+ * filter-agnostic. URL query is the source of truth (no localStorage);
+ * each chip is single-select; `state` requires a two-stage filter pass
+ * inside the aggregator (compute member states on focus+project+range
+ * filtered sessions, then drop members whose state ≠ filter.state, then
+ * drop their sessions from downstream signal inputs).
+ *
+ * MemberStateBadge values that `state` can take match `MemberStateBadge`
+ * defined earlier in this file: 'active' | 'quiet' | 'stuck' |
+ * 'needs_help' | 'low_activity'.
+ */
+export interface FocusFilter {
+  /** Member email local-part (e.g. "blake"). Matched against userId's local-part. */
+  focus?: string;
+  /** Project name (cwd-derived or git-remote). Exact match, case-insensitive. */
+  project?: string;
+  /** Time range. `custom` reads `from` and `to`. */
+  range: RangeLabel;
+  /** When range='custom', UTC day boundaries (inclusive). */
+  from?: Date;
+  to?: Date;
+  /** Member state badge filter. Two-stage pass — see comment above. */
+  state?: MemberStateBadge;
+}
+
+/**
+ * Default filter when no query params are present. `range: 'today'`
+ * preserves the dashboard's pre-3A behaviour byte-for-byte so adding
+ * the filter is a zero-regression change at the empty-filter call site.
+ */
+export const DEFAULT_FOCUS_FILTER: FocusFilter = { range: 'today' };
+
+/** Helper — true when filter equals the default (no active dimensions). */
+export function isDefaultFocusFilter(f: FocusFilter): boolean {
+  return !f.focus && !f.project && !f.state && f.range === 'today' && !f.from && !f.to;
 }
