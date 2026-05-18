@@ -14,6 +14,17 @@ Phase 3 全部 4 个子功能 **A · 聚焦过滤 / B · Activity 活动流 / C 
 
 ---
 
+## 进度时间线（自动维护）
+
+- 22:30 启动
+- ~23:50 A 聚焦过滤器 完整实现 + 测试通过
+- ~00:25 B Activity 活动流 完整实现 + 测试通过
+- ~00:45 C 成员详情页 完整实现 + 测试通过
+- ~00:55 D Insights 洞察分析 完整实现 + 测试通过
+- ~01:00 QA Agent 第 1 轮：18 issues，4 P0 修复
+- ~01:15 QA Agent 第 2 轮：5 new issues，2 P0 修复（demo filter KPI / landing retro link）
+- 当前：全测试 877/877，全 endpoint 200，QA P0 闭环
+
 ## 1. 已完成（按 commit 时间顺序）
 
 | Commit | 主题 | 测试增量 |
@@ -28,7 +39,9 @@ Phase 3 全部 4 个子功能 **A · 聚焦过滤 / B · Activity 活动流 / C 
 | `2cf4392` | B · Activity 活动流 + view（9+8 tests） | +17 |
 | `330076e` | C · /people/:id 成员详情完整页（8 tests） | +8 |
 | `179d863` | D · /insights 真页（health/recs/anomalies/3 axes） | 0 |
-| `f2f9ba3` | QA P0 修复（insights 数据/heatmap/landing 文案/activity 文案） | 0 |
+| `f2f9ba3` | QA round-1 P0 修复（insights/heatmap/landing/activity 文案） | 0 |
+| `0721759` | hero 加 filter crumb（QA P1 #7） | 0 |
+| `451232c` | QA round-2 P0：demo filter 重算 KPI · landing→/retro?demo=1 | 0 |
 
 ---
 
