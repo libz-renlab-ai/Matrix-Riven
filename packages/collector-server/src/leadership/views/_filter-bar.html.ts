@@ -37,8 +37,13 @@ export interface FilterBarOptions {
    * 'today'), pass the resolved bucket here so the chip displays the
    * actual window — not the URL-stated one. Avoids the contradiction where
    * the nav reads "实时 · 7 日窗口" but the chip reads "📅 今日".
+   *
+   * Accepts `RangeLabel | string` because the upstream `DateRange.label`
+   * type is `RangeLabel | string` (parseRange returns a custom string when
+   * `from`/`to` is set). Unknown values fall through to '自定义' via
+   * RANGE_LABELS lookup below.
    */
-  effectiveRange?: RangeLabel;
+  effectiveRange?: RangeLabel | string;
 }
 
 const RANGE_LABELS: Record<RangeLabel, string> = {
@@ -77,7 +82,12 @@ export function renderFilterBar(opts: FilterBarOptions): string {
   // set ?range= AND the effective bucket differs from the page's default.
   // The chip itself displays the effective bucket regardless, so the
   // viewer always sees what window they're looking at.
-  const effRange = opts.effectiveRange ?? f.range;
+  const effRangeRaw = opts.effectiveRange ?? f.range;
+  // Treat any non-known label as 'custom' for the active-state check —
+  // safe because the chip render below also falls back to '自定义'.
+  const effRange: RangeLabel = (Object.prototype.hasOwnProperty.call(RANGE_LABELS, effRangeRaw)
+    ? effRangeRaw
+    : 'custom') as RangeLabel;
   const rangeActive = effRange !== 'today';
   const stateActive = !!f.state;
   const anyActive = focusActive || projectActive || rangeActive || stateActive;

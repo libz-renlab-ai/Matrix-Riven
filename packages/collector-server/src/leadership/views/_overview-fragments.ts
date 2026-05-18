@@ -236,7 +236,7 @@ export function renderKpisFragment(snap: OverviewSnapshot): string {
     },
     {
       cls: 'kpi-spend',
-      label: '今日消耗',
+      label: spendCardLabel,
       num: spendNum,
       unit: '',
       trend: spendTrend,
@@ -406,7 +406,7 @@ export function sparkFromTrend(trend: number[]): string {
 
 function memberSubLabel(m: MemberSnapshot): string {
   if (m.deltaVs7dAvgPct > 0.2) return `高产出 ↑${Math.round(m.deltaVs7dAvgPct * 100)}%`;
-  if (m.stateBadge === 'low_activity') return `闲置`;
+  if (m.stateBadge === 'low_activity') return `本周参与不多`;
   return `${m.today.sessions} 会话`;
 }
 

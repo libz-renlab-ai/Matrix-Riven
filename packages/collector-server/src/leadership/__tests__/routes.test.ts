@@ -448,10 +448,15 @@ describe('detail API _html fragments (P-B6)', () => {
   });
 
   it('GET /members/<id> is retired — redirects to /people/<id> (Phase 3-C resurrects detail page)', async () => {
+    // 2026-05-19 QA-6 P2: redirect now preserves query and adds a
+    // #member=<id> fragment for slideover deeplink symmetry. The location
+    // header MUST start with /people/<id> and contain the deeplink, and
+    // MAY also carry the original query string.
     const res = await fetch(`${baseUrl}/members/alice2026`, { redirect: 'manual' });
     expect([301, 302]).toContain(res.status);
-    // Phase 3-C: forward to the new detail page URL preserving the id.
-    expect(res.headers.get('location')).toBe('/people/alice2026');
+    const location = res.headers.get('location') ?? '';
+    expect(location.startsWith('/people/alice2026')).toBe(true);
+    expect(location).toContain('#member=alice2026');
   });
 
   it('GET /projects/<name> is retired — redirects (or 410s) away from a full page', async () => {

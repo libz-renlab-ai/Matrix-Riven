@@ -632,7 +632,16 @@ export function handleLeadershipRequest(
       return true;
     }
     // Phase 3-C: forward to the new /people/:id URL (preserving id).
-    sendRedirect(res, 301, '/people/' + encodeURIComponent(rawId));
+    // 2026-05-19 QA-6 P2: mirror the /projects/<id> fix — preserve query
+    // string so /members/<id>?demo=1 doesn't drop into real mode + 404.
+    // Adds #member=<id> fragment for slideover deeplink symmetry with
+    // /projects/<id> → /projects?#project=<id>.
+    const memberQs = query.toString();
+    const memberTarget =
+      '/people/' + encodeURIComponent(rawId) +
+      (memberQs ? '?' + memberQs : '') +
+      '#member=' + encodeURIComponent(rawId);
+    sendRedirect(res, 302, memberTarget);
     return true;
   }
 

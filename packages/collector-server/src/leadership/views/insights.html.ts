@@ -71,9 +71,12 @@ function renderHealthCard(snap: InsightsSnapshot): string {
   // "数据不足以打分" empty state when activity confidence is low — better
   // than projecting a synthetic green-health number a new operator would
   // act on.
-  const nonZeroWeeks = h.history30d.filter((v) => v > 0).length;
-  const totalWeeks = h.history30d.length;
-  const insufficientData = totalWeeks > 0 && nonZeroWeeks / totalWeeks < 0.3;
+  // history30d is 30 DAILY buckets (insights/index.ts builds `Array.from({length:30}, …)`
+  // bucketed by daysAgo), not weekly. QA-6 P3: previous copy said "周" which
+  // would have a leader compute ~7 months of nothing instead of 1 month.
+  const nonZeroDays = h.history30d.filter((v) => v > 0).length;
+  const totalDays = h.history30d.length;
+  const insufficientData = totalDays > 0 && nonZeroDays / totalDays < 0.3;
   if (insufficientData) {
     return `<section class="ins-health fade-in">
       <h2 class="ins-section-title">🏥 团队健康总评分 <span class="ins-section-hint">（数据不足）</span></h2>
@@ -83,7 +86,7 @@ function renderHealthCard(snap: InsightsSnapshot): string {
           <div class="ins-health-unit">/100</div>
         </div>
         <div style="font-size:13.5px;color:var(--ink-2,#555);line-height:1.6;max-width:560px;">
-          过去 30 天里只有 <strong>${nonZeroWeeks}/${totalWeeks}</strong> 周有可统计的活动 —
+          过去 30 天里只有 <strong>${nonZeroDays}/${totalDays}</strong> 天有可统计的活动 —
           样本太少，给出的分数会误导。等团队连续运行 2 周以上、收到至少 10 个 session
           后，这里会出现真实的健康分。<br>
           <span style="color:var(--ink-3,#888);font-size:12px;">如果你以为应该有数据，先去 <a href="/healthz" style="color:var(--ink-2);">/healthz</a> 看 envelopeCount，或检查 Claude Code hook 是否已上传。</span>

@@ -31,6 +31,15 @@
  * be both confusing (consent to what, the fixtures?) and counter to the
  * product's onboarding flow. The /sources page is still linked from
  * landing so a prospect can read the disclosure.
+ *
+ * 2026-05-19 QA-6: round-5 originally excluded /landing and /sources too
+ * (rationale: "they're the marketing + transparency surface, not the
+ * authenticated work UI"). Round-6 daily-driver flagged this as inverted —
+ * a CTO walking up to /sources first should see the same gate as an
+ * authenticated user. So /landing and /sources now opt in via
+ * `renderConsentBanner({ demo: false })` at the bottom of their bodies.
+ * The "demo-suppressed" rule remains intact: ?demo=1 still hides the
+ * banner everywhere it appears.
  */
 
 export const CONSENT_BANNER_CSS = `

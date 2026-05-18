@@ -140,7 +140,7 @@ function stateBadgeLabel(b: MemberSnapshot['stateBadge']): string {
     case 'quiet': return '安静';
     case 'stuck': return '卡住';
     case 'needs_help': return '需支援';
-    case 'low_activity': return '节奏缓';
+    case 'low_activity': return '本周参与不多';
     default: return String(b);
   }
 }
