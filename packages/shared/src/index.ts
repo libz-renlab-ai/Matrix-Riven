@@ -32,9 +32,14 @@ export {
   buildCcSessionEnvelope,
   isCcSessionMetadata,
   type CcSessionEnvelope,
+  type CcSessionEnvelopeBlock,
   type CcSessionMetadata,
   type CcSessionQuotaBlock,
   type BuildEnvelopeInput,
+  type EnvelopeExtras,
+  type HostInfo,
+  type SettingsDigest,
+  type RedactionLocationCounts,
 } from './schemas/cc-session.js';
 
 export {
@@ -66,6 +71,8 @@ export {
   type CcSessionHealth,
   type CcStatusSnapshot,
   type CcStatusQueryRow,
+  type UserDecision,
+  type CompactTrigger,
   type TranscriptMetrics,
   type QuotaSnapshotInput,
   type BuildCcStatusInput,
@@ -81,6 +88,8 @@ export {
 export {
   detectSensitiveText,
   redactSensitiveText,
+  scanTranscriptForStats,
   type SensitiveFinding,
   type SensitiveFindingKind,
+  type TranscriptRedactionStats,
 } from './pii/redactor.js';

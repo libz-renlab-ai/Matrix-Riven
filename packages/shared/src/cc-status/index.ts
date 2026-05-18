@@ -4,6 +4,8 @@ export {
   type CcSessionHealth,
   type CcStatusSnapshot,
   type CcStatusQueryRow,
+  type UserDecision,
+  type CompactTrigger,
 } from './types.js';
 
 export {

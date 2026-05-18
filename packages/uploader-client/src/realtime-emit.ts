@@ -27,7 +27,7 @@
  *   import { emitCcStatus } from "./realtime-emit.js";
  *   emitCcStatus({ event: "session_start", sessionId, cwd });
  */
-import { homedir, hostname } from "node:os";
+import { homedir, hostname, loadavg, cpus, freemem, totalmem } from "node:os";
 import {
   CC_STATUS_SCHEMA_VERSION,
   digitalTwinPaths,
@@ -82,15 +82,18 @@ export interface EmitInput {
   /** Optional context token count from the hook payload. */
   readonly contextTokens?: number;
   /**
-   * Optional raw user prompt text. Issue #308 grill §3 mandates "完整存 raw
-   * prompt" for leader-side evidence / replay. The caller (UserPromptSubmit
-   * hook) is responsible for gating this behind the
-   * `RIVEN_REALTIME_RAW_PROMPT=1` env opt-in — emit threads whatever it
-   * receives directly to `CcStatusSnapshot.raw_prompt`. Empty string is
-   * treated as "unset" (so an opt-in caller can still skip individual
-   * empty prompts).
+   * Optional raw user prompt text. Bucket 1/2 (G1) flipped the default: raw
+   * prompts ARE emitted unless the user explicitly opts out via
+   * `RIVEN_REALTIME_RAW_PROMPT=0` (or legacy `TEAMAGENT_REALTIME_RAW_PROMPT=0`).
+   * Empty string is still treated as "unset".
    */
   readonly rawPrompt?: string;
+  /**
+   * Bucket 1/2 — extra snapshot fields the caller wants to thread through
+   * (event-specific or cross-cutting metrics). Sanitized server-side; client
+   * just copies. Use this for `tool_name`, `user_decision`, `cpu_pct`, etc.
+   */
+  readonly extras?: Partial<CcStatusSnapshot>;
 }
 
 const TIMEOUT_MS = 50;
@@ -144,6 +147,37 @@ export function __resetIdentityCacheForTests(): void {
   cachedUserId = null;
   cachedMachineId = null;
   cachedConfigBaseUrl = CONFIG_URL_UNREAD;
+}
+
+/**
+ * Bucket 1/2 (C1) — cheap host metrics sampled at hook fire time. Returns a
+ * `Partial<CcStatusSnapshot>` ready to merge into `EmitInput.extras`. Each
+ * field is best-effort: probe failures are swallowed (the snapshot just
+ * omits the unknown field).
+ */
+export function sampleHostMetrics(): Partial<CcStatusSnapshot> {
+  const out: Partial<CcStatusSnapshot> = {};
+  try {
+    const load = loadavg();
+    const cpuCount = cpus().length || 1;
+    // Windows returns [0,0,0]; treat as unknown.
+    if (Array.isArray(load) && Number.isFinite(load[0]) && (load[0] as number) > 0) {
+      out.cpu_pct = Math.round(((load[0] as number) / cpuCount) * 100) / 100;
+    }
+  } catch {
+    /* loadavg unavailable */
+  }
+  try {
+    const free = freemem();
+    const total = totalmem();
+    if (Number.isFinite(total) && total > 0) {
+      out.mem_used_mb = Math.round((total - free) / (1024 * 1024));
+      out.mem_total_mb = Math.round(total / (1024 * 1024));
+    }
+  } catch {
+    /* mem unavailable */
+  }
+  return out;
 }
 
 /**
@@ -270,19 +304,21 @@ function buildSnapshot(input: EmitInput): CcStatusSnapshot {
     snap.context_tokens = tokens;
     snap.context_pct = Math.round((tokens / 200_000) * 100) / 100;
   }
-  // Opt-in raw prompt evidence. Defense-in-depth — the hook layer
-  // (bin-user-prompt-submit.ts) is the policy boundary, but a future direct
-  // caller of emitCcStatus would otherwise bypass the env gate. Re-check
-  // here so the transport refuses to send prompt content unless
-  // RIVEN_REALTIME_RAW_PROMPT=1 (or the legacy TEAMAGENT_REALTIME_RAW_PROMPT)
-  // is explicitly set, regardless of what the caller passed.
+  // Bucket 1/2 (G1) — raw prompt evidence is now DEFAULT-ON. Opt out by
+  // setting RIVEN_REALTIME_RAW_PROMPT=0 (or the legacy TEAMAGENT_* var).
+  // Empty-string prompts are still treated as "unset" so an opt-in caller
+  // can skip empty prompts.
   if (
     typeof input.rawPrompt === "string" &&
     input.rawPrompt.length > 0 &&
-    readEnv("RIVEN_REALTIME_RAW_PROMPT", "TEAMAGENT_REALTIME_RAW_PROMPT") === "1"
+    readEnv("RIVEN_REALTIME_RAW_PROMPT", "TEAMAGENT_REALTIME_RAW_PROMPT") !== "0"
   ) {
     snap.raw_prompt = input.rawPrompt;
   }
+  // Bucket 1/2 — copy through caller-supplied extras. Server-side `sanitizeCcStatusSnapshot`
+  // is the actual whitelist; this assign just lets the hook bins thread
+  // event-specific fields without each bin building a snapshot from scratch.
+  if (input.extras) Object.assign(snap, input.extras);
   return snap;
 }
 
