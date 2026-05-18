@@ -50,7 +50,7 @@ ${renderStats(member, detail)}
 ${renderHeatmap(detail.heatmap7x24)}
 ${renderProjectBreakdown(detail, member)}
 ${renderTopFiles(detail.topFiles)}
-${renderSessions(detail.sessions)}
+${renderSessions(detail.sessions, member)}
 </div>
 ${renderSlideoverShell()}
 <script>${CLIENT_REFRESH_SCRIPT}</script>
@@ -172,12 +172,21 @@ function renderTopFiles(files: { path: string; edits: number }[]): string {
   </section>`;
 }
 
-function renderSessions(sessions: MemberDetail['sessions']): string {
+function renderSessions(sessions: MemberDetail['sessions'], member: MemberSnapshot): string {
+  // 2026-05-19 QA-4 P0: journalist + customer both flagged the contradiction
+  // — header says "今日 7 会话", trend7d says ~46 会话, then "会话列表（共 1）"
+  // shows up below. That's because `detail.sessions` is a curated sample
+  // (top representative session per project), not the full per-window roll.
+  // Rename + annotate so the three numbers no longer look like a data bug.
+  const todayCount = member.today?.sessions ?? 0;
+  const trend7dTotal = member.trend7d.reduce((a, x) => a + x, 0);
   if (sessions.length === 0) {
-    return `<section class="md-sessions fade-in"><h2 class="md-section-title">会话列表</h2><div class="lh-empty">本窗口暂无会话</div></section>`;
+    return `<section class="md-sessions fade-in"><h2 class="md-section-title">近期会话样本</h2><div class="lh-empty">本窗口暂无会话样本</div></section>`;
   }
+  const annotation = `<div class="md-session-note">代表会话 ${sessions.length} 条 · 今日 ${todayCount} 条 · 近 7 天 ${trend7dTotal} 条<br>列表只显示用作上下文判断的样本，并非该窗口的完整会话流。</div>`;
   return `<section class="md-sessions fade-in">
-    <h2 class="md-section-title">会话列表（共 ${sessions.length}）</h2>
+    <h2 class="md-section-title">近期会话样本</h2>
+    ${annotation}
     <ol class="md-session-list">
       ${sessions.slice(0, 50).map((s) => {
         const preview = escapeHtml(s.firstPromptPreview || '（无 prompt）');
@@ -430,6 +439,15 @@ const MEMBER_DETAIL_CSS = `
 .md-file-edits {
   color: var(--ink-3, #888);
   font-variant-numeric: tabular-nums;
+}
+.md-session-note {
+  font-size: 11.5px;
+  color: var(--ink-3, #888);
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  background: var(--surface-2, #fafaf7);
+  border-radius: 4px;
+  line-height: 1.5;
 }
 .md-session-row {
   display: grid;

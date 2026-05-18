@@ -58,27 +58,32 @@ ${renderSlideoverShell()}
 function renderHealthCard(snap: InsightsSnapshot): string {
   const h = snap.healthScore;
   const ringDeg = Math.round((h.value / 100) * 360);
-  const subscoreRow = (label: string, val: number) => `
-    <div class="ins-sub">
+  // 2026-05-19 QA-4 P0: journalist flagged "卡住率: 75" looking like
+  // "75% of sessions are stuck" when it's actually a 0-100 health
+  // sub-score where higher = healthier (low stuck rate). Same trap for
+  // "风险". Rename labels so the direction is unambiguous, and append
+  // /100 on every sub-value to match the ring unit.
+  const subscoreRow = (label: string, hint: string, val: number) => `
+    <div class="ins-sub" title="${hint}">
       <div class="ins-sub-label">${label}</div>
       <div class="ins-sub-bar"><span class="ins-sub-bar-fill" style="width:${val}%"></span></div>
-      <div class="ins-sub-val">${val}</div>
+      <div class="ins-sub-val">${val}<span class="ins-sub-unit">/100</span></div>
     </div>`;
   const spark = h.history30d
     .map((v) => `<span class="ins-spark-bar" style="height:${(v / 100) * 36 + 2}px"></span>`)
     .join('');
   return `<section class="ins-health fade-in">
-    <h2 class="ins-section-title">🏥 团队健康总评分</h2>
+    <h2 class="ins-section-title">🏥 团队健康总评分 <span class="ins-section-hint">（每项 0–100，越高越好）</span></h2>
     <div class="ins-health-body">
       <div class="ins-health-ring" style="--ring-deg:${ringDeg}deg">
         <div class="ins-health-num">${h.value}</div>
         <div class="ins-health-unit">/100</div>
       </div>
       <div class="ins-health-breakdown">
-        ${subscoreRow('卡住率', h.breakdown.stuckRate)}
-        ${subscoreRow('节奏', h.breakdown.rhythm)}
-        ${subscoreRow('高产出', h.breakdown.output)}
-        ${subscoreRow('风险', h.breakdown.risk)}
+        ${subscoreRow('无卡情况', '反映"卡住"信号的稀疏度。100 = 没人卡住；0 = 团队普遍卡住。', h.breakdown.stuckRate)}
+        ${subscoreRow('节奏', '过去 7 日产出节奏对比基线。100 = 加速；0 = 明显放缓。', h.breakdown.rhythm)}
+        ${subscoreRow('高产出', '高产出工程师占比。100 = 团队普遍高产；0 = 无突出贡献者。', h.breakdown.output)}
+        ${subscoreRow('低风险', '反映风险动作（rm -rf / force-push 等）的稀疏度。100 = 干净；0 = 频发。', h.breakdown.risk)}
       </div>
       <div class="ins-health-spark">
         <div class="ins-spark-label">30 天趋势</div>
@@ -268,6 +273,8 @@ const INSIGHTS_CSS = `
 .ins-hero h1 { margin: 0; font-size: 26px; }
 .ins-hero .sub { color: var(--ink-3, #888); font-size: 13px; margin-top: 2px; }
 .ins-section-title { font-size: 14px; font-weight: 600; color: var(--ink-2, #555); margin: 0 0 14px; }
+.ins-section-hint { font-size: 11.5px; font-weight: 400; color: var(--ink-3, #888); margin-left: 6px; }
+.ins-sub-unit { font-size: 11px; color: var(--ink-3, #888); margin-left: 2px; }
 
 .ins-health { padding: 18px 16px; border-bottom: 1px solid var(--hairline, #e0e3eb); }
 .ins-health-body { display: grid; grid-template-columns: 140px 1fr 200px; gap: 24px; align-items: center; }

@@ -62,7 +62,7 @@ export function renderSlideoverShell(): string {
   <div class="so-body">
     <div id="so-callout"></div>
     <div class="so-section"><div class="so-h">本周快照</div><div id="so-stats"></div></div>
-    <div class="so-section"><div class="so-h">prompt 的演变 · 看他都在问什么</div><div id="so-evolve"></div></div>
+    <div class="so-section"><div class="so-h">他这段时间在问什么 · 看是否需要搭把手</div><div id="so-evolve"></div></div>
     <div class="so-section"><div class="so-h">在哪些项目里</div><div id="so-projects"></div></div>
   </div>
 </aside>`;

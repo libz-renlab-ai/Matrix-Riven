@@ -93,6 +93,12 @@ function memberFallbackNarrative(
 }
 
 export function renderHeroFragment(snap: OverviewSnapshot): string {
+  // 2026-05-19 QA-4 P0: empty-state honesty. Previously when collector was
+  // empty (0 members, 0 projects) the hero still rendered "今天，团队 一切顺利"
+  // and the pace KPI rendered "稳 · 与 7 日均值持平" — both technically true
+  // (zero is zero) but read as "everything is fine, look how green we are"
+  // to a leader. Detect the no-data case explicitly and say so.
+  const noData = snap.members.length === 0 && snap.projects.length === 0;
   // Hero copy must agree with the count rendered under the Attention section
   // header — otherwise a leader sees "5 件事需要留意" up top and "2" below it.
   // `snap.kpis.attention.value` historically included risky-action counts
@@ -100,7 +106,9 @@ export function renderHeroFragment(snap: OverviewSnapshot): string {
   // `snap.attention.length`, so drive both from the same source.
   const attentionCount = snap.attention.length;
   const highOutputCount = classifyHighOutput(snap.members);
-  const headline = heroHeadline({ attentionCount, highOutputCount });
+  const headline = noData
+    ? `<em>暂无数据</em>。<br/>collector 还没收到 transcript — 装好 Claude Code hook 后约 30 秒会出现首条会话。`
+    : heroHeadline({ attentionCount, highOutputCount });
   const d = new Date(snap.computedAt);
   const date = `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
   // Phase 3-A: when a filter is active, prepend a single-line summary so
@@ -160,13 +168,27 @@ export function renderKpisFragment(snap: OverviewSnapshot): string {
 
   // Pace card: real rhythm classification (升/稳/缓) from team-wide
   // computeRhythmDelta. Trend line shows the % delta to back up the label.
+  // 2026-05-19 QA-4 P0: when there's no data (0 members AND zero team
+  // activity), pace defaulted to "稳" with 0% delta and rendered "与 7 日
+  // 均值持平" — but the 7-day average is also zero, so the comparison is
+  // vacuous and reads as misleading reassurance. Force "—" in that case.
+  // Note: we check teamActivity.value too — empty members[] alone isn't
+  // enough (tests stub members:[] but populate kpis to test KPI rendering
+  // in isolation), but zero activity + zero members IS unambiguous "no data".
+  const noDataForPace =
+    snap.members.length === 0 &&
+    snap.projects.length === 0 &&
+    snap.kpis.teamActivity.value === 0;
   const pace = snap.kpis.pace ?? { rhythmDelta: 0, label: '稳' as const };
+  const paceLabel = noDataForPace ? '—' : pace.label;
   const deltaPct = Math.round(pace.rhythmDelta * 100);
-  const paceTrend = deltaPct === 0
-    ? '<span>与 7 日均值持平</span>'
-    : deltaPct > 0
-      ? `<span class="up">↑${deltaPct}%</span><span>对比 7 日均值</span>`
-      : `<span>↓${Math.abs(deltaPct)}%</span><span>对比 7 日均值</span>`;
+  const paceTrend = noDataForPace
+    ? '<span>等待数据</span>'
+    : deltaPct === 0
+      ? '<span>与 7 日均值持平</span>'
+      : deltaPct > 0
+        ? `<span class="up">↑${deltaPct}%</span><span>对比 7 日均值</span>`
+        : `<span>↓${Math.abs(deltaPct)}%</span><span>对比 7 日均值</span>`;
 
   // Spend card: real $ today (sum of member.today.costUsd). When honestly
   // zero we show "—" instead of "$0.00" — the latter reads like a broken
@@ -186,15 +208,20 @@ export function renderKpisFragment(snap: OverviewSnapshot): string {
   const spendTrend = todayUsd <= 0
     ? `<span>${rangeKey === 'today' ? '今日' : '该窗口'}暂无活动</span>`
     : '<span>实际成本</span>';
+  const attentionNum = noDataForPace ? '—' : String(snap.kpis.attention.value);
+  const attentionUnit = noDataForPace ? '' : '项';
+  const attentionTrend = noDataForPace
+    ? '<span>等待数据</span>'
+    : snap.kpis.attention.deltaToday > 0
+      ? `<span class="up">↑${snap.kpis.attention.deltaToday}</span><span>较昨日</span>`
+      : '<span>与昨日持平</span>';
   const cards: { cls: string; label: string; num: string; unit: string; trend: string; color: string; path: string }[] = [
     {
       cls: 'kpi-warn',
       label: '需要关注',
-      num: String(snap.kpis.attention.value),
-      unit: '项',
-      trend: snap.kpis.attention.deltaToday > 0
-        ? `<span class="up">↑${snap.kpis.attention.deltaToday}</span><span>较昨日</span>`
-        : '<span>与昨日持平</span>',
+      num: attentionNum,
+      unit: attentionUnit,
+      trend: attentionTrend,
       color: '#C8924B',
       path: 'M0 14 Q 12 10, 20 12 T 40 8 T 64 4',
     },
@@ -219,7 +246,7 @@ export function renderKpisFragment(snap: OverviewSnapshot): string {
     {
       cls: 'kpi-pace',
       label: '整体节奏',
-      num: pace.label,
+      num: paceLabel,
       unit: '',
       trend: paceTrend,
       color: '#45433E',

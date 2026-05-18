@@ -90,8 +90,15 @@ describe('renderMemberDetail', () => {
   });
 
   it('session list with expandable details', () => {
+    // 2026-05-19 QA-4 P0: section retitled from "会话列表（共 N）" to
+    // "近期会话样本" with a clarifying annotation, because the prior
+    // copy contradicted snapshot counters ("今日 7 / 列表共 1"). Assert
+    // on the new copy plus the annotation that ties the three numbers
+    // together.
     const html = renderMemberDetail(mkMember(), mkDetail());
-    expect(html).toContain('会话列表');
+    expect(html).toContain('近期会话样本');
+    expect(html).toContain('今日 3 条');
+    expect(html).toContain('近 7 天 17 条');
     expect(html).toContain('修一下抽屉');
     expect(html).toContain('<details>');
     expect(html).toContain('查看完整');

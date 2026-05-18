@@ -133,7 +133,12 @@ export function handleLeadershipRequest(
     sendHtml(res, 200, renderSources());
     return true;
   }
-  if (pathname === '/overview' && req.method === 'GET' && query.get('demo') === '1') {
+  // 2026-05-19 QA-4 P0: previously `/?demo=1` fell through to
+  // renderOverviewTab → real snapshot → "0 位成员" empty state, because
+  // the demo branch only matched `/overview`. A first-time visitor
+  // clicking around the nav lands on `/`, sees nothing, bounces. Now
+  // both `/` (no ?sid=) and `/overview` honour ?demo=1 identically.
+  if ((pathname === '/overview' || (pathname === '/' && !query.has('sid'))) && req.method === 'GET' && query.get('demo') === '1') {
     const filter = parseFocusFromQuery(query);
     const snap = applyFilterToDemoSnapshot(getDemoSnapshot(), filter);
     const filterBarHtml = renderFilterBar({

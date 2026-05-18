@@ -23,7 +23,7 @@ const FEATURES: LandingFeature[] = [
     icon: '✦',
     title: 'LLM 叙事层（T1–T5）',
     copy: '每天用户的 session 自动生成五层中文叙事，从单次会话总结到一句领导日报。',
-    proof: '5 个 tier · haiku + sonnet · 全离线 cache · 单次 cycle <$0.20',
+    proof: '5 个 tier · haiku + sonnet · 叙事缓存全本地（cache 文件 50MB 上限）· LLM 推理走 Anthropic API（你的密钥）· 单次 cycle <$0.20',
   },
   {
     icon: '◍',
