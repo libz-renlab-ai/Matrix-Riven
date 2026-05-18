@@ -1243,7 +1243,9 @@ function buildDemoActivityFeed(
     casey: ['team-graph 视图渲染抖动调试', 'attention 卡 click 路由打通', 'SVG transform 抖动追因'],
     dana: ['同步 README v0.3 段落', '改一下 onboarding 文档', '补 changelog 上一周项'],
   };
-  // Sessions: 3 per member over past 48h
+  // Sessions: 3 per member over past 48h. QA round-3 P1: previous version
+  // produced timestamps in a perfect xx:44 grid (every 8h), which read as
+  // synthetic at a glance. Now jitter by mi/i seed so events feel bursty.
   snap.members.forEach((m, mi) => {
     const lp = (m.email.split('@')[0] ?? '').toLowerCase();
     const prompts = PROMPTS_BY_MEMBER[lp] ?? [
@@ -1252,8 +1254,12 @@ function buildDemoActivityFeed(
       `${m.displayName} · 调试`,
     ];
     for (let i = 0; i < 3; i++) {
-      const hoursAgo = mi * 6 + i * 8;
-      const ts = new Date(nowMs - hoursAgo * 3600 * 1000).toISOString();
+      // Realistic bursts: cluster two sessions ~1h apart, then a 5-7h gap.
+      const baseHours = mi * 5 + (i === 0 ? 0 : i === 1 ? 0.8 : 6.3);
+      const jitterMin = ((mi * 7 + i * 11) % 53);
+      const jitterSec = ((mi * 17 + i * 23) % 47);
+      const tsMs = nowMs - baseHours * 3600 * 1000 - jitterMin * 60 * 1000 - jitterSec * 1000;
+      const ts = new Date(tsMs).toISOString();
       events.push({
         ts,
         type: 'session',
@@ -1271,7 +1277,9 @@ function buildDemoActivityFeed(
     'chore: README v0.3 + onboarding 段落同步',
   ];
   snap.projects.forEach((p, pi) => {
-    const ts = new Date(nowMs - (4 + pi * 12) * 3600 * 1000).toISOString();
+    const hOffset = 3.7 + pi * 11.4 + ((pi * 13) % 7);
+    const mOffset = (pi * 23) % 60;
+    const ts = new Date(nowMs - hOffset * 3600 * 1000 - mOffset * 60 * 1000).toISOString();
     events.push({
       ts,
       type: 'commit',

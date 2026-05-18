@@ -9,6 +9,7 @@
  */
 
 import type { InsightsSnapshot } from '../types.js';
+import { etaLabel } from './_leader-lang.js';
 import { LEADERSHIP_CSS } from './styles.css.js';
 import { renderNav } from './_nav.html.js';
 import { renderSlideoverShell } from './_slideover.html.js';
@@ -213,7 +214,7 @@ function renderProjectsAxis(snap: InsightsSnapshot): string {
           <td class="ins-proj-name">${escapeHtml(r.name)}</td>
           <td>${r.metrics.contributors}</td>
           <td><span class="ins-health-pill ins-health-${healthBucket(r.metrics.healthScore)}">${r.metrics.healthScore.toFixed(1)}</span></td>
-          <td>${r.metrics.etaDays != null ? r.metrics.etaDays + ' 天' : '—'}</td>
+          <td>${escapeHtml(etaLabel(r.metrics.etaDays))}</td>
         </tr>`).join('')}
       </tbody>
     </table>

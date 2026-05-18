@@ -174,8 +174,17 @@ export function renderKpisFragment(snap: OverviewSnapshot): string {
   // is what's actually true on a stale snapshot.
   const todayUsd = snap.kpis.todayCostUsd ?? snap.members.reduce((a, m) => a + (m?.today?.costUsd ?? 0), 0);
   const spendNum = todayUsd <= 0 ? '—' : `$${formatCostUsd(todayUsd)}`;
+  // Phase 3-A: when a non-today range is active, swap "今日" prefix on copy
+  // so the KPI card label matches the actual data window.
+  const rangeKey = snap.appliedFilter?.range ?? 'today';
+  const spendCardLabel = rangeKey === 'today' ? '今日消耗' :
+    rangeKey === 'yesterday' ? '昨日消耗' :
+    rangeKey === '24h' ? '近 24h 消耗' :
+    rangeKey === '7d' ? '近 7 天消耗' :
+    rangeKey === '30d' ? '近 30 天消耗' :
+    rangeKey === 'custom' ? '自定义区间消耗' : '今日消耗';
   const spendTrend = todayUsd <= 0
-    ? '<span>今日暂无活动</span>'
+    ? `<span>${rangeKey === 'today' ? '今日' : '该窗口'}暂无活动</span>`
     : '<span>实际成本</span>';
   const cards: { cls: string; label: string; num: string; unit: string; trend: string; color: string; path: string }[] = [
     {

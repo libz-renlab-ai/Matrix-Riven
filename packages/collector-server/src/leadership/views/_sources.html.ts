@@ -102,7 +102,7 @@ export function renderSources(): string {
 <div class="sp-page">
   <a class="sp-back" href="/landing">← 返回 landing</a>
   <h1>这个看板上的数字，都从哪里来。</h1>
-  <p class="lead">Matrix-Riven 不爬日历、不读邮件、不接 Slack。它只读一件事：你团队 Claude Code 客户端上传到本地 collector 的 session transcript。下面是完整数据流。</p>
+  <p class="lead">Matrix-Riven 不爬日历、不读邮件、不接 Slack。它只读一件事：你团队 Claude Code 客户端上传到<strong>本地</strong> collector 的 session transcript。<br>这意味着「工程师在 Claude 里输的每一句话」都会被 leadership 看到（PII 模式除外）。<a href="#retain" style="color:var(--ink-2);border-bottom:1px solid var(--ink-5);">下面有详细列表</a>，请在部署前如实告知团队。</p>
 
   <h2>数据来源</h2>
   <table>
@@ -121,8 +121,19 @@ export function renderSources(): string {
     <tbody>
       <tr><td><strong>不读邮件 / 日历 / Slack</strong></td><td>这些数据从来不进 collector。</td></tr>
       <tr><td><strong>不外发给第三方</strong></td><td>除了 <code>claude -p</code> 本身访问 Anthropic API（脱敏后），不向任何外部服务转发。</td></tr>
-      <tr><td><strong>不持久化原始密钥 / token</strong></td><td>PII 脱敏管线 (<code>packages/shared/src/pii/redactor.ts</code>) 在写盘前去掉 emails / paths / secrets。</td></tr>
+      <tr><td><strong>不持久化原始密钥 / token</strong></td><td>PII 脱敏管线 (<code>packages/shared/src/pii/redactor.ts</code>) 在写盘前去掉 emails / 绝对路径 / 看起来像 secret 的字符串。</td></tr>
       <tr><td><strong>不无限增长</strong></td><td>LLM cache 50MB 软上限 + 最老条目淘汰；transcript collector 由 ops 控制保留窗口。</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="retain">会保留什么（请如实告知团队）</h2>
+  <p class="lead" style="margin-top:6px;">为保证看板能解释「他在卡什么 / 他问了什么 / 谁动了哪段代码」，下面这些内容会以原文形式落盘到本地 collector：</p>
+  <table>
+    <tbody>
+      <tr><td><strong>user prompt 正文</strong></td><td>除上面 PII 模式外，<em>原文保留</em>。也就是「他都问了什么」这一栏看到的就是工程师当时输的字。一些团队会把它当成内部聊天对话——请如实告诉团队成员，prompt 内容会被 leadership 看到。</td></tr>
+      <tr><td><strong>assistant 回复 / tool 调用</strong></td><td>结构化字段保留（工具名、文件路径、命令文本、token 数）；assistant 回复正文 <em>仅</em> 进 LLM 叙事 cache，不在 UI 直接渲染。</td></tr>
+      <tr><td><strong>Bash 命令文本</strong></td><td>原文保留。用于风险动作检测与协作识别。</td></tr>
+      <tr><td><strong>仓库路径 / 文件名</strong></td><td>原文保留（含 <code>cwd</code>、改动文件相对路径）。绝对路径中的 <code>/Users/&lt;name&gt;</code> 段会被 L1 redactor 替换。</td></tr>
     </tbody>
   </table>
 </div>

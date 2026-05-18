@@ -208,7 +208,13 @@ const PROJECT_DETAILS: Record<string, ProjectDetail> = {
     ],
     extensionMix: { ts: 0.86, tsx: 0.09, md: 0.04, json: 0.01 },
     testRatio: 0.42,
-    milestones: [],
+    milestones: [
+      { ts: '2026-05-18T09:14:00Z', type: 'commit', by: 'alex@example.com', detail: 'feat(slideover): today numbers + filtered project user prompts' },
+      { ts: '2026-05-17T16:30:00Z', type: 'commit', by: 'alex@example.com', detail: 'fix(launch-readiness): round-16 P0 — demo flag completeness' },
+      { ts: '2026-05-16T11:08:00Z', type: 'commit', by: 'blake@example.com', detail: 'feat(leadership): slacking detector (#1)' },
+      { ts: '2026-05-15T20:30:00Z', type: 'push', by: 'alex@example.com', detail: 'git push origin worktree-enumerated-roaming-engelbart' },
+      { ts: '2026-05-14T18:42:00Z', type: 'pr', by: 'alex@example.com', detail: 'gh pr create --title "feat(leadership): slacking detector"' },
+    ],
     webResearchShare: 0.08,
     heatmap7x24: demoHeatmap('matrix-riven'),
     recentFiles: [
@@ -232,7 +238,11 @@ const PROJECT_DETAILS: Record<string, ProjectDetail> = {
     ],
     extensionMix: { ts: 0.74, md: 0.18, json: 0.08 },
     testRatio: 0.28,
-    milestones: [],
+    milestones: [
+      { ts: '2026-05-18T11:00:00Z', type: 'commit', by: 'casey@example.com', detail: 'fix(graph): jitter on force-directed layout transitions' },
+      { ts: '2026-05-17T15:22:00Z', type: 'commit', by: 'casey@example.com', detail: 'feat(graph): attention click → drill-in route' },
+      { ts: '2026-05-16T10:18:00Z', type: 'push', by: 'casey@example.com', detail: 'git push origin main' },
+    ],
     webResearchShare: 0.15,
     heatmap7x24: demoHeatmap('team-graph'),
     recentFiles: [
@@ -257,7 +267,10 @@ const PROJECT_DETAILS: Record<string, ProjectDetail> = {
     ],
     extensionMix: { yml: 0.62, sh: 0.31, md: 0.07 },
     testRatio: 0.0,
-    milestones: [],
+    milestones: [
+      { ts: '2026-05-14T08:30:00Z', type: 'commit', by: 'casey@example.com', detail: 'chore(ci): bump runner image to 2025.11' },
+      { ts: '2026-05-13T14:18:00Z', type: 'release', by: 'casey@example.com', detail: 'gh release create v0.3.2 --notes "patch"' },
+    ],
     webResearchShare: 0.05,
     heatmap7x24: demoHeatmap('devops-pipelines'),
     recentFiles: [

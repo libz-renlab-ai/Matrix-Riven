@@ -115,7 +115,7 @@ export function renderFilterBar(opts: FilterBarOptions): string {
   <span class="fb-spacer"></span>
   ${anyActive
     ? '<button type="button" class="fb-clear-all" data-fb-clear-all>↻ 清空</button>'
-    : '<span class="fb-idle">未启用</span>'}
+    : '<span class="fb-idle">点上方任一 chip 应用筛选</span>'}
 </div>`;
 }
 

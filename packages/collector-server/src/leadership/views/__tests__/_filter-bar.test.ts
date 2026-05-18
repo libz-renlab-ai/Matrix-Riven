@@ -23,7 +23,7 @@ describe('renderFilterBar', () => {
     expect(html).toContain('全部项目');
     expect(html).toContain('今日');
     expect(html).toContain('全部状态');
-    expect(html).toContain('未启用');
+    expect(html).toContain('点上方任一 chip 应用筛选');
     expect(html).toContain('data-active="false"');
   });
 
