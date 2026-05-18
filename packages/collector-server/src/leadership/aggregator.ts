@@ -973,7 +973,12 @@ function deriveAttention(
       }
       items.push({
         kind: 'member', refId: m.email, displayName: m.displayName, initials,
-        tag: '闲置', tagSeverity: 'normal',
+        // 2026-05-19 QA-8 P1: last remaining surface where the softened
+        // low_activity label hadn't been applied. Tile + state badge +
+        // retro all say "本周参与不多" already; this attention pill was
+        // still reading "闲置" on real data (demo fixture hardcodes the
+        // attention array so it bypassed this codepath). Now consistent.
+        tag: '参与不多', tagSeverity: 'normal',
         line2,
         time: timeAgo(m.lastSessionAt), severity: 5,
       });
