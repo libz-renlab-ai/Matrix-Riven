@@ -16,8 +16,13 @@ export interface SensitiveFinding {
   match: string;
 }
 
-// Returns true if the digit string passes the Luhn algorithm.
-function luhnCheck(digits: string): boolean {
+/**
+ * Returns true if the digit string passes the Luhn algorithm.
+ * Exported so downstream PII modules (e.g., the LLM redactor in
+ * `collector-server`) can reuse the same credit-card validation rather
+ * than ship a divergent copy. Pure function, no side effects.
+ */
+export function luhnCheck(digits: string): boolean {
   let sum = 0;
   let alternate = false;
   for (let i = digits.length - 1; i >= 0; i--) {
@@ -32,7 +37,18 @@ function luhnCheck(digits: string): boolean {
   return sum % 10 === 0;
 }
 
-const PATTERNS: Array<{ kind: SensitiveFindingKind; pattern: RegExp }> = [
+/**
+ * PII detection patterns shared between the shared module's
+ * `redactSensitiveText` (replaces with `[redacted]`) and downstream
+ * consumers that need kind-tagged placeholders (e.g., the LLM redactor
+ * in `collector-server` swaps `[redacted]` for `<email>`/`<path>`/...).
+ *
+ * Exported so callers don't ship a divergent copy. If you add a kind
+ * here, update `REDACT_MAP` below + the consumer's `PLACEHOLDER` map.
+ * Credit-card uses Luhn verification and is handled separately — see
+ * `CC_PATTERN` below.
+ */
+export const PII_PATTERNS: ReadonlyArray<{ kind: SensitiveFindingKind; pattern: RegExp }> = [
   { kind: "email", pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi },
   {
     kind: "secret",
@@ -79,6 +95,12 @@ const PATTERNS: Array<{ kind: SensitiveFindingKind; pattern: RegExp }> = [
   },
 ];
 
+/**
+ * Credit-card detector. Kept separate from `PII_PATTERNS` because matches
+ * must pass `luhnCheck` to avoid eating arbitrary 13–19-digit numbers.
+ */
+export const PII_CC_PATTERN = /\b(\d[ -]?){13,19}\b/g;
+
 const REDACT_MAP: Record<SensitiveFindingKind, string> = {
   "email": "[redacted]",
   "secret": "[redacted]",
@@ -95,16 +117,14 @@ const REDACT_MAP: Record<SensitiveFindingKind, string> = {
 
 export function detectSensitiveText(text: string): SensitiveFinding[] {
   const findings: SensitiveFinding[] = [];
-  for (const { kind, pattern } of PATTERNS) {
+  for (const { kind, pattern } of PII_PATTERNS) {
     pattern.lastIndex = 0;
     for (const match of text.matchAll(pattern)) {
       if (match[0]) findings.push({ kind, match: match[0] });
     }
   }
-  // Credit card detection with Luhn check (separate from regex-only patterns)
-  const ccPattern = /\b(\d[ -]?){13,19}\b/g;
-  ccPattern.lastIndex = 0;
-  for (const match of text.matchAll(ccPattern)) {
+  PII_CC_PATTERN.lastIndex = 0;
+  for (const match of text.matchAll(PII_CC_PATTERN)) {
     const digits = match[0].replace(/[ -]/g, "");
     if (digits.length >= 13 && digits.length <= 19 && luhnCheck(digits)) {
       findings.push({ kind: "credit-card", match: match[0] });
@@ -115,13 +135,12 @@ export function detectSensitiveText(text: string): SensitiveFinding[] {
 
 export function redactSensitiveText(text: string): string {
   let redacted = text;
-  for (const { kind, pattern } of PATTERNS) {
+  for (const { kind, pattern } of PII_PATTERNS) {
     pattern.lastIndex = 0;
     redacted = redacted.replace(pattern, REDACT_MAP[kind]);
   }
-  // Credit card redaction with Luhn check
-  const ccPattern = /\b(\d[ -]?){13,19}\b/g;
-  redacted = redacted.replace(ccPattern, (match) => {
+  PII_CC_PATTERN.lastIndex = 0;
+  redacted = redacted.replace(PII_CC_PATTERN, (match) => {
     const digits = match.replace(/[ -]/g, "");
     if (digits.length >= 13 && digits.length <= 19 && luhnCheck(digits)) {
       return REDACT_MAP["credit-card"];

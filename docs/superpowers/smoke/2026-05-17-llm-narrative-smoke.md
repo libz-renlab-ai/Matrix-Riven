@@ -267,15 +267,71 @@ samples produced clean Chinese narrative.
   snapshot's 470 sessions. Hot path is fine (30 s TTL); cold path would
   block the event loop on a much larger team. Move scan into a
   background snapshot worker post-launch.
-- `redact.ts` PATTERNS duplicates `@matrix-riven/shared/pii/redactor.ts`
-  — document the drift risk; consider hoisting to the shared package.
-- Adversarial round-2 may surface more; running concurrently with the
-  final smoke.
+
+## 2026-05-18 launch-day refresh (rounds 2-4)
+
+### What changed since 2026-05-17
+
+- **Round-2 P0 — `/api/members/:id` payload**: was shipping ~1.1 MB
+  because `allPrompts[].full` carried every user message verbatim. Capped
+  to 12 entries × 800-char `full`; the slide-over only renders ≤6 rows.
+  Regression test added at `aggregator.test.ts` (`caps allPrompts at 12
+  entries and bounds full ≤ 801 chars`). One member endpoint is now in
+  the tens-of-KB range.
+- **Round-2 P1 — README + isLeadershipPath drift**: README Leadership
+  section rewritten to v0.3 UI (was still describing the retired Browse
+  tab and "no token gate" copy). `isLeadershipPath` cleaned up: dropped
+  phantom `/highlights` and `/sessions` (no handler), added `/activity`,
+  `/insights`, `/retro` (which now have handlers).
+- **Round-3 P1 — copy parity**: `/landing` hero lead said "16 个信号
+  检测器" while card body and `/sources` both said 17. Unified to 17.
+- **Round-3 P1 — `/retro` was orphaned**: added a real `Retro` entry to
+  `renderNav` and `ActiveTab`, footer link from `/landing`, route handler
+  in `routes.ts` (renderRetroTab); nav now highlights Retro on `/retro`.
+- **Round-4 cleanup**: PII patterns + Luhn hoisted into
+  `@matrix-riven/shared` (`PII_PATTERNS`, `PII_CC_PATTERN`, `luhnCheck`);
+  `redact.ts` in collector-server now imports them. The two copies can
+  no longer drift. `/retro` POST returns 405 not 404 (matches
+  `/overview`, `/people`, `/projects` convention).
+
+### Cumulative smoke after rounds 2-4
+
+```
+landing(GET unauth, 17 occurrences): 200      hero + card both say "17"
+sources(GET unauth):                  200
+demo(GET unauth):                     200
+overview(GET unauth):                 200
+people / projects / retro / activity / insights:    all 200
+api/llm/status(unauth):               200  {enabled:false}
+GET /retro nav highlights Retro:      ✓ (`class="tab active"` on Retro)
+POST /retro:                          405 (was 404)
+POST /landing / /sources:             404 (P2 — falls through)
+?range=garbage:                       400  {error:'invalid_range'}
+```
+
+### Test count by branch state
+
+| Branch state | Tests | Files |
+|---|---|---|
+| 2026-05-17 end-of-day | 789 | 50 |
+| 2026-05-18 round-2 (allPrompts cap test) | 791 | 52 |
+| 2026-05-18 round-3 (Retro nav variant) | 791 | 52 |
+| 2026-05-18 round-4 (3 new routes tests + redactor still passes) | 796 | 52 |
+
+### Adversarial rounds (2026-05-18)
+
+- **Round 2** — found 1 P0 (1.1 MB member endpoint), 4 P1 (README, copy
+  parity, isLeadershipPath, etc). All landed in commit `028e0cd`.
+- **Round 3** — found 2 P1 (16/17 contradiction on hero lead, `/retro`
+  orphan + wrong active tab). Both landed in commit `028e0cd`.
+- **Round 4 (this batch)** — dedup redactor + e2e LLM-on test + POST 405
+  on `/retro` + smoke doc. To be committed.
 
 ## Evidence files
 
-- `.smoke-cache/v1.jsonl` — 38 cache entries from one tick
-- `.smoke-cache/overview_final.json` — 37 KB `/api/overview` response
-- `.smoke-cache/overview_final.html` — 62 KB rendered dashboard
+- `.smoke-cache/v1.jsonl` — cache entries from one tick
+- `.smoke-cache/overview_final.json` — `/api/overview` response
+- `.smoke-cache/overview_final.html` — rendered dashboard
+- `.smoke-cache/server.log` — current bound server (port 18937)
 
 (All under the worktree; not committed.)

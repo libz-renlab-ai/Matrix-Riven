@@ -421,7 +421,9 @@ export function handleLeadershipRequest(
     sendHtml(res, 200, renderStubTab('insights', 'Insights'));
     return true;
   }
-  if (pathname === '/retro' && req.method === 'GET') {
+  if (pathname === '/retro') {
+    // Don't gate on method here — let the inner handler return 405 for
+    // non-GET (matches the /people + /projects + /overview convention).
     return renderRetroTab(req, res, deps, query, now);
   }
 

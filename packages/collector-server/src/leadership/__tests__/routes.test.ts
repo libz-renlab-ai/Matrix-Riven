@@ -283,7 +283,7 @@ describe('HTML routes', () => {
 // ── P-B2: 5 leadership tab routes + `/` deferral ──────────────────────────────
 
 describe('5 leadership tab routes (P-B2)', () => {
-  it.each(['/overview', '/people', '/projects', '/activity', '/insights'])(
+  it.each(['/overview', '/people', '/projects', '/retro', '/activity', '/insights'])(
     'GET %s returns 200 HTML containing the nav',
     async (path) => {
       const res = await fetch(`${baseUrl}${path}`);
@@ -338,6 +338,22 @@ describe('5 leadership tab routes (P-B2)', () => {
     expect(html).toContain('id="scrim"');
     expect(html).toContain('id="so"');
     expect(html).not.toContain('see-all-row');
+  });
+
+  it('GET /retro marks the Retro tab as active and renders the real retro view', async () => {
+    // 2026-05-18 round-3 audit P1: /retro was an orphan (no nav entry,
+    // wrong active tab). Regression-guard the wiring here.
+    const res = await fetch(`${baseUrl}/retro`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toMatch(/class="tab active"[^>]*>[^<]*Retro/);
+    expect(html).not.toContain('尚未实现');
+    expect(html).toContain('本周回顾');
+  });
+
+  it('POST /retro returns 405 not 404', async () => {
+    const res = await fetch(`${baseUrl}/retro`, { method: 'POST' });
+    expect(res.status).toBe(405);
   });
 
   it('GET /activity is a stub page', async () => {
@@ -542,5 +558,89 @@ describe('Detail endpoints ETag + 304 (P-C3)', () => {
     const body = await second.text();
     expect(body).toBe('');
     expect(second.headers.get('etag')).toBe(etag);
+  });
+});
+
+// ── L-13/launch: end-to-end LLM-on smoke ─────────────────────────────────────
+
+describe('LLM-on e2e (L-13)', () => {
+  // Sibling test server with `llmCache` plumbed through. Verifies that the
+  // route handlers actually pass deps.llmCache to the aggregator so an
+  // `/api/llm/status` consumer (the ops endpoint) sees the cache, not
+  // {enabled:false}. Cache layer correctness is covered exhaustively in
+  // aggregator-llm.test.ts; this is purely the HTTP wiring assertion.
+  let llmServer: Server;
+  let llmBaseUrl: string;
+  let llmCacheRef: import('../llm/cache.js').LlmCache;
+
+  beforeAll(async () => {
+    const { LlmCache } = await import('../llm/cache.js');
+    const cacheDir = join(tmpdir(), `riven-llm-routes-${randomUUID()}`);
+    mkdirSync(cacheDir, { recursive: true });
+    const cache = new LlmCache(join(cacheDir, 'v1.jsonl'));
+    await cache.load();
+    // Seed three entries across tiers so /api/llm/status returns a real
+    // breakdown rather than all-zeros.
+    await cache.put('t1:0123456789abcdef', JSON.stringify({ digest: 'seeded t1' }), 0.001);
+    await cache.put('t3:fedcba9876543210', JSON.stringify({ weekly: 'seeded t3' }), 0.002);
+    await cache.put('t5:abcd1234ef567890', JSON.stringify({ briefLines: ['ok', 'ok', 'ok'] }), 0.003);
+    llmCacheRef = cache;
+
+    const llmCollectorDir = join(tmpdir(), `riven-llm-collector-${randomUUID()}`);
+    mkdirSync(llmCollectorDir, { recursive: true });
+    const deps: LeadershipRouteDeps = {
+      collectorDir: llmCollectorDir,
+      cache: new TtlCache<unknown>(60_000),
+      now: () => FIXED_NOW,
+      llmCache: cache,
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      llmServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+        const handled = handleLeadershipRequest(req, res, deps);
+        if (!handled) {
+          res.statusCode = 404;
+          res.end('not handled');
+        }
+      });
+      llmServer.once('error', reject);
+      llmServer.listen(0, '127.0.0.1', () => {
+        const addr = llmServer.address();
+        if (!addr || typeof addr === 'string') {
+          reject(new Error('llm test server failed to bind'));
+          return;
+        }
+        llmBaseUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) =>
+      llmServer.close((err) => (err ? reject(err) : resolve())),
+    );
+  });
+
+  it('GET /api/llm/status reports enabled:true with per-tier counts', async () => {
+    const res = await fetch(`${llmBaseUrl}/api/llm/status`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.enabled).toBe(true);
+    const cache = body.cache as Record<string, unknown>;
+    expect(cache.entries).toBe(3);
+    const byTier = cache.byTier as Record<string, number>;
+    expect(byTier.t1).toBe(1);
+    expect(byTier.t3).toBe(1);
+    expect(byTier.t5).toBe(1);
+  });
+
+  it('seeded llmCache survives a /api/overview call (deps wired through)', async () => {
+    // The fixture has zero sessions so the snapshot is empty, but the
+    // route must not crash and must keep the cache alive for the status
+    // endpoint to read post-request.
+    const res = await fetch(`${llmBaseUrl}/api/overview`);
+    expect(res.status).toBe(200);
+    expect(llmCacheRef.keys().length).toBe(3);
   });
 });

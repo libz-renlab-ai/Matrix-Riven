@@ -11,71 +11,17 @@
 // match positions so we can perform non-overlapping left-to-right
 // replacement: a private-path that happens to contain an email must end
 // up as a single <path> tag, not <path containing <email>>.
+//
+// Patterns + Luhn live in @matrix-riven/shared so this module and the
+// shared `redactSensitiveText` cannot drift. If you add a kind, update
+// `PII_PATTERNS` in shared and the `PLACEHOLDER` map below.
 
-import type { SensitiveFindingKind } from '@matrix-riven/shared';
-
-// Patterns mirror packages/shared/src/pii/redactor.ts but are duplicated
-// here so we can capture indices via matchAll. Keep this list in sync
-// with the shared module if patterns evolve.
-const PATTERNS: ReadonlyArray<{
-  kind: SensitiveFindingKind;
-  pattern: RegExp;
-}> = [
-  { kind: 'email', pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi },
-  {
-    kind: 'secret',
-    pattern:
-      /\b(?:Authorization:\s*Bearer\s+[^\s"']+|[A-Z0-9_]*(?:TOKEN|SECRET|API_KEY|PASSWORD)[A-Z0-9_]*=[^\s"']+|sk-ant-[A-Za-z0-9._-]+|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/gi,
-  },
-  {
-    kind: 'uuid',
-    pattern:
-      /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi,
-  },
-  {
-    kind: 'private-ip',
-    pattern:
-      /\b(?:10|192\.168|172\.(?:1[6-9]|2[0-9]|3[01]))\.(?:[0-9]{1,3}\.){1,2}[0-9]{1,3}\b/g,
-  },
-  {
-    kind: 'internal-host',
-    pattern: /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:internal|corp|local|lan)\b/gi,
-  },
-  {
-    kind: 'private-path',
-    pattern:
-      /(?:\/Users\/[^\s"'`]+|\/home\/[^\s"'`]+|[A-Za-z]:\\Users\\[^\s"'`]+)/g,
-  },
-  { kind: 'aws-key', pattern: /\b(?:AKIA|ASIA|ABIA)[0-9A-Z]{16}\b/g },
-  {
-    kind: 'jwt',
-    pattern: /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
-  },
-  {
-    kind: 'phone',
-    pattern:
-      /(?:\+\d{1,3}[-\s]\d{3}[-\s]\d{3}[-\s]\d{4}|\(\d{3}\)\s?\d{3}-\d{4})/g,
-  },
-  { kind: 'chinese-id', pattern: /\b\d{17}[\dXx]\b/g },
-];
-
-// Credit card uses Luhn verification, applied separately.
-const CC_PATTERN = /\b(\d[ -]?){13,19}\b/g;
-
-function luhnCheck(digits: string): boolean {
-  let sum = 0;
-  let alternate = false;
-  for (let i = digits.length - 1; i >= 0; i--) {
-    let n = parseInt(digits[i] ?? '0', 10);
-    if (alternate) {
-      n *= 2;
-      if (n > 9) n -= 9;
-    }
-    sum += n;
-    alternate = !alternate;
-  }
-  return sum % 10 === 0;
-}
+import {
+  PII_PATTERNS,
+  PII_CC_PATTERN,
+  luhnCheck,
+  type SensitiveFindingKind,
+} from '@matrix-riven/shared';
 
 // Map kind -> placeholder tag. Mirrors the spec's examples:
 //   private-path -> <path>, private-ip -> <ip>, internal-host -> <host>
@@ -102,15 +48,15 @@ interface PositionedFinding {
 
 function collectFindings(input: string): PositionedFinding[] {
   const out: PositionedFinding[] = [];
-  for (const { kind, pattern } of PATTERNS) {
+  for (const { kind, pattern } of PII_PATTERNS) {
     pattern.lastIndex = 0;
     for (const m of input.matchAll(pattern)) {
       if (m.index === undefined || !m[0]) continue;
       out.push({ kind, start: m.index, end: m.index + m[0].length });
     }
   }
-  CC_PATTERN.lastIndex = 0;
-  for (const m of input.matchAll(CC_PATTERN)) {
+  PII_CC_PATTERN.lastIndex = 0;
+  for (const m of input.matchAll(PII_CC_PATTERN)) {
     if (m.index === undefined || !m[0]) continue;
     const digits = m[0].replace(/[ -]/g, '');
     if (digits.length >= 13 && digits.length <= 19 && luhnCheck(digits)) {
@@ -148,8 +94,6 @@ export function redactForLLM(input: string): string {
     return a.start - b.start;
   });
 
-  // Greedy non-overlap selection. We mark accepted ranges and skip
-  // anything that intersects an already-accepted range.
   const accepted: PositionedFinding[] = [];
   for (const f of findings) {
     let conflict = false;
@@ -162,7 +106,6 @@ export function redactForLLM(input: string): string {
     if (!conflict) accepted.push(f);
   }
 
-  // Apply replacements left-to-right.
   accepted.sort((a, b) => a.start - b.start);
   const parts: string[] = [];
   let cursor = 0;

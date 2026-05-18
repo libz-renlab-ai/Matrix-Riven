@@ -81,6 +81,9 @@ export {
 export {
   detectSensitiveText,
   redactSensitiveText,
+  luhnCheck,
+  PII_PATTERNS,
+  PII_CC_PATTERN,
   type SensitiveFinding,
   type SensitiveFindingKind,
 } from './pii/redactor.js';
