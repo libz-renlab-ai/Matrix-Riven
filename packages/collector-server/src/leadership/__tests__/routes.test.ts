@@ -592,6 +592,19 @@ describe('demo slideover (round-8 P0)', () => {
     expect(typeof html.projects).toBe('string');
   });
 
+  it('GET /api/members/<full-email>?demo=1 also resolves (round-14 P0)', async () => {
+    // The overview HTML used to emit the full email in the onclick handler,
+    // landing here as a 4-char "alex@example.com" id. We strip the `@…` at
+    // the boundary so both the new local-part-only client and any stale
+    // bookmark / hand-crafted curl call still find the member.
+    const res = await fetch(
+      `${baseUrl}/api/members/${encodeURIComponent('alex@example.com')}?demo=1`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.email).toBe('alex@example.com');
+  });
+
   it('GET /api/members/unknown?demo=1 returns 404', async () => {
     const res = await fetch(`${baseUrl}/api/members/nope?demo=1`);
     expect(res.status).toBe(404);

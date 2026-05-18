@@ -396,7 +396,7 @@ export function renderMembersFragment(snap: OverviewSnapshot, opts: FragmentOpts
         <div class="mt-trend" style="font-size:12.5px;color:var(--ink-3);margin-top:6px;padding-top:10px;border-top:1px solid var(--hairline);">${fallback.line2Html}</div>`;
     }
     return `
-      <div class="member-tile" data-ref="member:${escapeHtml(m.email)}" data-attention="${attentionScore(m)}" data-activity="${m.today.sessions}" data-alpha="${escapeHtml(m.displayName)}" onclick="window.openSO('member', '${escapeHtml(m.email)}')">
+      <div class="member-tile" data-ref="member:${escapeHtml(m.email.split('@')[0] ?? m.email)}" data-attention="${attentionScore(m)}" data-activity="${m.today.sessions}" data-alpha="${escapeHtml(m.displayName)}" onclick="window.openSO('member', '${escapeHtml(m.email.split('@')[0] ?? m.email)}')">
         <div class="mt-head">
           <div class="mt-avatar" style="background:${color}">${escapeHtml(initials)}<div class="mt-status ${status}"></div></div>
           <div style="flex:1;min-width:0;"><div class="mt-name">${escapeHtml(m.displayName)}</div><div class="mt-sub">${escapeHtml(memberSubLabel(m))}</div></div>

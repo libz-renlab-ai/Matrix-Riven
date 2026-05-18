@@ -43,6 +43,13 @@ describe('CLIENT_REFRESH_SCRIPT slide-over wiring (P-B6)', () => {
     expect(CLIENT_REFRESH_SCRIPT).toContain('soInterval');
     expect(CLIENT_REFRESH_SCRIPT).toContain('clearInterval(soInterval)');
   });
+
+  it('propagates ?demo=1 from location.search into the slideover fetch (round-14 P0)', () => {
+    // The page-level ?demo=1 must reach /api/members/:id, otherwise the
+    // drawer falls through to the real-data path and 404s on fake emails.
+    expect(CLIENT_REFRESH_SCRIPT).toContain('location.search');
+    expect(CLIENT_REFRESH_SCRIPT).toContain('demo=1');
+  });
 });
 
 describe('overview live polling (P-C2)', () => {

@@ -73,7 +73,17 @@ export const CLIENT_REFRESH_SCRIPT = `
   async function pollSO() {
     if (!soKind || !soId) return;
     var base = soKind === 'member' ? '/api/members/' : '/api/projects/';
-    var url = base + encodeURIComponent(soId);
+    // 2026-05-18 round-14 audit P0: when the overview is in demo mode
+    // (?demo=1), the slideover fetch must carry the flag too — otherwise
+    // /api/members/:id falls through to the real-data path and 404s on
+    // the fake email local-parts. Propagate from location.search.
+    var qs = '';
+    try {
+      if (typeof location !== 'undefined' && /(\?|&)demo=1(&|$)/.test(location.search)) {
+        qs = '?demo=1';
+      }
+    } catch (e) { /* SSR / non-browser fallback — qs stays empty */ }
+    var url = base + encodeURIComponent(soId) + qs;
     var headers = { accept: 'application/json' };
     if (soEtag) headers['if-none-match'] = soEtag;
     try {

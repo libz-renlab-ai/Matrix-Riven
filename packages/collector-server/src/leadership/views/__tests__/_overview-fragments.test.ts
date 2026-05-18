@@ -273,6 +273,10 @@ describe('renderMembersFragment (P-B5)', () => {
     expect(html).toContain('mt-status idle');
   });
   it("escapes apostrophes in onclick payload (XSS hardening)", () => {
+    // 2026-05-18 round-14: onclick now emits local-part (not full email)
+    // so /api/members/:id matches its local-part contract. Apostrophe in
+    // local-part still must escape to &#39; — bare quote would break out
+    // of the inline JS string literal.
     const snap = makeSnapshot({
       members: [{
         email: "o'reilly@x.com", displayName: "o'reilly", stateBadge: 'active',
@@ -281,8 +285,8 @@ describe('renderMembersFragment (P-B5)', () => {
       } as never],
     });
     const html = renderMembersFragment(snap);
-    expect(html).not.toContain("'reilly@x.com'");
-    expect(html).toContain('&#39;reilly@x.com');
+    expect(html).not.toContain("'reilly'");
+    expect(html).toContain("openSO('member', 'o&#39;reilly')");
   });
 });
 

@@ -279,7 +279,13 @@ export function handleLeadershipRequest(
       sendJson(res, 405, { error: 'method_not_allowed' });
       return true;
     }
-    const localPart = decodeURIComponent(membersApiMatch[1]!);
+    const rawId = decodeURIComponent(membersApiMatch[1]!);
+    // 2026-05-18 round-14 audit P0: accept either local-part ("alex") or
+    // full email ("alex@example.com") — prior client emitters sent the
+    // full email, but the API contract was local-part only, so every
+    // member tile click 404'd. Strip an `@…` tail at the boundary so
+    // both shapes work.
+    const localPart = rawId.includes('@') ? (rawId.split('@')[0] ?? rawId) : rawId;
     // 2026-05-18 round-8 audit P0: drawer click on /overview?demo=1 used
     // to 404 because this endpoint ignored the demo flag. Now honors it
     // and returns the hand-built demo detail + slideover fragments.
