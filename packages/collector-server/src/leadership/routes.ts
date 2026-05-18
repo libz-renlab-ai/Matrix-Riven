@@ -129,7 +129,22 @@ export function handleLeadershipRequest(
     return true;
   }
   if (pathname === '/api/overview' && req.method === 'GET' && query.get('demo') === '1') {
-    sendJson(res, 200, getDemoSnapshot());
+    // 2026-05-18 round-16 audit P0: must include the same `_html`
+    // fragments the non-demo branch builds at lines 239-247, otherwise
+    // pollOverview's 30-s tick (in _refresh.js.ts) finds snap._html
+    // missing, skips every fragment swap, and live polling is silently
+    // dead on every demo page.
+    const demoSnap = getDemoSnapshot();
+    const _html = {
+      hero: renderHeroFragment(demoSnap),
+      kpis: renderKpisFragment(demoSnap),
+      attention: renderAttentionFragment(demoSnap, { limit: 3 }),
+      members: renderMembersFragment(demoSnap, { limit: 4 }),
+      projects: renderProjectsFragment(demoSnap, { limit: 4 }),
+      highlights: renderHighlightsFragment(demoSnap),
+      collab: renderCollabFragment(demoSnap),
+    };
+    sendJson(res, 200, { ...demoSnap, _html });
     return true;
   }
 
@@ -689,20 +704,27 @@ function renderRetroTab(
     sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
     return true;
   }
-  const cacheKey = `html|/retro|${range.label}`;
+  // 2026-05-18 round-16 audit P0: /retro?demo=1 used to ignore the demo
+  // flag and render the empty real retro ("本窗口尚无 commit / PR /
+  // release" × 3) — the landing → /overview?demo=1 → click Retro flow
+  // cliffed silently. Mirror the round-15 /people /projects demo branch.
+  const isDemo = query.get('demo') === '1';
+  const cacheKey = `html|/retro|${range.label}|${isDemo ? 'demo' : 'real'}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
     sendHtml(res, 200, cached as string);
     return true;
   }
   try {
-    const snap = buildOverviewSnapshot({
-      collectorDir: deps.collectorDir,
-      range,
-      now: now(),
-      mainProjects: deps.mainProjects,
-      llmCache: deps.llmCache,
-    });
+    const snap = isDemo
+      ? getDemoSnapshot()
+      : buildOverviewSnapshot({
+          collectorDir: deps.collectorDir,
+          range,
+          now: now(),
+          mainProjects: deps.mainProjects,
+          llmCache: deps.llmCache,
+        });
     const html = renderRetro(snap);
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);

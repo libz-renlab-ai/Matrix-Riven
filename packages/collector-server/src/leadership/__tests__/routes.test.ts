@@ -648,6 +648,32 @@ describe('demo slideover (round-8 P0)', () => {
     }
     expect(html).not.toContain('这个窗口内没有项目活动');
   });
+
+  it('GET /api/overview?demo=1 includes _html fragments (round-16 P0)', async () => {
+    // Without _html the pollOverview 30 s tick can't swap fragments —
+    // live polling silently dead on every demo page.
+    const res = await fetch(`${baseUrl}/api/overview?demo=1`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    const html = body._html as Record<string, string>;
+    expect(html).toBeTruthy();
+    for (const slot of ['hero', 'kpis', 'attention', 'members', 'projects', 'highlights', 'collab']) {
+      expect(typeof html[slot]).toBe('string');
+      expect(html[slot]!.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('GET /retro?demo=1 renders the demo retro (round-16 P0)', async () => {
+    // Used to ignore ?demo=1 and render the empty real retro.
+    const res = await fetch(`${baseUrl}/retro?demo=1`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    // Demo fixture has highlights (commits/pushes/PRs/releases), so the
+    // "本周交付" section must not be the empty fallback.
+    expect(html).not.toContain('本窗口尚无 commit / PR / release');
+    // Demo attention has the blake+devops items so "需要看一眼" populated.
+    expect(html).toContain('att-row');
+  });
 });
 
 // ── L-13/launch: end-to-end LLM-on smoke ─────────────────────────────────────
