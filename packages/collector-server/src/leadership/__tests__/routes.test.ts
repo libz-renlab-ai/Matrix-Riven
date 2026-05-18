@@ -440,13 +440,11 @@ describe('detail API _html fragments (P-B6)', () => {
     expect(html!.callout).toContain(PROJECT_A);
   });
 
-  it('GET /members/<id> is retired — redirects (or 410s) away from a full page', async () => {
+  it('GET /members/<id> is retired — redirects to /people/<id> (Phase 3-C resurrects detail page)', async () => {
     const res = await fetch(`${baseUrl}/members/alice2026`, { redirect: 'manual' });
-    expect([301, 302, 404, 410]).toContain(res.status);
-    // No HTML body — we should NOT be serving the Phase-1 detail page.
-    if (res.status === 301 || res.status === 302) {
-      expect(res.headers.get('location')).toBe('/people');
-    }
+    expect([301, 302]).toContain(res.status);
+    // Phase 3-C: forward to the new detail page URL preserving the id.
+    expect(res.headers.get('location')).toBe('/people/alice2026');
   });
 
   it('GET /projects/<name> is retired — redirects (or 410s) away from a full page', async () => {

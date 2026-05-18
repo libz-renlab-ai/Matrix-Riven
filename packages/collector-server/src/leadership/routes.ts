@@ -59,6 +59,7 @@ import { parseFocusFromQuery, focusFilterCacheKey, isDefaultFilter } from './foc
 import type { FocusFilter, OverviewSnapshot } from './types.js';
 import { buildActivityFeed } from './activity-feed.js';
 import { renderActivityPage } from './views/activity.html.js';
+import { renderMemberDetail } from './views/member-detail.html.js';
 
 // ── public interface ──────────────────────────────────────────────────────────
 
@@ -523,6 +524,16 @@ export function handleLeadershipRequest(
     return renderRetroTab(req, res, deps, query, now);
   }
 
+  // Phase 3-C: /people/:id is the new member detail full page.
+  const peopleDetailMatch = /^\/people\/([^/]+)$/.exec(pathname);
+  if (peopleDetailMatch) {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'method_not_allowed' });
+      return true;
+    }
+    return renderMemberDetailPage(req, res, deps, query, now, decodeURIComponent(peopleDetailMatch[1]!));
+  }
+
   // P-B6: full-page detail routes retired. The drawer is now mounted in the
   // Overview shell and populated via /api/members/:id and /api/projects/:name.
   // Anyone still hitting the old URLs (bookmarks, stale links) is redirected
@@ -533,7 +544,8 @@ export function handleLeadershipRequest(
       sendJson(res, 405, { error: 'method_not_allowed' });
       return true;
     }
-    sendRedirect(res, 301, '/people');
+    // Phase 3-C: forward to the new /people/:id URL (preserving id).
+    sendRedirect(res, 301, '/people/' + encodeURIComponent(membersHtmlMatch[1]!));
     return true;
   }
 
@@ -808,6 +820,103 @@ ${renderSlideoverShell()}
 <script>${FILTER_BAR_SCRIPT}</script>
 </body>
 </html>`;
+}
+
+/**
+ * Phase 3-C: /people/:id handler.
+ *
+ * Renders a full member detail page that coexists with the slideover.
+ * URL is /people/<email-local-part>; demo mode falls back to demo data.
+ */
+function renderMemberDetailPage(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: LeadershipRouteDeps,
+  query: URLSearchParams,
+  now: () => Date,
+  rawId: string,
+): boolean {
+  const nowDate = now();
+  const localPart = rawId.includes('@') ? (rawId.split('@')[0] ?? rawId) : rawId;
+  const isDemo = query.get('demo') === '1';
+  // Filter bar always lock the focus to this member.
+  const filterRaw = parseFocusFromQuery(query);
+  const filter: FocusFilter = { ...filterRaw, focus: localPart };
+  const range = parseRange(filter.range === 'today' && !query.has('range') ? '7d' : filter.range, nowDate);
+  if (range === null) {
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    return true;
+  }
+  const cacheKey = `html|/people/${localPart}|${range.label}|${isDemo ? 'demo' : 'real'}${focusFilterCacheKey(filter)}`;
+  const cached = deps.cache.get(cacheKey);
+  if (cached !== undefined) {
+    sendHtml(res, 200, cached as string);
+    return true;
+  }
+  try {
+    if (isDemo) {
+      const demoMember = getDemoMemberByLocalPart(localPart);
+      if (!demoMember || !demoMember.detail) {
+        sendHtml(res, 404, renderMemberNotFound(localPart));
+        return true;
+      }
+      const filterBarHtml = renderFilterBar({
+        filter,
+        members: extractMemberLocalParts(getDemoSnapshot()),
+        projects: getDemoSnapshot().projects.map((p) => p.name),
+        tab: 'people',
+        demo: true,
+      });
+      const html = renderMemberDetail(demoMember, demoMember.detail, { filterBarHtml });
+      deps.cache.set(cacheKey, html);
+      sendHtml(res, 200, html);
+      return true;
+    }
+    const email = resolveEmailByLocalPart(deps.collectorDir, localPart);
+    if (!email) {
+      sendHtml(res, 404, renderMemberNotFound(localPart));
+      return true;
+    }
+    const detail = buildMemberDetail({
+      collectorDir: deps.collectorDir,
+      email,
+      range,
+      now: nowDate,
+      mainProjects: deps.mainProjects,
+    });
+    if (!detail) {
+      sendHtml(res, 404, renderMemberNotFound(localPart));
+      return true;
+    }
+    // Use snapshot for filter bar dropdown options.
+    const teamSnap = buildOverviewSnapshot({
+      collectorDir: deps.collectorDir,
+      range,
+      now: nowDate,
+      mainProjects: deps.mainProjects,
+      llmCache: deps.llmCache,
+    });
+    const filterBarHtml = renderFilterBar({
+      filter,
+      members: extractMemberLocalParts(teamSnap),
+      projects: teamSnap.projects.map((p) => p.name),
+      tab: 'people',
+      demo: false,
+    });
+    const html = renderMemberDetail(detail, detail.detail, { filterBarHtml });
+    deps.cache.set(cacheKey, html);
+    sendHtml(res, 200, html);
+  } catch (err) {
+    process.stderr.write(
+      `[leadership] 500 on /people/${localPart}: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
+    );
+    sendHtml(res, 500, renderOverviewError());
+  }
+  return true;
+}
+
+function renderMemberNotFound(id: string): string {
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>未找到 · Matrix·Riven</title><style>body{font-family:system-ui;padding:60px;text-align:center;}</style></head><body><h1>未找到成员</h1><p>"${id.replace(/[<>"&]/g, '?')}" 不在当前数据中</p><p><a href="/people">← 返回团队</a></p></body></html>`;
 }
 
 /**
