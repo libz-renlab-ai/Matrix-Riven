@@ -79,7 +79,7 @@ export const CLIENT_REFRESH_SCRIPT = `
     // the fake email local-parts. Propagate from location.search.
     var qs = '';
     try {
-      if (typeof location !== 'undefined' && /(\?|&)demo=1(&|$)/.test(location.search)) {
+      if (typeof location !== 'undefined' && /(\\?|&)demo=1(&|$)/.test(location.search)) {
         qs = '?demo=1';
       }
     } catch (e) { /* SSR / non-browser fallback — qs stays empty */ }
@@ -227,7 +227,7 @@ export const CLIENT_REFRESH_SCRIPT = `
       // "0 xiang" markup. Carry the flag through.
       var ovQs = '';
       try {
-        if (typeof location !== 'undefined' && /(\?|&)demo=1(&|$)/.test(location.search)) {
+        if (typeof location !== 'undefined' && /(\\?|&)demo=1(&|$)/.test(location.search)) {
           ovQs = '?demo=1';
         }
       } catch (e) { /* SSR / non-browser fallback */ }

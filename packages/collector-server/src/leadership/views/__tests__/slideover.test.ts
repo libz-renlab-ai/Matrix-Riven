@@ -99,6 +99,7 @@ function makeProjectDetail(overrides: Partial<ProjectDetail> = {}): ProjectDetai
       { path: 'src/b.ts', touches: 3 },
     ],
     collabDensity: 0.4,
+    recentPrompts: [],
     ...overrides,
   };
 }
@@ -269,16 +270,35 @@ describe('renderProjectSlideoverFragments (P-B6)', () => {
     expect(nullEta.callout).not.toContain('预计 暂无预估');
   });
 
-  it('evolve renders one row per milestone, top one marked latest', () => {
+  it('evolve falls back to milestones when no user prompts surfaced', () => {
+    // Default fixture has recentPrompts:[] so we exercise the milestone path.
     expect(f.evolve).toContain('so-evolve-item');
     expect(f.evolve).toContain('latest');
-    expect(f.evolve).toContain('commit');
+    // milestoneLabel('commit') → '提交'
+    expect(f.evolve).toContain('提交');
     expect(f.evolve).toContain('feat: x');
   });
 
-  it('evolve shows empty-state when there are no milestones', () => {
-    const empty = renderProjectSlideoverFragments(makeProject(), makeProjectDetail({ milestones: [] }));
-    expect(empty.evolve).toContain('暂无里程碑');
+  it('evolve prefers user prompts when recentPrompts is non-empty', () => {
+    const withPrompts = renderProjectSlideoverFragments(
+      makeProject(),
+      makeProjectDetail({
+        recentPrompts: [
+          { ts: '2026-05-18T09:14:00Z', by: 'alex@x.com', preview: '修一下 graph 视图渲染抖动' },
+        ],
+      }),
+    );
+    expect(withPrompts.evolve).toContain('修一下 graph 视图渲染抖动');
+    expect(withPrompts.evolve).not.toContain('提交');
+    expect(withPrompts.evolve).not.toContain('feat: x');
+  });
+
+  it('evolve shows empty-state when there are no prompts and no milestones', () => {
+    const empty = renderProjectSlideoverFragments(
+      makeProject(),
+      makeProjectDetail({ milestones: [], recentPrompts: [] }),
+    );
+    expect(empty.evolve).toContain('暂无活动');
   });
 
   it('projects lists recent files (capped at 5)', () => {

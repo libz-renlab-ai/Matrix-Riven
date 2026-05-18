@@ -250,8 +250,13 @@ export function renderAttentionFragment(snap: OverviewSnapshot, opts: FragmentOp
     // trusted inline markup (e.g., `<span class="mono">api/x.ts</span>`), so
     // it is intentionally emitted unescaped — preserving the pre-LLM contract.
     const line2Html = a.llmRewrite ? escapeHtml(a.llmRewrite) : a.line2;
+    // 2026-05-18 round-16 audit P0: attention rows had data-ref but no click
+    // handler — leaders saw "需要你看一眼" highlights with no way to drill in.
+    // Reuse the same openSO contract as member tiles / project rows; the
+    // /api/members/:id endpoint accepts both local-part and full email.
+    const soId = a.kind === 'member' ? (a.refId.split('@')[0] ?? a.refId) : a.refId;
     return `
-    <div class="att-row" data-ref="${escapeHtml(a.kind)}:${escapeHtml(a.refId)}" data-attention="${a.severity}">
+    <div class="att-row" data-ref="${escapeHtml(a.kind)}:${escapeHtml(a.refId)}" data-attention="${a.severity}" onclick="window.openSO('${escapeHtml(a.kind)}', '${escapeHtml(soId)}')" style="cursor:pointer;">
       <div class="att-avatar" style="background:${avatarColor(a.refId)}">${escapeHtml(a.initials)}</div>
       <div class="att-body">
         <div class="att-line1">

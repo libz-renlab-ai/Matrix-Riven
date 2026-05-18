@@ -128,11 +128,30 @@ export function renderMemberSlideoverFragments(
   const focusProject = topProject ?? '—';
   const focusPhase = '聚焦 ' + (focusProject === '—' ? '—' : focusProject);
   const stateText = stateLabel(member.stateBadge);
+  // 2026-05-18 round-16 audit: surface the raw today numbers (sessions /
+  // tokens / cost) so leaders can answer "他今天用了多少 token、花了多少钱"
+  // without leaving the drawer. The editorial 3-cell strip above keeps the
+  // qualitative read; the breakdown below carries the hard numbers.
+  const t = member.today ?? { sessions: 0, tokens: 0, estMinutes: 0, costUsd: 0 };
+  const usage = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px;padding:12px 14px;background:var(--surface-2);border-radius:var(--r-md);">
+    <div style="text-align:center;">
+      <div style="font-size:15px;font-weight:600;color:var(--ink-1);font-variant-numeric:tabular-nums;">${t.sessions}</div>
+      <div style="font-size:11px;color:var(--ink-3);margin-top:2px;">今日会话</div>
+    </div>
+    <div style="text-align:center;">
+      <div style="font-size:15px;font-weight:600;color:var(--ink-1);font-variant-numeric:tabular-nums;">${formatTokensShort(t.tokens)}</div>
+      <div style="font-size:11px;color:var(--ink-3);margin-top:2px;">今日 token</div>
+    </div>
+    <div style="text-align:center;">
+      <div style="font-size:15px;font-weight:600;color:var(--ink-1);font-variant-numeric:tabular-nums;">$${formatCostShort(t.costUsd)}</div>
+      <div style="font-size:11px;color:var(--ink-3);margin-top:2px;">今日消耗</div>
+    </div>
+  </div>`;
   const stats = `<div class="so-stats">
     <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(trendText)}</div><div class="so-stat-label">本周节奏</div></div>
     <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(focusPhase)}</div><div class="so-stat-label">焦点</div></div>
     <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(stateText)}</div><div class="so-stat-label">状态</div></div>
-  </div>`;
+  </div>${usage}`;
 
   const evolve = renderMemberEvolve(detail);
   const projects = renderMemberProjects(detail);
@@ -288,20 +307,57 @@ export function renderProjectSlideoverFragments(
 }
 
 function renderProjectEvolve(detail: ProjectDetail): string {
+  // 2026-05-18 round-16 audit P0: surface real user prompts from sessions
+  // touching this project — the section label says "看他都在问什么", so it
+  // must show questions, not raw git commands. Falls back to milestones
+  // when no filtered prompts survived (e.g. a project whose sessions only
+  // contain slash-command activity).
+  const prompts = detail.recentPrompts.slice(0, 6);
+  if (prompts.length > 0) {
+    const items = prompts
+      .map(
+        (p, i) => `
+    <div class="so-evolve-item${i === 0 ? ' latest' : ''}">
+      <div class="so-evolve-time mono">${escapeHtml(formatHHMM(p.ts))}</div>
+      <div class="so-evolve-text serif">${escapeHtml(p.preview)}</div>
+    </div>`,
+      )
+      .join('');
+    return `<div class="so-evolve">${items}</div>`;
+  }
   const ms = detail.milestones.slice(0, 6);
   if (ms.length === 0) {
-    return `<div class="so-evolve"><div class="so-evolve-item"><div class="so-evolve-text serif">本窗口内暂无里程碑</div></div></div>`;
+    return `<div class="so-evolve"><div class="so-evolve-item"><div class="so-evolve-text serif">本窗口内暂无活动</div></div></div>`;
   }
   const items = ms
     .map(
       (m, i) => `
     <div class="so-evolve-item${i === 0 ? ' latest' : ''}">
       <div class="so-evolve-time mono">${escapeHtml(m.ts.slice(0, 10))}</div>
-      <div class="so-evolve-text serif">${escapeHtml(m.type)} · ${escapeHtml(m.detail)}</div>
+      <div class="so-evolve-text serif">${escapeHtml(milestoneLabel(m.type))} · ${escapeHtml(milestoneSummary(m.detail))}</div>
     </div>`,
     )
     .join('');
   return `<div class="so-evolve">${items}</div>`;
+}
+
+function milestoneLabel(type: string): string {
+  switch (type) {
+    case 'commit': return '提交';
+    case 'push': return '推送';
+    case 'pr': return '发起 PR';
+    case 'release': return '发布';
+    case 'tag': return '打标签';
+    default: return type;
+  }
+}
+
+function milestoneSummary(detail: string): string {
+  // Bash detail can be a heredoc-style commit message ($(cat <<'EOF' …)).
+  // Strip the heredoc shell, take the first non-empty line, truncate.
+  const trimmed = detail.replace(/\$\(cat\s+<<'?EOF'?\s*/i, '').replace(/EOF\s*\)/i, '');
+  const firstLine = trimmed.split('\n').map((l) => l.trim()).filter(Boolean)[0] ?? '';
+  return firstLine.length > 120 ? firstLine.slice(0, 120) + '…' : firstLine;
 }
 
 function renderProjectRecentFiles(detail: ProjectDetail): string {
@@ -337,4 +393,21 @@ function escapeHtml(s: string): string {
 function formatHHMM(ts: string): string {
   if (ts.length >= 16 && ts[10] === 'T') return ts.slice(11, 16);
   return ts;
+}
+
+// Short token-count formatter for drawer cards: 1234 → "1.2k", 12345 → "12k",
+// 1234567 → "1.2M". Single source of truth for "怎么显示 token 数".
+function formatTokensShort(n: number): string {
+  if (!isFinite(n) || n <= 0) return '0';
+  if (n < 1000) return String(Math.round(n));
+  if (n < 100_000) return (Math.round(n / 100) / 10).toFixed(1) + 'k';
+  if (n < 1_000_000) return Math.round(n / 1000) + 'k';
+  return (Math.round(n / 100_000) / 10).toFixed(1) + 'M';
+}
+
+function formatCostShort(n: number): string {
+  if (!isFinite(n) || n <= 0) return '0.00';
+  if (n < 100) return n.toFixed(2);
+  if (n < 1000) return Math.round(n).toString();
+  return (Math.round(n / 100) / 10).toFixed(1) + 'k';
 }

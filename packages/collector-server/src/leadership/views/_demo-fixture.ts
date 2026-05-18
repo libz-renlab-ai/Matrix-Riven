@@ -190,6 +190,11 @@ const PROJECT_DETAILS: Record<string, ProjectDetail> = {
       { path: 'src/app/status/page.tsx', touches: 12 },
     ],
     collabDensity: 0.55,
+    recentPrompts: [
+      { ts: '2026-05-18T09:14:00Z', by: 'alex@example.com', preview: '继续完善 overview 仪表盘的 hero 区' },
+      { ts: '2026-05-18T08:42:00Z', by: 'sara@example.com', preview: 'KPI 卡数据为什么是 0？' },
+      { ts: '2026-05-17T16:30:00Z', by: 'alex@example.com', preview: '把 attention 编辑卡的样式收尾' },
+    ],
   },
   'team-graph': {
     todayFiles: ['src/graph/render.ts'],
@@ -209,6 +214,10 @@ const PROJECT_DETAILS: Record<string, ProjectDetail> = {
       { path: 'README.md', touches: 2 },
     ],
     collabDensity: 0.33,
+    recentPrompts: [
+      { ts: '2026-05-18T11:00:00Z', by: 'lin@example.com', preview: '修一下 graph 视图渲染抖动' },
+      { ts: '2026-05-18T10:08:00Z', by: 'lin@example.com', preview: 'layout.ts 里 force-directed 的参数怎么调？' },
+    ],
   },
   'devops-pipelines': {
     // activeTodayCount=0; lastTouch yesterday. Mirror reality: no
@@ -230,6 +239,7 @@ const PROJECT_DETAILS: Record<string, ProjectDetail> = {
       { path: '.github/workflows/release.yml', touches: 1 },
     ],
     collabDensity: 0.0,
+    recentPrompts: [],
   },
 };
 

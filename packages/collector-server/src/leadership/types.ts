@@ -192,6 +192,13 @@ export interface ProjectDetail {
   recentFiles: { path: string; touches: number }[];
   /** 0–1 — fraction of edited files touched by ≥ 2 contributors. */
   collabDensity: number;
+  /**
+   * Recent filtered user prompts across all sessions touching this project,
+   * newest first. System-injected prompts (slash commands, skill auto-loads,
+   * <system-reminder>, etc.) are excluded — these are real questions people
+   * asked about the project. Capped server-side; UI renders ~6.
+   */
+  recentPrompts: { ts: string; by: string; preview: string }[];
 }
 
 export interface Milestone {
