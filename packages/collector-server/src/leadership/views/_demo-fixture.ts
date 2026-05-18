@@ -322,8 +322,11 @@ export function getDemoSnapshot(): OverviewSnapshot {
       },
       {
         email: 'dana@example.com', displayName: 'dana', stateBadge: 'low_activity',
-        today: { sessions: 1, tokens: 9_000, estMinutes: 18, costUsd: 0.18 },
-        trend7d: [4, 3, 2, 1, 1, 1, 1], deltaVs7dAvgPct: -0.55, warnings: ['节奏下滑'],
+        // 2026-05-18 round-12 audit: today.sessions=1 conflicted with
+        // lastSessionAt=yesterday + llmWeekly "多日无新会话". Set today
+        // counters to 0 so the raw JSON matches the narrative.
+        today: { sessions: 0, tokens: 0, estMinutes: 0, costUsd: 0 },
+        trend7d: [4, 3, 2, 1, 1, 1, 0], deltaVs7dAvgPct: -0.55, warnings: ['节奏下滑'],
         topProject: 'team-graph', lastSessionAt: '2026-05-17T19:30:00Z',
         toolFailureRate: 0.02, riskyActionCount: 0,
         llmWeekly: '本周聚焦 文档同步\n本周节奏放缓 · 多日无新会话',
