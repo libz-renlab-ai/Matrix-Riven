@@ -103,8 +103,22 @@ export function renderHeroFragment(snap: OverviewSnapshot): string {
   const headline = heroHeadline({ attentionCount, highOutputCount });
   const d = new Date(snap.computedAt);
   const date = `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+  // Phase 3-A: when a filter is active, prepend a single-line summary so
+  // the hero reads as filtered without rewriting the entire headline.
+  const f = snap.appliedFilter;
+  const filterCrumb = f && (f.focus || f.project || f.state || f.range !== 'today')
+    ? `<div class="hero-filter-crumb" style="font-size:12px;color:var(--ink-3,#888);margin-bottom:6px;">
+         🔍 当前聚焦：${[
+           f.focus ? `<strong style="color:#ff9d3a;">${escapeHtml(f.focus)}</strong>` : '',
+           f.project ? `<strong style="color:#ff9d3a;">${escapeHtml(f.project)}</strong>` : '',
+           f.range !== 'today' ? `<strong style="color:#ff9d3a;">${escapeHtml(rangeHumanLabel(f.range))}</strong>` : '',
+           f.state ? `<strong style="color:#ff9d3a;">${escapeHtml(stateHumanLabel(f.state))}</strong>` : '',
+         ].filter(Boolean).join(' · ')}
+       </div>`
+    : '';
   const header = `<header id="hero" class="hero fade-in">
     <div>
+      ${filterCrumb}
       <h1 class="serif">${headline}</h1>
       <div class="sub">${date} · 数据每 30 秒刷新</div>
     </div>
@@ -299,6 +313,28 @@ function renderSeeAllFooter(totalShown: number, totalAll: number, label: string,
   return `<div class="see-all-row" style="text-align:right;padding:14px 24px 4px;">
     <a href="${href}" style="font-size:12.5px;color:var(--ink-3);text-decoration:none;border-bottom:1px solid var(--ink-5);padding-bottom:1px;">看全部 ${totalAll} ${label} →</a>
   </div>`;
+}
+
+function rangeHumanLabel(r: string): string {
+  switch (r) {
+    case 'yesterday': return '昨日';
+    case '24h': return '近 24 小时';
+    case '7d': return '近 7 天';
+    case '30d': return '近 30 天';
+    case 'custom': return '自定义';
+    default: return r;
+  }
+}
+
+function stateHumanLabel(s: string): string {
+  switch (s) {
+    case 'active': return '活跃中';
+    case 'quiet': return '安静';
+    case 'stuck': return '卡住';
+    case 'needs_help': return '求助';
+    case 'low_activity': return '低活跃';
+    default: return s;
+  }
 }
 
 function escapeHtml(s: string): string {
