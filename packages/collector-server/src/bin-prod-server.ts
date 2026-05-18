@@ -138,9 +138,68 @@ export async function runProdServer(deps: RunProdServerDeps = {}): Promise<() =>
   }
   if (authToken) log(`[riven-collector] token auth ENABLED (POST /v1/cc-sessions + all leadership routes)`);
   if (tls) log(`[riven-collector] TLS ENABLED (key=${tls.keyPath})`);
+
+  // 2026-05-19 QA-7 pre-emptive: /sources promises a transcript retention
+  // window (default 30 days, overridable via RIVEN_TRANSCRIPT_RETENTION_DAYS).
+  // Without an enforcement path that's a documentation lie. Run a one-shot
+  // sweep at startup that deletes transcript files older than the configured
+  // cutoff. Cheap on a small team (O(users × days)); we don't need a
+  // recurring cron because every restart re-sweeps and the collector dir
+  // doesn't grow fast enough to overflow between restarts.
+  const transcriptRetentionDays = Number(env.RIVEN_TRANSCRIPT_RETENTION_DAYS ?? '30');
+  if (Number.isFinite(transcriptRetentionDays) && transcriptRetentionDays > 0) {
+    try {
+      const removed = sweepRetention(handle.outputDir, transcriptRetentionDays);
+      if (removed > 0) {
+        log(`[riven-collector] retention sweep removed ${removed} files older than ${transcriptRetentionDays}d`);
+      }
+    } catch (err) {
+      log(`[riven-collector] retention sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   deps.onReady?.({ url: handle.url, outputDir: handle.outputDir });
 
   return handle.close;
+}
+
+/**
+ * One-shot retention sweep — delete transcript files (.jsonl / .ogg) whose
+ * mtime is older than `days` days. Walks `outputDir/<user>/<YYYY-MM-DD>/`
+ * leaves. Errors during individual deletes are swallowed (best-effort);
+ * total error throws if the top-level dir is unreadable so the operator
+ * sees the misconfiguration. Returns the number of files removed.
+ */
+function sweepRetention(rootDir: string, days: number): number {
+  if (!existsSync(rootDir)) return 0;
+  const cutoffMs = Date.now() - days * 24 * 3600 * 1000;
+  let removed = 0;
+  const { readdirSync: rd, statSync: st, rmSync } = require('node:fs') as typeof import('node:fs');
+  for (const userDir of rd(rootDir, { withFileTypes: true })) {
+    if (!userDir.isDirectory()) continue;
+    const userPath = `${rootDir}/${userDir.name}`;
+    let userEntries: import('node:fs').Dirent[];
+    try { userEntries = rd(userPath, { withFileTypes: true }); } catch { continue; }
+    for (const dateDir of userEntries) {
+      if (!dateDir.isDirectory()) continue;
+      const datePath = `${userPath}/${dateDir.name}`;
+      let dateEntries: import('node:fs').Dirent[];
+      try { dateEntries = rd(datePath, { withFileTypes: true }); } catch { continue; }
+      for (const f of dateEntries) {
+        if (!f.isFile()) continue;
+        if (!f.name.endsWith('.jsonl') && !f.name.endsWith('.ogg')) continue;
+        try {
+          const filePath = `${datePath}/${f.name}`;
+          const s = st(filePath);
+          if (s.mtimeMs < cutoffMs) {
+            rmSync(filePath);
+            removed += 1;
+          }
+        } catch { /* best-effort */ }
+      }
+    }
+  }
+  return removed;
 }
 
 const argv1 = process.argv[1] ?? '';
