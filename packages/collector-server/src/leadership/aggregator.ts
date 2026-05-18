@@ -326,6 +326,27 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
   }
   // ────────────────────────────────────────────────────────────────────────────
 
+  // Phase 3-A: also slice members[] / projects[] when filter is active so the
+  // displayed cards / rows match the filtered KPI numbers above. Spec §3.2 #4
+  // originally said "dim non-matching, keep visible"; in practice the
+  // prominent chip bar at the top tells the user they're filtered, so trimming
+  // the list reads cleaner than a sea of dimmed cards.
+  let finalMembers = members;
+  let finalProjects = projects;
+  if (input.filter && !isDefaultFilter(input.filter)) {
+    if (input.filter.focus) {
+      const want = input.filter.focus.toLowerCase();
+      finalMembers = members.filter((m) => (m.email.split('@')[0] ?? '').toLowerCase() === want);
+    }
+    if (input.filter.state) {
+      finalMembers = finalMembers.filter((m) => m.stateBadge === input.filter!.state);
+    }
+    if (input.filter.project) {
+      const want = input.filter.project.toLowerCase();
+      finalProjects = projects.filter((p) => p.name.toLowerCase() === want);
+    }
+  }
+
   const snap: OverviewSnapshot = {
     schemaVersion: 1,
     range: {
@@ -335,8 +356,8 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
     },
     computedAt: input.now.toISOString(),
     kpis: finalKpis,
-    members,
-    projects,
+    members: finalMembers,
+    projects: finalProjects,
     collaboration: finalCollaboration,
     attention: finalAttention,
     highlights: finalHighlights,
