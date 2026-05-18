@@ -45,8 +45,8 @@ const FEATURES: LandingFeature[] = [
   },
   {
     icon: '◐',
-    title: 'KPI 卡 + 真 sparkline',
-    copy: '需关注 / 高产出 / 今日消耗 / 整体节奏——每张卡的小波形是真 trend，不是装饰。',
+    title: '成员小波形 + 7 日节奏',
+    copy: '每个成员 tile 的 sparkline 是 7 日真实活跃 trend；KPI 卡的占位小波形仅作装饰（v0.2 接真数据）。',
     proof: '7×24 热图、7 日节奏、状态徽章——数据来自同一个 snapshot',
   },
   {
