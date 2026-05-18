@@ -172,3 +172,85 @@ Test Files  57 passed (57)
 
 代码就绪 · 测试全过 · 4 个 Phase 3 子功能端到端可用 · QA P0 已闭环。
 **剩下是你的人眼检查 + 合并 PR**。
+
+
+---
+
+## 9. 后续 QA Rounds 3-7 全部闭环（自动夜跑）
+
+启动以来又跑了 5 轮 QA agent。完整 commit 链：
+
+```
+d8c0730 fix(launch-readiness): QA round-7 — final acceptance P0s
+aa710ed fix(launch-readiness): enforce the retention promise on /sources
+1f95163 fix(launch-readiness): QA round-6 regression hunter pass
+1e2a292 fix(launch-readiness): QA round-6 — daily-driver + regression punch list
+a098ce2 fix(launch-readiness): QA round-5 — legal + ops + UX punch list
+46d021e fix(launch-readiness): QA round-4 security auditor findings
+cc8ba1e fix(launch-readiness): QA round-4 P0/P1 — UX honesty pass
+36385f1 chore: ignore manual smoke + QA evidence dumps
+3c640e0 fix(launch-readiness): QA round-3 P0/P1 fixes
+```
+
+### Round 4（journalist + customer + security auditor）
+
+- /landing "全离线 cache" 改为如实陈述「叙事缓存全本地，但 LLM 推理走 Anthropic API」
+- `/?demo=1` 现在和 `/overview?demo=1` 一致渲染
+- 空数据时 hero + KPI 改为"暂无数据"而不是"一切顺利"
+- /people/&lt;id&gt; 三处 session count 不一致问题：重命名 + 注释清楚
+- /insights 子分项加 /100 单位 + 方向调整（无卡情况、低风险）
+- 滑出 header 软化（"看他都在问什么" → "看是否需要搭把手"）
+- /projects/&lt;id&gt; 302 to /projects?demo=1#project=&lt;id&gt;（slideover 自动开）
+- 绑非 loopback + 无 token 改为启动 fatal（之前只 warn）
+- CSP + Cache-Control: no-store 到所有响应
+- /api/activity?before=&lt;bad&gt; → 400，不再 500
+- /members/&lt;id&gt; 验证 :id regex 防 open-redirect
+
+### Round 5（lawyer + ops + UX）
+
+- 同意书 banner：每个非 demo / 非 landing / 非 sources 页面底部锁定 banner，工程师可点击 "我已告知团队 · 继续"，localStorage 持久化
+- /sources 加保留窗口段（30 天 transcript 默认）+ 成员数据权利段
+- "slacking" / "低活跃" 全局重命名为 "本周参与不多"
+- /healthz 端点（unauth，返回 envelopeCount + lastIngestAt + uptime）
+- TtlCache 加 maxEntries=1024 + FIFO 淘汰（防 attacker-controlled query DoS）
+- POST /v1/cc-sessions 错误编码 → 400，不再 500
+- /insights 子分项 title 被双引号炸了，重新 escapeHtml
+- 6 个页面加 &lt;meta viewport&gt;
+- demo mode 加 nav 上的 "演示数据 · 切换" pill
+
+### Round 6（daily-driver + regression）
+
+- **P0**：清掉 `eve@evil.com` / `evil@evil.com` / `pwn-*` 渗透测试残留（之前出现在真实 hero）
+- demo pill 现在保留当前页面（不再 hardcode /overview）
+- consent banner 加到 /landing + /sources（之前被排除）
+- 范围 chip 默认 = 实际窗口（不再说 "今日" 而 nav 说 "7 日窗口"）
+- /insights 30 天 sparkline 0/30 时改为"数据不足以打分"
+- /healthz 补 envelopeCount + lastIngestAt + lastIngestAgeSec
+- 404 / 405 fall-through 也带安全头
+- 修 round-6 引入的 6 个 TS 错误（effectiveRange 类型）
+- 软化 '闲置' / '节奏缓' (QA-5 漏的)
+- 启用 spendCardLabel（dead code since round-3）
+- /members/&lt;id&gt; 302 to /people/&lt;id&gt;?demo=1#member=&lt;id&gt;（symmetry with /projects）
+
+### Round 7（final acceptance）
+
+- **P0**: /people + /projects 之前没有 consent banner（renderTabPage 没 import），现在补上
+- **P0**: /sources envelope 保留行是 doc lie，重写为 "envelope = transcript 生命周期"
+- **P0**: 保留 sweep 从 startup-only 改为 setInterval(24h)（长时运行也会到期清理）
+- pollOverview 不再 hardcode `?demo=1`，现在 forward 整个 location.search（修 silent-filter-undo bug）
+
+### 仓库状态（终态）
+
+- 分支：`worktree-enumerated-roaming-engelbart`
+- 最新 commit：`d8c0730 fix(launch-readiness): QA round-7 — final acceptance P0s`
+- 测试：877/877 passing
+- typecheck：clean (`npx tsc --noEmit -p tsconfig.json` → exit 0)
+- build：clean (`pnpm build` succeeds)
+- 服务器：`PORT=18939 RIVEN_COLLECTOR_DIR=...` 单进程运行
+
+### 上线前最后建议
+
+1. **必做**：把 `worktree-enumerated-roaming-engelbart` 合并到 main，部署时 `RIVEN_AUTH_TOKEN` 必须设置（否则只能 loopback 起服务）
+2. **强烈建议**：先以 demo mode 部署一份给团队看，让他们知道这套东西要拿他们的 prompt（consent banner 会自动出现在 real mode）
+3. **后续**：Round 7 还有几个 P1/P2 没修（slideover 链到 /people/&lt;id&gt;、demo /api/overview 加 ETag、banner 改 scrim 把 click-through 堵死、empty-state 加 CTA）——上线后第一周再迭代
+
