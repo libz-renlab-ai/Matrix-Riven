@@ -558,8 +558,18 @@ export function handleLeadershipRequest(
       sendJson(res, 405, { error: 'method_not_allowed' });
       return true;
     }
+    // 2026-05-19 QA-4 P2: security auditor flagged the legacy redirect
+    // echoed attacker-controlled bytes into the Location header (after
+    // encodeURIComponent, so not exploitable today, but a one-line
+    // hardening that prevents future open-redirect regressions).
+    // Member local-parts are letters/digits/dot/dash/underscore/at.
+    const rawId = membersHtmlMatch[1]!;
+    if (!/^[A-Za-z0-9._@-]{1,128}$/.test(rawId)) {
+      sendJson(res, 404, { error: 'not_found' });
+      return true;
+    }
     // Phase 3-C: forward to the new /people/:id URL (preserving id).
-    sendRedirect(res, 301, '/people/' + encodeURIComponent(membersHtmlMatch[1]!));
+    sendRedirect(res, 301, '/people/' + encodeURIComponent(rawId));
     return true;
   }
 
@@ -569,7 +579,23 @@ export function handleLeadershipRequest(
       sendJson(res, 405, { error: 'method_not_allowed' });
       return true;
     }
-    sendRedirect(res, 301, '/projects');
+    // 2026-05-19 QA-4 P1: customer #2 flagged that /projects/<id>?demo=1
+    // 301'd to /projects (dropping demo=1), so the chevron-suggested
+    // drill-down landed on an empty page. There is no per-project detail
+    // page yet (slideover serves that role). Preserve query string + add
+    // a #project=<id> fragment so a one-line bootstrap in the projects
+    // page can auto-open the slideover on that project.
+    const rawProj = projectsHtmlMatch[1]!;
+    // Match the same chars project names accept: letters, digits, slash
+    // (owner/repo), dot, dash, underscore. Reject otherwise to avoid
+    // header-injection / open-redirect via Location echo.
+    if (!/^[A-Za-z0-9._/@-]{1,128}$/.test(rawProj)) {
+      sendJson(res, 404, { error: 'not_found' });
+      return true;
+    }
+    const qs = query.toString();
+    const target = `/projects${qs ? '?' + qs : ''}#project=${encodeURIComponent(rawProj)}`;
+    sendRedirect(res, 302, target);
     return true;
   }
 
@@ -1206,7 +1232,20 @@ function handleActivityApi(
   }
   const isDemo = query.get('demo') === '1';
   const beforeStr = query.get('before');
-  const beforeTs = beforeStr ? new Date(beforeStr) : undefined;
+  // 2026-05-19 QA-4 P2: security auditor flagged that ?before=AAA hit
+  // `new Date(beforeStr)` → Invalid Date → throws inside buildActivityFeed
+  // → 500. Public 500 on attacker-controlled input is an enumeration
+  // signal even though the stack only goes to stderr. Validate to
+  // ISO-8601-ish and return 400 instead.
+  let beforeTs: Date | undefined;
+  if (beforeStr !== null) {
+    const parsed = new Date(beforeStr);
+    if (Number.isNaN(parsed.getTime())) {
+      sendJson(res, 400, { error: 'invalid_before', hint: 'ISO-8601 timestamp expected, e.g. 2026-05-19T00:00:00Z' });
+      return true;
+    }
+    beforeTs = parsed;
+  }
   try {
     const feed = isDemo
       ? buildDemoActivityFeed(filter, nowDate, beforeTs)
@@ -1482,16 +1521,52 @@ function renderStubTab(active: ActiveTab, title: string): string {
 }
 
 /**
- * Defensive headers applied to every leadership response. The dashboard
- * embeds inline `<script>` (small refresh-loop) and inline `<style>` so we
- * intentionally do NOT set a strict CSP — those would need refactoring all
- * `views/*.html.ts`. We DO set the cheap, drop-in headers that block easy
- * exploits (MIME-sniff bypass, clickjacking, referrer leak).
+ * Defensive headers applied to every leadership response.
+ *
+ * 2026-05-19 QA-4 P1: security auditor flagged missing CSP + missing
+ * Cache-Control on PII-bearing routes. Added both:
+ *
+ * - `Content-Security-Policy` is now set. The dashboard inlines its
+ *   own `<script>` blocks (CLIENT_REFRESH_SCRIPT, FILTER_BAR_SCRIPT)
+ *   and inline `<style>` is pervasive in every view, so we cannot
+ *   adopt strict nonce-based CSP without a deeper refactor. Instead
+ *   we ship a default-deny-third-party CSP that explicitly allows
+ *   `'unsafe-inline'` on script-src and style-src (own content
+ *   only), denies all third-party origins, denies `<frame>`, and
+ *   forbids `<base href>` injection. This blocks reflected/stored
+ *   XSS pivots that depend on loading remote payload while keeping
+ *   the existing inline-everything architecture working. Tighten to
+ *   sha256-pinned script-src in a follow-up once the inline scripts
+ *   are stable enough to pin.
+ *
+ * - `Cache-Control: no-store` on every response. The dashboard renders
+ *   raw user prompts + emails + file paths under PII-light routes
+ *   (/people/*, /api/members/*, /api/projects/*, /retro, /activity,
+ *   /insights). HTTP/1.0 caching proxies would otherwise treat the
+ *   responses as freely cacheable. No-store also fixes a future
+ *   regression risk where someone adds a public-Wi-Fi reverse-proxy.
+ *   ETag-based 304 on the /api/* routes keeps working under no-store.
  */
 function applySecurityHeaders(res: ServerResponse): void {
   res.setHeader('x-content-type-options', 'nosniff');
   res.setHeader('x-frame-options', 'DENY');
   res.setHeader('referrer-policy', 'no-referrer');
+  res.setHeader(
+    'content-security-policy',
+    [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      "font-src 'self' data:",
+      "connect-src 'self'",
+      "base-uri 'none'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+      "object-src 'none'",
+    ].join('; '),
+  );
+  res.setHeader('cache-control', 'no-store');
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

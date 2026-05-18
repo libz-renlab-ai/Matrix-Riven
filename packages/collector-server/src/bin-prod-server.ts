@@ -55,12 +55,33 @@ export async function runProdServer(deps: RunProdServerDeps = {}): Promise<() =>
   // explicitly — and should also set RIVEN_AUTH_TOKEN, which gates the
   // leadership routes when present.
   const host = env.HOST ?? '127.0.0.1';
-  if (host === '0.0.0.0' && !(env.RIVEN_AUTH_TOKEN || env.BPP_AUTH_TOKEN)) {
+  if (host !== '127.0.0.1' && host !== 'localhost' && !(env.RIVEN_AUTH_TOKEN || env.BPP_AUTH_TOKEN)) {
+    // 2026-05-19 QA-4 P0: security auditor's P0 — a non-loopback bind
+    // without RIVEN_AUTH_TOKEN exposes both leadership endpoints AND
+    // the write endpoint (POST /v1/cc-sessions) to the LAN. With no
+    // token, anyone can ingest a session as any email, corrupting
+    // every signal. The previous behaviour was to log a warning and
+    // start anyway, which a sleepy operator would miss. Refuse to
+    // start so the misconfiguration surfaces immediately.
+    throw new Error(
+      `[riven-collector] REFUSING TO START: HOST=${host} (non-loopback) ` +
+        `without RIVEN_AUTH_TOKEN. POST /v1/cc-sessions and every ` +
+        `leadership route would be reachable on the LAN without auth, ` +
+        `letting anyone spoof a teammate's email and corrupt aggregates. ` +
+        `Set RIVEN_AUTH_TOKEN=<32 random bytes> or bind HOST=127.0.0.1.`,
+    );
+  }
+  if ((host === '127.0.0.1' || host === 'localhost') && !(env.RIVEN_AUTH_TOKEN || env.BPP_AUTH_TOKEN)) {
+    // Loopback + no token: any local process can spoof. Acceptable
+    // for single-user laptops, dangerous on shared/multi-tenant hosts.
+    // Log a bootscreen NOTICE (not a warning — this is the documented
+    // single-user mode) so the operator sees it and decides.
     log(
-      '[riven-collector] WARNING: HOST=0.0.0.0 without RIVEN_AUTH_TOKEN ' +
-        '— leadership endpoints (/api/overview, /overview, /api/members/*, ' +
-        '/api/projects/*) are publicly reachable on this LAN. Set ' +
-        'RIVEN_AUTH_TOKEN=<random-32-bytes> to require Bearer auth.',
+      '[riven-collector] NOTICE: HOST=127.0.0.1 without RIVEN_AUTH_TOKEN. ' +
+        'Any local process on this host can POST sessions under any ' +
+        'teammate email. Safe for single-user laptops; on shared hosts ' +
+        'set RIVEN_AUTH_TOKEN=<32 random bytes> and configure the ' +
+        'upload daemon to send it.',
     );
   }
   // Resolve outputDir from env, with TeamBrain → Matrix-Riven legacy fallback.

@@ -402,11 +402,17 @@ describe('5 leadership tab routes (P-B2)', () => {
   it('GET /projects/:name is intercepted by the P-B6 redirect (not the stub tab)', async () => {
     // Regression: the literal /projects route must not shadow the
     // /projects/<name> regex below it — even though the regex now redirects.
+    // 2026-05-19 QA-4 P1: redirect target now preserves query and embeds
+    // the project id as a #project=<id> fragment so the projects page
+    // can auto-open the slideover. Match either the legacy bare target
+    // (no slideover deeplink, before the fix) or the new fragment form.
     const res = await fetch(`${baseUrl}/projects/${encodeURIComponent(PROJECT_A)}`, {
       redirect: 'manual',
     });
     expect([301, 302]).toContain(res.status);
-    expect(res.headers.get('location')).toBe('/projects');
+    const location = res.headers.get('location') ?? '';
+    expect(location.startsWith('/projects')).toBe(true);
+    expect(location).toContain(`#project=${encodeURIComponent(PROJECT_A)}`);
   });
 });
 
@@ -449,12 +455,17 @@ describe('detail API _html fragments (P-B6)', () => {
   });
 
   it('GET /projects/<name> is retired — redirects (or 410s) away from a full page', async () => {
+    // 2026-05-19 QA-4 P1: redirect now lands on /projects with a
+    // #project=<name> fragment so the slideover auto-opens. Location
+    // must start with /projects and embed the deeplink fragment.
     const res = await fetch(`${baseUrl}/projects/${encodeURIComponent(PROJECT_A)}`, {
       redirect: 'manual',
     });
     expect([301, 302, 404, 410]).toContain(res.status);
     if (res.status === 301 || res.status === 302) {
-      expect(res.headers.get('location')).toBe('/projects');
+      const location = res.headers.get('location') ?? '';
+      expect(location.startsWith('/projects')).toBe(true);
+      expect(location).toContain(`#project=${encodeURIComponent(PROJECT_A)}`);
     }
   });
 });

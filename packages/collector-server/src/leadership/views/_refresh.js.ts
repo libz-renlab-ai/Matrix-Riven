@@ -170,6 +170,31 @@ export const CLIENT_REFRESH_SCRIPT = `
     soEtag = null;
   };
 
+  // 2026-05-19 QA-4 P1: deeplink from /projects/<id> redirect. The
+  // server now 302's /projects/<id> → /projects#project=<id>; we read
+  // the fragment on load and auto-open the slideover so the chevron's
+  // promised "drill-down" actually lands. Same hook accepts
+  // #member=<id> for symmetry with /members/<id> → /people/<id>.
+  function handleSlideoverHash() {
+    var hash = String(window.location.hash || '').replace(/^#/, '');
+    if (!hash) return;
+    var parts = hash.split('=');
+    if (parts.length !== 2) return;
+    var kind = parts[0] === 'project' ? 'project'
+             : parts[0] === 'member'  ? 'member'
+             : null;
+    if (!kind) return;
+    var id = decodeURIComponent(parts[1]);
+    if (!/^[A-Za-z0-9._@\/-]{1,128}$/.test(id)) return;
+    window.openSO(kind, id);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', handleSlideoverHash);
+  } else {
+    handleSlideoverHash();
+  }
+  window.addEventListener('hashchange', handleSlideoverHash);
+
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') window.closeSO();
   });
