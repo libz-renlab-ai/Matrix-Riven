@@ -47,7 +47,7 @@ const STATE_LABELS: Record<string, string> = {
   quiet: '安静',
   stuck: '卡住',
   needs_help: '求助',
-  low_activity: '低活跃',
+  low_activity: '本周参与不多',
 };
 
 const STATE_ORDER = ['active', 'quiet', 'stuck', 'needs_help', 'low_activity'] as const;

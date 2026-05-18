@@ -920,10 +920,28 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
 
         send(res, 200, { ok: true, id, user_id: userIdSafe, date });
       } catch (err) {
-        send(res, 500, {
-          error: 'decode or write failed',
-          detail: err instanceof Error ? err.message : String(err),
-        });
+        // 2026-05-19 QA-5 ops P2: distinguish "client sent bad bytes"
+        // (400) from "we couldn't write to disk" (500). Zlib raises
+        // Z_DATA_ERROR for non-gzip and corrupt streams; a malformed
+        // base64 string yields a length-mismatched Buffer that gunzip
+        // also rejects with Z_DATA_ERROR or similar. Either is a 400.
+        // Reserve 500 for unexpected fs / OOM faults so an ops dashboard
+        // can alert correctly on 5xx counts.
+        const msg = err instanceof Error ? err.message : String(err);
+        const zErr = (err as { code?: string })?.code ?? '';
+        const isDecodeError =
+          zErr === 'Z_DATA_ERROR' ||
+          zErr === 'Z_BUF_ERROR' ||
+          zErr === 'Z_STREAM_ERROR' ||
+          /incorrect header check|invalid stored block lengths|invalid distance|invalid literal\/lengths|gzip|deflate/i.test(msg);
+        if (isDecodeError) {
+          send(res, 400, { error: 'invalid_transcript_encoding', route });
+        } else {
+          send(res, 500, {
+            error: 'decode or write failed',
+            detail: msg,
+          });
+        }
       }
     });
     req.on('error', () => {

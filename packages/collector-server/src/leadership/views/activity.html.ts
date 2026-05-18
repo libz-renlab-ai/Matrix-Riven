@@ -12,10 +12,13 @@ import { renderNav } from './_nav.html.js';
 import { renderSlideoverShell } from './_slideover.html.js';
 import { CLIENT_REFRESH_SCRIPT } from './_refresh.js.js';
 import { FILTER_BAR_CSS, FILTER_BAR_SCRIPT } from './_filter-bar.client.js';
+import { CONSENT_BANNER_CSS, CONSENT_BANNER_SCRIPT, renderConsentBanner } from './_consent-banner.html.js';
 
 export interface RenderActivityOptions {
   filterBarHtml?: string;
   rangeLabel?: string;
+  /** QA-5 legal P0. Suppress consent banner in demo mode. */
+  demo?: boolean;
 }
 
 export function renderActivityPage(snap: ActivityFeedSnapshot, opts: RenderActivityOptions = {}): string {
@@ -27,14 +30,16 @@ export function renderActivityPage(snap: ActivityFeedSnapshot, opts: RenderActiv
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Activity · Matrix·Riven</title>
 <style>${LEADERSHIP_CSS}
 ${FILTER_BAR_CSS}
+${CONSENT_BANNER_CSS}
 ${ACTIVITY_CSS}</style>
 </head>
 <body>
 <div class="shell">
-${renderNav('activity', { rangeLabel: navRangeLabel })}
+${renderNav('activity', { rangeLabel: navRangeLabel, demo: opts.demo === true })}
 ${opts.filterBarHtml ?? ''}
 <header id="hero" class="hero fade-in">
   <div>
@@ -45,8 +50,10 @@ ${opts.filterBarHtml ?? ''}
 ${body}
 </div>
 ${renderSlideoverShell()}
+${renderConsentBanner({ demo: opts.demo === true })}
 <script>${CLIENT_REFRESH_SCRIPT}</script>
 <script>${FILTER_BAR_SCRIPT}</script>
+<script>${CONSENT_BANNER_SCRIPT}</script>
 </body>
 </html>`;
 }

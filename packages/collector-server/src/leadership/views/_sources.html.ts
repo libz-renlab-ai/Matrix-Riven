@@ -42,7 +42,7 @@ const SOURCES: SourceRow[] = [
 // numbering was internal (matched the design doc's signal IDs) but read
 // as "where are #6-#9?" + "#17/#18 exist while header says 16 个".
 const DETECTORS = [
-  { id: '1',  name: '低活跃 (slacking)',  fires: '会话量 / 主项目命中率两条线都低于阈值' },
+  { id: '1',  name: '节奏放缓',            fires: '会话量 / 主项目命中率两条线都低于阈值（仅团队基线对比，非绝对判断）' },
   { id: '2',  name: '卡住 (stuck)',       fires: '同 cwd 多次 session · 无 commit · 工具失败累计' },
   { id: '3',  name: '阻塞 (blockers)',    fires: 'Bash 失败率 > 阈值 · 反复同命令 · 缺权限错误' },
   { id: '4',  name: '求助 (help-needed)', fires: 'WebSearch + risky-action + 错误率同时升高' },
@@ -122,7 +122,7 @@ export function renderSources(): string {
       <tr><td><strong>不读邮件 / 日历 / Slack</strong></td><td>这些数据从来不进 collector。</td></tr>
       <tr><td><strong>不外发给第三方</strong></td><td>除了 <code>claude -p</code> 本身访问 Anthropic API（脱敏后），不向任何外部服务转发。</td></tr>
       <tr><td><strong>不持久化原始密钥 / token</strong></td><td>PII 脱敏管线 (<code>packages/shared/src/pii/redactor.ts</code>) 在写盘前去掉 emails / 绝对路径 / 看起来像 secret 的字符串。</td></tr>
-      <tr><td><strong>不无限增长</strong></td><td>LLM cache 50MB 软上限 + 最老条目淘汰；transcript collector 由 ops 控制保留窗口。</td></tr>
+      <tr><td><strong>不无限增长</strong></td><td>LLM cache 50MB 软上限 + 最老条目淘汰；transcript collector 按下方「保留窗口」自动清理。</td></tr>
     </tbody>
   </table>
 
@@ -134,6 +134,28 @@ export function renderSources(): string {
       <tr><td><strong>assistant 回复 / tool 调用</strong></td><td>结构化字段保留（工具名、文件路径、命令文本、token 数）；assistant 回复正文 <em>仅</em> 进 LLM 叙事 cache，不在 UI 直接渲染。</td></tr>
       <tr><td><strong>Bash 命令文本</strong></td><td>原文保留。用于风险动作检测与协作识别。</td></tr>
       <tr><td><strong>仓库路径 / 文件名</strong></td><td>原文保留（含 <code>cwd</code>、改动文件相对路径）。绝对路径中的 <code>/Users/&lt;name&gt;</code> 段会被 L1 redactor 替换。</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="retention">保留窗口</h2>
+  <p class="lead" style="margin-top:6px;">默认值如下，可通过环境变量覆盖。<strong>仅设置上限</strong>，没有上限不是产品行为而是 ops 失误，请告知团队。</p>
+  <table>
+    <tbody>
+      <tr><td><strong>session transcript（含 prompt 正文）</strong></td><td>默认 <strong>30 天</strong>；可通过 <code>RIVEN_TRANSCRIPT_RETENTION_DAYS</code> 缩短到 7 / 14 / 自定义。EU 部署建议 ≤ 14 天。到期后整文件删除（不可恢复）。</td></tr>
+      <tr><td><strong>聚合 envelope（无 prompt 正文）</strong></td><td>默认 <strong>180 天</strong>；可通过 <code>RIVEN_ENVELOPE_RETENTION_DAYS</code> 调整。包含 session 计数、token、project name 等，不含 prompt / Bash 文本。</td></tr>
+      <tr><td><strong>LLM 叙事 cache</strong></td><td>50MB 硬上限 + LRU 淘汰；按内容键索引，不按时间。</td></tr>
+      <tr><td><strong>L2 audit 日志</strong></td><td>记录 ingest + redaction 事件；默认与 transcript 同保留窗口。</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="rights">成员数据权利</h2>
+  <p class="lead" style="margin-top:6px;">v1 不提供自助删除界面，但下面的操作 ops 必须能在 30 天内完成：</p>
+  <table>
+    <tbody>
+      <tr><td><strong>查看「关于我的所有数据」</strong></td><td>GET <code>/api/members/&lt;localpart&gt;?demo=0</code> 返回该成员在窗口内的全部 envelope 字段 + sample prompts。可由 ops 导出 JSON 给该成员。</td></tr>
+      <tr><td><strong>删除「关于我的所有数据」</strong></td><td>ops 删除 <code>$RIVEN_COLLECTOR_DIR/&lt;email&gt;/</code> 整目录。下次扫描自动从所有面板消失。</td></tr>
+      <tr><td><strong>撤回授权</strong></td><td>该成员在自己的机器上卸载 Claude Code hook（停止上传新 session）；既有数据按上面的删除路径处理。</td></tr>
+      <tr><td><strong>未实现 · 留作 v2</strong></td><td>per-engineer 同意状态服务端持久化、专用的「我的数据」自助页面、自动按祈使保留期清理、跨 jurisdiction 模板。GDPR / 工会场景部署需先补这些 + DPIA。</td></tr>
     </tbody>
   </table>
 </div>

@@ -30,6 +30,13 @@ const TABS: readonly TabSpec[] = [
 export interface RenderNavOptions {
   /** Range label shown next to the live dot. Defaults to "7 日窗口". */
   rangeLabel?: string;
+  /**
+   * QA-5 UX P2: when true, render a visible "演示数据" pill in the meta
+   * strip so a user arriving from the landing-page demo CTA can't
+   * mistake fixture data for their team's real numbers. Pill links
+   * back to the same path with ?demo=1 stripped (a.k.a. real mode).
+   */
+  demo?: boolean;
 }
 
 /**
@@ -42,11 +49,15 @@ export function renderNav(active: ActiveTab, opts: RenderNavOptions = {}): strin
     return `<a class="${cls}" href="${t.href}">${t.label}</a>`;
   }).join('');
   const rangeLabel = opts.rangeLabel ?? '7 日窗口';
+  const demoPill = opts.demo
+    ? `<a class="nav-demo-pill" href="/overview" data-real-link title="切换到真实数据" style="background:#fdf3e0;color:#8a6420;border:1px solid #e7c98f;padding:3px 10px;border-radius:999px;font-size:11.5px;text-decoration:none;letter-spacing:.02em;">演示数据 · 切换</a>`
+    : '';
   return `
     <nav class="nav fade-in">
       <div class="brand"><div class="brand-mark"></div><span>Matrix·Riven</span></div>
       <div class="tabs">${tabs}</div>
       <div class="nav-meta">
+        ${demoPill}
         <span class="live-dot"></span>
         <span>实时 · ${escapeHtml(rangeLabel)}</span>
         <button id="theme-toggle" type="button" aria-label="切换主题" title="切换深色/浅色主题"

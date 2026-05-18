@@ -17,8 +17,9 @@
 import type { OverviewSnapshot, HighlightEvent, AttentionItem, MemberSnapshot, ProjectSnapshot } from '../types.js';
 import { LEADERSHIP_CSS } from './styles.css.js';
 import { renderNav } from './_nav.html.js';
+import { CONSENT_BANNER_CSS, CONSENT_BANNER_SCRIPT, renderConsentBanner } from './_consent-banner.html.js';
 
-export function renderRetro(snap: OverviewSnapshot): string {
+export function renderRetro(snap: OverviewSnapshot, opts: { demo?: boolean } = {}): string {
   const delivered = (snap.highlights ?? [])
     .filter((h) => ['commit', 'push', 'pr', 'release', 'tag'].includes(h.type))
     .slice(0, 8);
@@ -38,6 +39,7 @@ export function renderRetro(snap: OverviewSnapshot): string {
 <title>周回顾 · Matrix-Riven</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>${LEADERSHIP_CSS}
+${CONSENT_BANNER_CSS}
 .rt-page { max-width:980px; margin:0 auto; padding:32px 40px 80px; }
 .rt-page h1 { font-family:'Newsreader',serif; font-size:32px; color:var(--ink-1); margin:0 0 8px; font-weight:500; }
 .rt-page .sub { font-size:14px; color:var(--ink-3); margin:0 0 28px; }
@@ -60,7 +62,7 @@ export function renderRetro(snap: OverviewSnapshot): string {
 </head>
 <body>
 <div class="shell">
-${renderNav('retro', { rangeLabel: '本周回顾' })}
+${renderNav('retro', { rangeLabel: '本周回顾', demo: opts.demo === true })}
 <div class="rt-page">
   <a class="rt-back" href="/overview">← 返回实时看板</a>
   <h1>本周回顾</h1>
@@ -114,6 +116,8 @@ ${renderNav('retro', { rangeLabel: '本周回顾' })}
   </section>` : ''}
 </div>
 </div>
+${renderConsentBanner({ demo: opts.demo === true })}
+<script>${CONSENT_BANNER_SCRIPT}</script>
 </body>
 </html>`;
 }

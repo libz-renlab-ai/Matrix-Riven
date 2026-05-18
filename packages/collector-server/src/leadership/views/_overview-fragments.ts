@@ -368,7 +368,7 @@ function stateHumanLabel(s: string): string {
     case 'quiet': return '安静';
     case 'stuck': return '卡住';
     case 'needs_help': return '求助';
-    case 'low_activity': return '低活跃';
+    case 'low_activity': return '本周参与不多';
     default: return s;
   }
 }

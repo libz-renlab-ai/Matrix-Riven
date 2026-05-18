@@ -15,10 +15,13 @@ import { renderNav } from './_nav.html.js';
 import { renderSlideoverShell } from './_slideover.html.js';
 import { CLIENT_REFRESH_SCRIPT } from './_refresh.js.js';
 import { FILTER_BAR_CSS, FILTER_BAR_SCRIPT } from './_filter-bar.client.js';
+import { CONSENT_BANNER_CSS, CONSENT_BANNER_SCRIPT, renderConsentBanner } from './_consent-banner.html.js';
 
 export interface RenderInsightsOptions {
   filterBarHtml?: string;
   activeSubTab?: 'time' | 'people' | 'projects';
+  /** QA-5 legal P0. Suppress consent banner in demo mode. */
+  demo?: boolean;
 }
 
 export function renderInsightsPage(snap: InsightsSnapshot, opts: RenderInsightsOptions = {}): string {
@@ -27,14 +30,16 @@ export function renderInsightsPage(snap: InsightsSnapshot, opts: RenderInsightsO
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Insights · Matrix·Riven</title>
 <style>${LEADERSHIP_CSS}
 ${FILTER_BAR_CSS}
+${CONSENT_BANNER_CSS}
 ${INSIGHTS_CSS}</style>
 </head>
 <body>
 <div class="shell">
-${renderNav('insights', { rangeLabel: rangeLabel(snap.range.label) })}
+${renderNav('insights', { rangeLabel: rangeLabel(snap.range.label), demo: opts.demo === true })}
 ${opts.filterBarHtml ?? ''}
 <header class="ins-hero fade-in">
   <div>
@@ -48,9 +53,11 @@ ${renderAnomalies(snap)}
 ${renderAxesTabs(snap, activeSub)}
 </div>
 ${renderSlideoverShell()}
+${renderConsentBanner({ demo: opts.demo === true })}
 <script>${CLIENT_REFRESH_SCRIPT}</script>
 <script>${FILTER_BAR_SCRIPT}</script>
 <script>${INSIGHTS_TAB_SCRIPT}</script>
+<script>${CONSENT_BANNER_SCRIPT}</script>
 </body>
 </html>`;
 }
@@ -64,7 +71,7 @@ function renderHealthCard(snap: InsightsSnapshot): string {
   // "风险". Rename labels so the direction is unambiguous, and append
   // /100 on every sub-value to match the ring unit.
   const subscoreRow = (label: string, hint: string, val: number) => `
-    <div class="ins-sub" title="${hint}">
+    <div class="ins-sub" title="${escapeHtml(hint)}">
       <div class="ins-sub-label">${label}</div>
       <div class="ins-sub-bar"><span class="ins-sub-bar-fill" style="width:${val}%"></span></div>
       <div class="ins-sub-val">${val}<span class="ins-sub-unit">/100</span></div>
@@ -80,7 +87,7 @@ function renderHealthCard(snap: InsightsSnapshot): string {
         <div class="ins-health-unit">/100</div>
       </div>
       <div class="ins-health-breakdown">
-        ${subscoreRow('无卡情况', '反映"卡住"信号的稀疏度。100 = 没人卡住；0 = 团队普遍卡住。', h.breakdown.stuckRate)}
+        ${subscoreRow('无卡情况', '反映「卡住」信号的稀疏度。100 = 没人卡住；0 = 团队普遍卡住。', h.breakdown.stuckRate)}
         ${subscoreRow('节奏', '过去 7 日产出节奏对比基线。100 = 加速；0 = 明显放缓。', h.breakdown.rhythm)}
         ${subscoreRow('高产出', '高产出工程师占比。100 = 团队普遍高产；0 = 无突出贡献者。', h.breakdown.output)}
         ${subscoreRow('低风险', '反映风险动作（rm -rf / force-push 等）的稀疏度。100 = 干净；0 = 频发。', h.breakdown.risk)}

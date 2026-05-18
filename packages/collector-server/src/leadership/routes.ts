@@ -16,7 +16,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { readdirSync } from 'node:fs';
+import { readdirSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { TtlCache } from './cache.js';
 import type { DateRange } from './types.js';
@@ -125,6 +125,30 @@ export function handleLeadershipRequest(
     sendHtml(res, 200, renderLanding({ hasAuth: !!deps.authToken }));
     return true;
   }
+  // 2026-05-19 QA-5 ops P1: health probe for load balancers / cron canaries.
+  // Returns a small JSON with version, uptime, collector-dir reachability,
+  // LLM-tier state, and the live cache size so an ops dashboard can
+  // page on degradation. Unauth — same trust level as `/landing`, no
+  // sensitive payload. Cache-Control: no-store inherited via sendJson →
+  // applySecurityHeaders, so a probe seeing 200 means "just-now true".
+  if (pathname === '/healthz') {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'method_not_allowed' });
+      return true;
+    }
+    let collectorDirExists = false;
+    try { collectorDirExists = existsSync(deps.collectorDir); } catch { /* ignore */ }
+    sendJson(res, 200, {
+      ok: true,
+      service: 'matrix-riven-collector',
+      now: now().toISOString(),
+      uptimeSec: Math.round(process.uptime()),
+      collectorDirExists,
+      cacheSize: deps.cache.size,
+      authConfigured: !!deps.authToken,
+    });
+    return true;
+  }
   if (pathname === '/sources') {
     if (req.method !== 'GET') {
       sendJson(res, 405, { error: 'method_not_allowed' });
@@ -148,7 +172,7 @@ export function handleLeadershipRequest(
       tab: 'overview',
       demo: true,
     });
-    sendHtml(res, 200, renderOverview(snap, { filterBarHtml }));
+    sendHtml(res, 200, renderOverview(snap, { filterBarHtml, demo: true }));
     return true;
   }
   if (pathname === '/api/overview' && req.method === 'GET' && query.get('demo') === '1') {
@@ -824,7 +848,7 @@ function renderRetroTab(
           mainProjects: deps.mainProjects,
           llmCache: deps.llmCache,
         });
-    const html = renderRetro(snap);
+    const html = renderRetro(snap, { demo: isDemo });
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);
   } catch {
@@ -907,7 +931,7 @@ function renderMemberDetailPage(
         tab: 'people',
         demo: true,
       });
-      const html = renderMemberDetail(demoMember, demoMember.detail, { filterBarHtml });
+      const html = renderMemberDetail(demoMember, demoMember.detail, { filterBarHtml, demo: true });
       deps.cache.set(cacheKey, html);
       sendHtml(res, 200, html);
       return true;
@@ -1018,7 +1042,7 @@ function renderInsightsTab(
       tab: 'insights',
       demo: isDemo,
     });
-    const html = renderInsightsPage(insights, { filterBarHtml, activeSubTab });
+    const html = renderInsightsPage(insights, { filterBarHtml, activeSubTab, demo: isDemo });
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);
   } catch (err) {
@@ -1204,7 +1228,7 @@ function renderActivityTab(
       tab: 'activity',
       demo: isDemo,
     });
-    const html = renderActivityPage(feed, { filterBarHtml });
+    const html = renderActivityPage(feed, { filterBarHtml, demo: isDemo });
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);
   } catch (err) {
