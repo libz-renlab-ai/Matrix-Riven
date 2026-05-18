@@ -114,7 +114,7 @@ export function renderLanding(opts: { hasAuth: boolean }): string {
     <div>Matrix-Riven · Leadership Edition · v0.1</div>
     <div>
       <a href="/overview">实时看板</a> ·
-      <a href="/retro">本周回顾</a> ·
+      <a href="/retro?demo=1">本周回顾</a> ·
       <a href="/sources">数据来源</a>
     </div>
   </footer>

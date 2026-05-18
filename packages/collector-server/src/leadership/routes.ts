@@ -1346,12 +1346,11 @@ function collectProjectsForFilterBar(
 }
 
 /**
- * Phase 3-A helper: apply a focus filter to a demo snapshot. Demo data is
- * static (4 members / 3 projects) so we do a shallow slice — members and
- * projects matching the filter survive, KPI / attention / highlights /
- * collaboration are trimmed by the same predicates. KPI numeric recompute
- * is skipped (demo KPIs are editorial, not derived); the chip bar provides
- * the visual signal that filter is active.
+ * Phase 3-A helper: apply a focus filter to a demo snapshot. QA round 2
+ * (P0): the previous version sliced members/projects but left KPIs and
+ * Attention contradicting the filtered set ("1 位成员" in hero but "高产 2 人"
+ * in KPI). Now KPIs are recomputed from the filtered member set so the
+ * page is internally consistent.
  */
 function applyFilterToDemoSnapshot(snap: OverviewSnapshot, filter: FocusFilter): OverviewSnapshot {
   if (isDefaultFilter(filter)) return snap;
@@ -1390,7 +1389,32 @@ function applyFilterToDemoSnapshot(snap: OverviewSnapshot, filter: FocusFilter):
     return true;
   });
 
-  return { ...snap, members, projects, attention, highlights, collaboration, appliedFilter: filter };
+  // QA round-2 P0: recompute KPIs from filtered subset so the hero numbers
+  // (members/projects count) agree with the KPI card numbers below.
+  const stuckCount = members.filter((m) => m.stateBadge === 'stuck').length;
+  const helpCount = members.filter((m) => m.stateBadge === 'needs_help').length;
+  const riskyCount = members.filter((m) => m.warnings.some((w) => /危险|risky/i.test(w))).length;
+  const highOutputMembers = members.filter((m) => m.deltaVs7dAvgPct > 0.2);
+  const avgHighDelta = highOutputMembers.length === 0 ? 0 : highOutputMembers.reduce((a, m) => a + m.deltaVs7dAvgPct, 0) / highOutputMembers.length;
+  const todayCostUsd = members.reduce((a, m) => a + (m.today?.costUsd ?? 0), 0);
+  const kpis = {
+    ...snap.kpis,
+    teamActivity: { value: members.reduce((a, m) => a + (m.today?.sessions ?? 0), 0), deltaVsAvg: 0 },
+    attention: {
+      value: stuckCount + helpCount + riskyCount,
+      deltaToday: 0,
+      breakdown: { stuck: stuckCount, needsHelp: helpCount, riskyAction: riskyCount },
+    },
+    projects: {
+      active: projects.filter((p) => p.state === 'active').length,
+      maintaining: projects.filter((p) => p.state === 'maintaining').length,
+      dormant: projects.filter((p) => p.state === 'dormant').length,
+    },
+    highOutput: { count: highOutputMembers.length, avgDeltaPct: avgHighDelta },
+    todayCostUsd: Math.round(todayCostUsd * 100) / 100,
+  };
+
+  return { ...snap, members, projects, attention, highlights, collaboration, kpis, appliedFilter: filter };
 }
 
 /**
