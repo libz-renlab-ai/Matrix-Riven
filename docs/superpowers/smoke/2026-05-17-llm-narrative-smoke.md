@@ -317,6 +317,7 @@ POST /landing / /sources:             404 (P2 — falls through)
 | 2026-05-18 round-2 (allPrompts cap test) | 791 | 52 |
 | 2026-05-18 round-3 (Retro nav variant) | 791 | 52 |
 | 2026-05-18 round-4 (3 new routes tests + redactor still passes) | 796 | 52 |
+| 2026-05-18 round-5 (POST 405 × 4 routes with security headers) | 800 | 52 |
 
 ### Adversarial rounds (2026-05-18)
 
@@ -324,8 +325,28 @@ POST /landing / /sources:             404 (P2 — falls through)
   parity, isLeadershipPath, etc). All landed in commit `028e0cd`.
 - **Round 3** — found 2 P1 (16/17 contradiction on hero lead, `/retro`
   orphan + wrong active tab). Both landed in commit `028e0cd`.
-- **Round 4 (this batch)** — dedup redactor + e2e LLM-on test + POST 405
-  on `/retro` + smoke doc. To be committed.
+- **Round 4** — dedup redactor + e2e LLM-on test + POST 405 on `/retro`
+  + smoke doc. Landed in `207a468`.
+- **Round 4b** — truthful detector count (17 → 16, table renders 16) +
+  drop Google Fonts `@import` (the `/sources` "不外发给第三方" claim was
+  contradicted by every page beaconing fonts.googleapis.com). Landed in
+  `a071a53`.
+- **Round 5** — 1 P0 deferred (see below), 2 fixes landed:
+  - **P1**: POST/HEAD to `/landing`, `/sources`, `/activity`, `/insights`
+    used to fall through to outer 404 with no security headers — now
+    405 + `nosniff` / `DENY` / `no-referrer` like every other leadership
+    route. Regression test added (`POST %s returns 405 with security
+    headers` × 4).
+  - **P2**: README leadership routes list now mentions `/retro`,
+    `/activity`, `/insights`, and documents the 405-on-non-GET contract.
+  - **P0 deferred**: `DEFAULT_ENDPOINT = 'http://192.168.22.88:8933'` in
+    `packages/shared/src/config.ts:88` is shipped to clients via the
+    digital-twin uploader installer (not the launching dashboard).
+    `README.md:97` already acknowledges this is an upstream leftover
+    internal IP. The dashboard launching tomorrow doesn't depend on
+    this value; changing it would touch INSTALL.md (6 mentions),
+    `install-client.mjs:373`, and test fixtures across 3 packages.
+    Out of scope for the launch fix-train; treat as a Day-2 cleanup.
 
 ## Evidence files
 

@@ -148,10 +148,14 @@ node packages/collector-server/dist/bin-prod-server.cjs
 **Leadership（GET，配 token 后强制鉴权）：**
 - `GET /` 或 `GET /overview` — 实时领导仪表盘（Overview tab）
 - `GET /people` / `GET /projects` — 全量成员/项目页
+- `GET /retro` — 周回顾（本周交付/需要看一眼/突出表现/沉睡项目）
+- `GET /activity` / `GET /insights` — Phase 3 占位 stub（带 nav + 主题切换）
 - `GET /api/overview[?range=today|24h|7d|30d]` — Overview 快照 JSON
 - `GET /api/members/<localpart>` — 单个成员详情（含 slideover HTML 片段）
 - `GET /api/projects/<name>` — 单个项目详情
 - `GET /api/llm/status` — LLM 工作状态 ops 端点：`{enabled, cache: {entries, bytes, todayCostUsd, byTier}}`
+
+非 GET 请求到任意 HTML/JSON leadership 路由都返回 `405 method_not_allowed`（带 `x-content-type-options: nosniff` / `x-frame-options: DENY` / `referrer-policy: no-referrer`）。
 
 ### 端到端起一个完整 demo
 

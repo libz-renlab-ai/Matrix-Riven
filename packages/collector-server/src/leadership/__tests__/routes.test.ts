@@ -356,6 +356,21 @@ describe('5 leadership tab routes (P-B2)', () => {
     expect(res.status).toBe(405);
   });
 
+  it.each(['/landing', '/sources', '/activity', '/insights'])(
+    'POST %s returns 405 with security headers (round-5 P1)',
+    async (path) => {
+      // 2026-05-18 round-5 audit: these four routes used to fall through to
+      // the outer dispatcher's 404 (no security headers) on non-GET — which
+      // contradicted /landing's "全路由响应都带 nosniff + X-Frame-Options"
+      // copy. Now any unsupported method lands at 405 with full headers.
+      const res = await fetch(`${baseUrl}${path}`, { method: 'POST' });
+      expect(res.status).toBe(405);
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(res.headers.get('x-frame-options')).toBe('DENY');
+      expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+    },
+  );
+
   it('GET /activity is a stub page', async () => {
     const res = await fetch(`${baseUrl}/activity`);
     expect(res.status).toBe(200);

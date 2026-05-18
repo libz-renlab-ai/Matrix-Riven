@@ -97,11 +97,25 @@ export function handleLeadershipRequest(
   // ── Public unauth routes ────────────────────────────────────────────────────
   // These render before the auth gate so a CTO clicking the link sees pages
   // without 401: landing (marketing), sources (transparency), demo overview.
-  if (pathname === '/landing' && req.method === 'GET') {
+  // 2026-05-18 round-5 audit (P1): non-GET to these public routes used to
+  // fall through to the outer dispatcher's 404 with no security headers —
+  // which contradicted the /landing copy claiming "全路由响应都带 nosniff
+  // + X-Frame-Options". Now any unsupported method returns 405 here (still
+  // public, still no auth required) so headers + status are consistent
+  // with /overview, /retro, /people, /projects.
+  if (pathname === '/landing') {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'method_not_allowed' });
+      return true;
+    }
     sendHtml(res, 200, renderLanding({ hasAuth: !!deps.authToken }));
     return true;
   }
-  if (pathname === '/sources' && req.method === 'GET') {
+  if (pathname === '/sources') {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'method_not_allowed' });
+      return true;
+    }
     sendHtml(res, 200, renderSources());
     return true;
   }
@@ -413,11 +427,19 @@ export function handleLeadershipRequest(
     return renderProjectsTab(req, res, deps, query, now);
   }
   // Activity + Insights remain stubs — Phase 3 scope.
-  if (pathname === '/activity' && req.method === 'GET') {
+  if (pathname === '/activity') {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'method_not_allowed' });
+      return true;
+    }
     sendHtml(res, 200, renderStubTab('activity', 'Activity'));
     return true;
   }
-  if (pathname === '/insights' && req.method === 'GET') {
+  if (pathname === '/insights') {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'method_not_allowed' });
+      return true;
+    }
     sendHtml(res, 200, renderStubTab('insights', 'Insights'));
     return true;
   }
