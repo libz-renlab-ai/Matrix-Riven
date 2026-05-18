@@ -12,7 +12,17 @@
  * v7 selectors.
  */
 export const LEADERSHIP_CSS_V2 = `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;450;500;600;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap');
+/*
+ * 2026-05-18 launch audit (P1-B): removed Google Fonts @import that
+ * leaked a third-party request from every page render. The /sources
+ * page literally claims "不外发给第三方"; a CTO with DevTools open
+ * would catch the contradiction inside 30 seconds.
+ *
+ * The serif + sans + mono families below already include native
+ * fallbacks (system-ui, Georgia, Menlo, …) so the visual identity
+ * holds without the network call. Air-gapped LAN installs now work
+ * with no warning banner.
+ */
 
 /* ===== v7 Spatial — verbatim from dashboard-redesign-v7-spatial.html ===== */
 

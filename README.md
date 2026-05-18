@@ -137,7 +137,7 @@ node packages/collector-server/dist/bin-prod-server.cjs
 
 **Public（不需 token）：**
 - `GET /landing` — 公开 landing page，给冷点击者看
-- `GET /sources` — 数据来源 + 17 个信号检测器的透明页
+- `GET /sources` — 数据来源 + 16 个信号检测器的透明页
 - `GET /overview?demo=1` — Demo 看板，跑在烤进去的 fixture 上（合成数据，无 PII）
 - `GET /api/overview?demo=1` — 同上的 JSON 形式
 

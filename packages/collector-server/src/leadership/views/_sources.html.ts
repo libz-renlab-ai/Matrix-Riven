@@ -99,7 +99,7 @@ export function renderSources(): string {
     <tbody>${sources}</tbody>
   </table>
 
-  <h2>信号检测器（17 个）</h2>
+  <h2>信号检测器（16 个）</h2>
   <table>
     <thead><tr><th style="width:60px;">ID</th><th style="width:25%;">名称</th><th>触发条件</th></tr></thead>
     <tbody>${detectors}</tbody>

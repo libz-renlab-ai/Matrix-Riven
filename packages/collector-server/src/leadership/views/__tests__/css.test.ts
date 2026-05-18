@@ -24,10 +24,16 @@ describe('v7 Spatial design tokens (P-B1)', () => {
     expect(flat).toContain(token.replace(/\s+/g, ' '));
   });
 
-  it('imports Inter, JetBrains Mono, and Newsreader from Google Fonts', () => {
-    expect(css).toContain('fonts.googleapis.com');
+  it('uses Inter, JetBrains Mono, Newsreader family stacks with native fallbacks', () => {
+    // 2026-05-18 launch audit P1-B: the previous Google Fonts @import was
+    // removed so every page render no longer beacons to fonts.googleapis.com
+    // (the /sources page claims "不外发给第三方"). We still NAME the
+    // designer-chosen families so a browser that ships them (or a future
+    // self-hosted woff2) picks them up; the system-font fallbacks take over
+    // otherwise.
+    expect(css).not.toContain('fonts.googleapis.com');
+    expect(css).not.toContain('@import url(');
     expect(css).toContain('Inter');
-    expect(css).toContain('JetBrains+Mono');
     expect(css).toContain('Newsreader');
   });
 
