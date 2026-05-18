@@ -22,12 +22,18 @@ import {
 } from './_overview-fragments.js';
 import { renderSlideoverShell } from './_slideover.html.js';
 import { CLIENT_REFRESH_SCRIPT } from './_refresh.js.js';
+import { FILTER_BAR_CSS, FILTER_BAR_SCRIPT } from './_filter-bar.client.js';
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-export function renderOverview(snapshot: OverviewSnapshot): string {
+export interface RenderOverviewExtras {
+  /** Phase 3-A. Pre-rendered filter bar HTML to inject below the nav. */
+  filterBarHtml?: string;
+}
+
+export function renderOverview(snapshot: OverviewSnapshot, extras: RenderOverviewExtras = {}): string {
   const { members, projects, range } = snapshot;
 
   const membersSection = members.length === 0
@@ -45,11 +51,13 @@ export function renderOverview(snapshot: OverviewSnapshot): string {
 <head>
 <meta charset="utf-8">
 <title>Leadership · Matrix-Riven</title>
-<style>${LEADERSHIP_CSS}</style>
+<style>${LEADERSHIP_CSS}
+${FILTER_BAR_CSS}</style>
 </head>
 <body>
 <div class="shell">
 ${renderNav('overview', { rangeLabel: navRangeLabel })}
+${extras.filterBarHtml ?? ''}
 ${snapshot.staleness ? renderStaleBanner(snapshot.staleness) : ''}
 ${renderHeroFragment(snapshot)}
 ${renderKpisFragment(snapshot)}
@@ -61,6 +69,7 @@ ${renderCollabFragment(snapshot)}
 </div>
 ${renderSlideoverShell()}
 <script>${CLIENT_REFRESH_SCRIPT}</script>
+<script>${FILTER_BAR_SCRIPT}</script>
 </body>
 </html>`;
 }

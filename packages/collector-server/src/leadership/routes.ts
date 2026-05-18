@@ -53,6 +53,10 @@ import { renderNav, type ActiveTab } from './views/_nav.html.js';
 import { renderSlideoverShell } from './views/_slideover.html.js';
 import { CLIENT_REFRESH_SCRIPT } from './views/_refresh.js.js';
 import { LEADERSHIP_CSS } from './views/styles.css.js';
+import { renderFilterBar } from './views/_filter-bar.html.js';
+import { FILTER_BAR_CSS, FILTER_BAR_SCRIPT } from './views/_filter-bar.client.js';
+import { parseFocusFromQuery, focusFilterCacheKey, isDefaultFilter } from './focus-filter.js';
+import type { FocusFilter, OverviewSnapshot } from './types.js';
 
 // ── public interface ──────────────────────────────────────────────────────────
 
@@ -228,14 +232,14 @@ export function handleLeadershipRequest(
     const nowDate = now();
     const range = parseRange(rangeStr, nowDate);
     if (range === null) {
-      sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+      sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
       return true;
     }
-    const cacheKey = `/api/overview|${range.label}`;
-    // P-C1: cache holds the *enriched* payload + a pre-computed ETag, so
-    // repeated polls within the same TTL window return both an identical
-    // body and an identical ETag (so any client honouring If-None-Match
-    // gets a 304 on the second hit).
+    // Phase 3-A: focus filter on /api/overview too — the polling loop sends
+    // the same query string the page is mounted with, so the JSON snapshot
+    // must apply the same filter or live polling resets the view.
+    const apiFilter = parseFocusFromQuery(query);
+    const cacheKey = `/api/overview|${range.label}${focusFilterCacheKey(apiFilter)}`;
     let entry = deps.cache.get(cacheKey) as
       | { body: Record<string, unknown>; etag: string }
       | undefined;
@@ -247,6 +251,7 @@ export function handleLeadershipRequest(
           now: nowDate,
           mainProjects: deps.mainProjects,
           llmCache: deps.llmCache,
+          filter: apiFilter,
         });
         // /api/overview is consumed by the Overview-tab live polling loop,
         // which swaps these fragments in via outerHTML. Apply the same
@@ -546,15 +551,15 @@ function renderOverviewTab(
     sendJson(res, 405, { error: 'method_not_allowed' });
     return true;
   }
-  const rangeStr = query.get('range') ?? undefined;
   const nowDate = now();
-  const range = parseRange(rangeStr, nowDate);
+  const filter = parseFocusFromQuery(query);
+  // Phase 3-A: filter.range overrides the legacy ?range= param.
+  const range = parseRange(filter.range === 'today' && !query.has('range') ? undefined : filter.range, nowDate);
   if (range === null) {
-    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
     return true;
   }
-  // Single cache key — /  and  /overview  produce the same payload.
-  const cacheKey = `html|/overview|${range.label}`;
+  const cacheKey = `html|/overview|${range.label}${focusFilterCacheKey(filter)}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
     sendHtml(res, 200, cached as string);
@@ -567,8 +572,16 @@ function renderOverviewTab(
       now: nowDate,
       mainProjects: deps.mainProjects,
       llmCache: deps.llmCache,
+      filter,
     });
-    const html = renderOverview(snap);
+    const filterBarHtml = renderFilterBar({
+      filter,
+      members: extractMemberLocalParts(snap),
+      projects: snap.projects.map((p) => p.name),
+      tab: 'overview',
+      demo: false,
+    });
+    const html = renderOverview(snap, { filterBarHtml });
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);
   } catch {
@@ -594,17 +607,15 @@ function renderPeopleTab(
     sendJson(res, 405, { error: 'method_not_allowed' });
     return true;
   }
-  const range = parseRange(query.get('range') ?? undefined, now());
+  const nowDate = now();
+  const filter = parseFocusFromQuery(query);
+  const range = parseRange(filter.range === 'today' && !query.has('range') ? undefined : filter.range, nowDate);
   if (range === null) {
-    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
     return true;
   }
-  // 2026-05-18 round-15 audit P0: /people?demo=1 used to render an
-  // empty real-data shell because we never checked the demo flag here.
-  // The landing CTA → /overview?demo=1 → click "People" nav tab flow
-  // cliffed silently. Mirror the /overview?demo=1 branch.
   const isDemo = query.get('demo') === '1';
-  const cacheKey = `html|/people|${range.label}|${isDemo ? 'demo' : 'real'}`;
+  const cacheKey = `html|/people|${range.label}|${isDemo ? 'demo' : 'real'}${focusFilterCacheKey(filter)}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
     sendHtml(res, 200, cached as string);
@@ -616,16 +627,24 @@ function renderPeopleTab(
       : buildOverviewSnapshot({
           collectorDir: deps.collectorDir,
           range,
-          now: now(),
+          now: nowDate,
           mainProjects: deps.mainProjects,
           llmCache: deps.llmCache,
+          filter,
         });
     const tightHero = `<header id="hero" class="hero fade-in"><div><h1 class="serif">团队 <em>${snap.members.length} 人</em></h1><div class="sub">完整成员视图 · 数据每 30 秒刷新</div></div></header>`;
     const body = snap.members.length === 0
       ? `<section id="members" class="section fade-in"><div class="lh-empty">这个窗口内没有成员活动</div></section>`
       : renderMembersFragment(snap); // no limit → full grid
     const banner = snap.staleness ? renderStaleBanner(snap.staleness) : '';
-    const html = renderTabPage('people', rangeToNavLabelLocal(range.label), banner + tightHero + body);
+    const filterBarHtml = renderFilterBar({
+      filter,
+      members: extractMemberLocalParts(snap),
+      projects: snap.projects.map((p) => p.name),
+      tab: 'people',
+      demo: isDemo,
+    });
+    const html = renderTabPage('people', rangeToNavLabelLocal(range.label), banner + tightHero + body, filterBarHtml);
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);
   } catch {
@@ -648,14 +667,15 @@ function renderProjectsTab(
     sendJson(res, 405, { error: 'method_not_allowed' });
     return true;
   }
-  const range = parseRange(query.get('range') ?? undefined, now());
+  const nowDate = now();
+  const filter = parseFocusFromQuery(query);
+  const range = parseRange(filter.range === 'today' && !query.has('range') ? undefined : filter.range, nowDate);
   if (range === null) {
-    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
     return true;
   }
-  // 2026-05-18 round-15 audit P0: mirror of the /people demo branch.
   const isDemo = query.get('demo') === '1';
-  const cacheKey = `html|/projects|${range.label}|${isDemo ? 'demo' : 'real'}`;
+  const cacheKey = `html|/projects|${range.label}|${isDemo ? 'demo' : 'real'}${focusFilterCacheKey(filter)}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
     sendHtml(res, 200, cached as string);
@@ -667,16 +687,24 @@ function renderProjectsTab(
       : buildOverviewSnapshot({
           collectorDir: deps.collectorDir,
           range,
-          now: now(),
+          now: nowDate,
           mainProjects: deps.mainProjects,
           llmCache: deps.llmCache,
+          filter,
         });
     const tightHero = `<header id="hero" class="hero fade-in"><div><h1 class="serif">项目 <em>${snap.projects.length} 个</em></h1><div class="sub">完整项目视图 · 数据每 30 秒刷新</div></div></header>`;
     const body = snap.projects.length === 0
       ? `<section id="projects" class="section fade-in"><div class="lh-empty">这个窗口内没有项目活动</div></section>`
       : renderProjectsFragment(snap); // no limit → full list
     const banner = snap.staleness ? renderStaleBanner(snap.staleness) : '';
-    const html = renderTabPage('projects', rangeToNavLabelLocal(range.label), banner + tightHero + body);
+    const filterBarHtml = renderFilterBar({
+      filter,
+      members: extractMemberLocalParts(snap),
+      projects: snap.projects.map((p) => p.name),
+      tab: 'projects',
+      demo: isDemo,
+    });
+    const html = renderTabPage('projects', rangeToNavLabelLocal(range.label), banner + tightHero + body, filterBarHtml);
     deps.cache.set(cacheKey, html);
     sendHtml(res, 200, html);
   } catch {
@@ -742,24 +770,43 @@ function renderRetroTab(
  * Projects visually consistent and lets the slide-over open from member tiles
  * / project rows without duplicating markup.
  */
-function renderTabPage(active: ActiveTab, rangeLabel: string, innerHtml: string): string {
+function renderTabPage(active: ActiveTab, rangeLabel: string, innerHtml: string, filterBarHtml: string = ''): string {
   const title = active.charAt(0).toUpperCase() + active.slice(1);
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <title>${escapeHtml(title)} · Matrix·Riven</title>
-<style>${LEADERSHIP_CSS}</style>
+<style>${LEADERSHIP_CSS}
+${FILTER_BAR_CSS}</style>
 </head>
 <body>
 <div class="shell">
 ${renderNav(active, { rangeLabel })}
+${filterBarHtml}
 ${innerHtml}
 </div>
 ${renderSlideoverShell()}
 <script>${CLIENT_REFRESH_SCRIPT}</script>
+<script>${FILTER_BAR_SCRIPT}</script>
 </body>
 </html>`;
+}
+
+/**
+ * Phase 3-A helper: pull every member's email local-part out of a snapshot
+ * for the filter dropdown options. Skips empty / fallback emails.
+ */
+function extractMemberLocalParts(snap: OverviewSnapshot): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const m of snap.members) {
+    const local = (m.email.split('@')[0] ?? '').trim();
+    if (!local || seen.has(local)) continue;
+    seen.add(local);
+    out.push(local);
+  }
+  return out;
 }
 
 /** Local copy of rangeToNavLabel (duplicated to avoid cross-imports). */
