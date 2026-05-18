@@ -350,3 +350,43 @@ export const DEFAULT_FOCUS_FILTER: FocusFilter = { range: 'today' };
 export function isDefaultFocusFilter(f: FocusFilter): boolean {
   return !f.focus && !f.project && !f.state && f.range === 'today' && !f.from && !f.to;
 }
+
+// =====================================================================
+// Phase 3-B · Activity flow
+// =====================================================================
+
+/** All event types surfaced on the Activity tab. Strings match icons in views. */
+export type ActivityEventType =
+  | 'session'    // AI session captured
+  | 'commit'     // git commit milestone (extracted from bash)
+  | 'push'       // git push
+  | 'pr_open'
+  | 'pr_merged'
+  | 'release'
+  | 'tag';
+
+export interface ActivityEvent {
+  ts: string;                        // ISO timestamp
+  type: ActivityEventType;
+  by: string;                        // member email (full or local-part — view normalises)
+  project: string;                   // project name
+  summary: string;                   // one-line summary (prompt preview / commit msg / etc.)
+  detail?: {
+    sessionId?: string;
+    tokens?: number;
+    durationMs?: number;
+    promptFull?: string;
+    commitSha?: string;
+    githubUrl?: string;
+  };
+}
+
+export interface ActivityFeedSnapshot {
+  schemaVersion: 1;
+  range: { start: string; end: string; label: string };
+  events: ActivityEvent[];           // time-descending
+  hasMore: boolean;
+  nextCursor?: string;               // ISO timestamp; pass as ?before=
+  computedAt: string;
+  appliedFilter?: FocusFilter;
+}
