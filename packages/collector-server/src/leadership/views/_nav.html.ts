@@ -21,10 +21,9 @@ const TABS: readonly TabSpec[] = [
   { id: 'people', label: 'People', href: '/people' },
   { id: 'projects', label: 'Projects', href: '/projects' },
   { id: 'retro', label: 'Retro', href: '/retro' },
-  // 2026-05-18 round-6 audit P2: these two are still Phase-3 stubs. Set the
-  // click expectation in the label so a cold customer doesn't burn a click
-  // hitting "尚未实现". Stays in the nav so the roadmap is visible.
-  { id: 'activity', label: 'Activity · soon', href: '/activity' },
+  // 2026-05-19 Phase 3-B: Activity promoted from stub to real page.
+  { id: 'activity', label: 'Activity', href: '/activity' },
+  // Insights still phase-3 work in progress.
   { id: 'insights', label: 'Insights · soon', href: '/insights' },
 ];
 

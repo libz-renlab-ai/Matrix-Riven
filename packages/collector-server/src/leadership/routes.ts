@@ -57,6 +57,8 @@ import { renderFilterBar } from './views/_filter-bar.html.js';
 import { FILTER_BAR_CSS, FILTER_BAR_SCRIPT } from './views/_filter-bar.client.js';
 import { parseFocusFromQuery, focusFilterCacheKey, isDefaultFilter } from './focus-filter.js';
 import type { FocusFilter, OverviewSnapshot } from './types.js';
+import { buildActivityFeed } from './activity-feed.js';
+import { renderActivityPage } from './views/activity.html.js';
 
 // ── public interface ──────────────────────────────────────────────────────────
 
@@ -492,14 +494,20 @@ export function handleLeadershipRequest(
   if (pathname === '/projects') {
     return renderProjectsTab(req, res, deps, query, now);
   }
-  // Activity + Insights remain stubs — Phase 3 scope.
+  // Phase 3-B: /activity is now a real page (was stub).
   if (pathname === '/activity') {
     if (req.method !== 'GET') {
       sendJson(res, 405, { error: 'method_not_allowed' });
       return true;
     }
-    sendHtml(res, 200, renderStubTab('activity', 'Activity'));
-    return true;
+    return renderActivityTab(req, res, deps, query, now);
+  }
+  if (pathname === '/api/activity') {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'method_not_allowed' });
+      return true;
+    }
+    return handleActivityApi(req, res, deps, query, now);
   }
   if (pathname === '/insights') {
     if (req.method !== 'GET') {
@@ -800,6 +808,204 @@ ${renderSlideoverShell()}
 <script>${FILTER_BAR_SCRIPT}</script>
 </body>
 </html>`;
+}
+
+/**
+ * Phase 3-B: /activity tab handler.
+ */
+function renderActivityTab(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: LeadershipRouteDeps,
+  query: URLSearchParams,
+  now: () => Date,
+): boolean {
+  const nowDate = now();
+  const filter = parseFocusFromQuery(query);
+  const range = parseRange(filter.range === 'today' && !query.has('range') ? '7d' : filter.range, nowDate);
+  if (range === null) {
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    return true;
+  }
+  const isDemo = query.get('demo') === '1';
+  const beforeStr = query.get('before');
+  const beforeTs = beforeStr ? new Date(beforeStr) : undefined;
+  const cacheKey = `html|/activity|${range.label}|${isDemo ? 'demo' : 'real'}${focusFilterCacheKey(filter)}|before=${beforeStr ?? ''}`;
+  const cached = deps.cache.get(cacheKey);
+  if (cached !== undefined) {
+    sendHtml(res, 200, cached as string);
+    return true;
+  }
+  try {
+    const feed = isDemo
+      ? buildDemoActivityFeed(filter, nowDate, beforeTs)
+      : buildActivityFeed({
+          collectorDir: deps.collectorDir,
+          range,
+          filter,
+          now: nowDate,
+          beforeTs,
+        });
+    // For the filter bar we need member/project options — pull from a fresh overview snapshot
+    // (cheap on demo path; on real path the cache makes this acceptable).
+    const filterBarHtml = renderFilterBar({
+      filter,
+      members: collectMembersForFilterBar(deps, range, nowDate, isDemo),
+      projects: collectProjectsForFilterBar(deps, range, nowDate, isDemo),
+      tab: 'activity',
+      demo: isDemo,
+    });
+    const html = renderActivityPage(feed, { filterBarHtml });
+    deps.cache.set(cacheKey, html);
+    sendHtml(res, 200, html);
+  } catch (err) {
+    process.stderr.write(
+      `[leadership] 500 on /activity: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
+    );
+    sendHtml(res, 500, renderOverviewError());
+  }
+  return true;
+}
+
+function handleActivityApi(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: LeadershipRouteDeps,
+  query: URLSearchParams,
+  now: () => Date,
+): boolean {
+  const nowDate = now();
+  const filter = parseFocusFromQuery(query);
+  const range = parseRange(filter.range === 'today' && !query.has('range') ? '7d' : filter.range, nowDate);
+  if (range === null) {
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    return true;
+  }
+  const isDemo = query.get('demo') === '1';
+  const beforeStr = query.get('before');
+  const beforeTs = beforeStr ? new Date(beforeStr) : undefined;
+  try {
+    const feed = isDemo
+      ? buildDemoActivityFeed(filter, nowDate, beforeTs)
+      : buildActivityFeed({
+          collectorDir: deps.collectorDir,
+          range,
+          filter,
+          now: nowDate,
+          beforeTs,
+        });
+    sendJson(res, 200, feed);
+  } catch (err) {
+    process.stderr.write(
+      `[leadership] 500 on /api/activity: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
+    );
+    sendJson(res, 500, { error: 'internal' });
+  }
+  return true;
+}
+
+/**
+ * Demo activity feed: synthesize events from getDemoSnapshot().members'
+ * recent activity. Each demo member gets 2-3 session events spread across
+ * the past 48h; each demo project gets 1 commit milestone.
+ */
+function buildDemoActivityFeed(
+  filter: FocusFilter,
+  now: Date,
+  beforeTs: Date | undefined,
+): ReturnType<typeof buildActivityFeed> {
+  const snap = getDemoSnapshot();
+  const events: import('./types.js').ActivityEvent[] = [];
+  const nowMs = now.getTime();
+  // Sessions: 3 per member over past 48h
+  snap.members.forEach((m, mi) => {
+    for (let i = 0; i < 3; i++) {
+      const hoursAgo = mi * 6 + i * 8;
+      const ts = new Date(nowMs - hoursAgo * 3600 * 1000).toISOString();
+      events.push({
+        ts,
+        type: 'session',
+        by: m.email,
+        project: m.topProject ?? snap.projects[0]?.name ?? 'demo',
+        summary: `${m.displayName} 的会话 #${i + 1} · 演示数据`,
+        detail: { sessionId: `demo-${m.email}-${i}`, tokens: 1200 + i * 800, durationMs: 25 * 60 * 1000 },
+      });
+    }
+  });
+  // Milestones: 1 commit per project
+  snap.projects.forEach((p, pi) => {
+    const ts = new Date(nowMs - (4 + pi * 12) * 3600 * 1000).toISOString();
+    events.push({
+      ts,
+      type: 'commit',
+      by: snap.members[pi % snap.members.length]!.email,
+      project: p.name,
+      summary: `feat(${p.name}): 演示提交 #${pi + 1}`,
+    });
+  });
+  // Apply filter
+  const focus = filter.focus?.toLowerCase();
+  const project = filter.project?.toLowerCase();
+  let filtered = events.filter((e) => {
+    if (focus && (e.by.split('@')[0] ?? '').toLowerCase() !== focus) return false;
+    if (project && e.project.toLowerCase() !== project) return false;
+    return true;
+  });
+  filtered.sort((a, b) => (a.ts < b.ts ? 1 : -1));
+  if (beforeTs) {
+    const cutoff = beforeTs.toISOString();
+    filtered = filtered.filter((e) => e.ts < cutoff);
+  }
+  return {
+    schemaVersion: 1,
+    range: { start: new Date(nowMs - 7 * 24 * 3600 * 1000).toISOString(), end: now.toISOString(), label: '7d' },
+    events: filtered,
+    hasMore: false,
+    computedAt: now.toISOString(),
+    appliedFilter: filter,
+  };
+}
+
+function collectMembersForFilterBar(
+  deps: LeadershipRouteDeps,
+  range: DateRange,
+  now: Date,
+  isDemo: boolean,
+): string[] {
+  if (isDemo) return extractMemberLocalParts(getDemoSnapshot());
+  try {
+    const snap = buildOverviewSnapshot({
+      collectorDir: deps.collectorDir,
+      range,
+      now,
+      mainProjects: deps.mainProjects,
+      llmCache: deps.llmCache,
+    });
+    return extractMemberLocalParts(snap);
+  } catch {
+    return [];
+  }
+}
+
+function collectProjectsForFilterBar(
+  deps: LeadershipRouteDeps,
+  range: DateRange,
+  now: Date,
+  isDemo: boolean,
+): string[] {
+  if (isDemo) return getDemoSnapshot().projects.map((p) => p.name);
+  try {
+    const snap = buildOverviewSnapshot({
+      collectorDir: deps.collectorDir,
+      range,
+      now,
+      mainProjects: deps.mainProjects,
+      llmCache: deps.llmCache,
+    });
+    return snap.projects.map((p) => p.name);
+  } catch {
+    return [];
+  }
 }
 
 /**

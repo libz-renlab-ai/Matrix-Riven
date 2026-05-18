@@ -371,11 +371,12 @@ describe('5 leadership tab routes (P-B2)', () => {
     },
   );
 
-  it('GET /activity is a stub page', async () => {
+  it('GET /activity is now a real page (Phase 3-B)', async () => {
     const res = await fetch(`${baseUrl}/activity`);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('尚未实现');
+    expect(html).not.toContain('尚未实现');
+    expect(html).toContain('活动流');
     expect(html).toMatch(/class="tab active"[^>]*>[^<]*Activity/);
   });
 
