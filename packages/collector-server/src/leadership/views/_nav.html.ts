@@ -80,19 +80,22 @@ const THEME_TOGGLE_SCRIPT = `(function() {
         try { localStorage.setItem(KEY, next || 'light'); } catch (e) {}
       });
     }
-    // 2026-05-18 round-15 audit P0: when the current page is in demo
-    // mode (?demo=1), the nav tab links must propagate the flag too —
-    // otherwise the marketing flow (landing CTA → /overview?demo=1 →
-    // click "People") drops back into the empty real-data path. Cheap
-    // client-side rewrite at bind-time.
+    // 2026-05-18 round-15/17 audit: when the current page is in demo
+    // mode (?demo=1), every same-origin link must propagate the flag --
+    // not just a.tab. Round-17 surfaced the /retro?demo=1 back-link
+    // (a.rt-back href=/overview) as a P1 because the original selector
+    // missed it; broaden to any internal <a> that doesn't already carry
+    // demo=1 and isn't an explicit "leave demo" target.
     function propagateDemo() {
       try {
         if (!/(\\?|&)demo=1(&|$)/.test(location.search)) return;
-        var anchors = document.querySelectorAll('a.tab');
+        var anchors = document.querySelectorAll('a[href^="/"]');
         for (var i = 0; i < anchors.length; i++) {
           var a = anchors[i];
           var href = a.getAttribute('href') || '';
+          // Skip already-tagged and explicit data-real-link opt-outs.
           if (href.indexOf('demo=1') !== -1) continue;
+          if (a.hasAttribute('data-real-link')) continue;
           a.setAttribute('href', href + (href.indexOf('?') >= 0 ? '&' : '?') + 'demo=1');
         }
       } catch (e) {}

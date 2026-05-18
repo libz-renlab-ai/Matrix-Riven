@@ -50,6 +50,13 @@ describe('CLIENT_REFRESH_SCRIPT slide-over wiring (P-B6)', () => {
     expect(CLIENT_REFRESH_SCRIPT).toContain('location.search');
     expect(CLIENT_REFRESH_SCRIPT).toContain('demo=1');
   });
+
+  it('propagates demo flag from location.search into pollOverview fetch (round-15 P0)', () => {
+    // pollOverview's 30 s tick must also carry the demo flag; otherwise
+    // the next tick wipes demo content with an empty real-data response.
+    expect(CLIENT_REFRESH_SCRIPT).toContain('ovQs');
+    expect(CLIENT_REFRESH_SCRIPT).toMatch(/api\/overview['"`] \+ ovQs/);
+  });
 });
 
 describe('overview live polling (P-C2)', () => {
