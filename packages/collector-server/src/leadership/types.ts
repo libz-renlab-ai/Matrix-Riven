@@ -268,6 +268,14 @@ export interface OverviewSnapshot {
   /** Three-line leader daily brief (T5). Rendered as a briefBox between the
    * hero greeting and the KPI row. Optional. */
   llmBrief?: string[];
+  /**
+   * Phase 3-A. Filter that was applied to derive the KPIs / attention /
+   * highlights / collaboration on this snapshot. `members` and `projects`
+   * remain the full team set — the view reads this filter to dim non-
+   * matching entries (per spec §3.2 #4). Absent when no filter was applied
+   * (preserves pre-3A wire schema for unfiltered traffic).
+   */
+  appliedFilter?: FocusFilter;
 }
 
 /**

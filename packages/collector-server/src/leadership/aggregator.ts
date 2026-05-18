@@ -21,7 +21,9 @@ import type {
   DateRange,
   AttentionItem,
   HighlightEvent,
+  FocusFilter,
 } from './types.js';
+import { applyFocusFilter, isDefaultFilter } from './focus-filter.js';
 import { redactForLLM } from './llm/redact.js';
 import { computeActivity, computeFocus, computeRhythmDelta } from './signals/activity.js';
 import { detectLowActivity } from './signals/slacking.js';
@@ -108,6 +110,14 @@ export interface BuildOverviewInput {
   llmCache?: LlmCache;
   /** ISO date string (YYYY-MM-DD) used for the T5 cache key. Defaults to today. */
   today?: string;
+  /**
+   * Phase 3-A. When set + non-default, the snapshot's KPI / attention /
+   * highlights / collaboration are recomputed against the filtered subset
+   * (focus / project / state). The `members` and `projects` lists stay
+   * full so the view can dim non-matching entries instead of hiding them.
+   * Absent or default → byte-identical pre-3A output.
+   */
+  filter?: FocusFilter;
 }
 
 export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapshot {
@@ -240,6 +250,82 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
   highlights.sort((a, b) => b.ts.localeCompare(a.ts));
   const highlightsTop = highlights.slice(0, 10);
 
+  // ── Phase 3-A · filter recompute ────────────────────────────────────────────
+  // When a focus filter is active, recompute KPI / attention / highlights /
+  // collaboration against the focused subset; members[] and projects[] stay
+  // full so the view dims non-matching entries (spec §3.2 #4).
+  // Default filter (range='today' + nothing else) short-circuits to byte-
+  // identical pre-3A behaviour.
+  let finalKpis = kpis;
+  let finalAttention = attention;
+  let finalHighlights = highlightsTop;
+  let finalCollaboration = collaboration;
+  if (input.filter && !isDefaultFilter(input.filter)) {
+    const refilter = applyFocusFilter(inRange, input.filter, input.now);
+    // Stage 2 — state filter on top of member state badges already on `members`.
+    const focusedMembers = members.filter((m) => {
+      if (input.filter!.focus) {
+        const local = (m.email.split('@')[0] ?? '').toLowerCase();
+        if (local !== input.filter!.focus.toLowerCase()) return false;
+      }
+      if (input.filter!.state && m.stateBadge !== input.filter!.state) return false;
+      return true;
+    });
+    const focusedEmails = new Set(focusedMembers.map((m) => m.email));
+    const focusedSessions = refilter.filter((s) => focusedEmails.has(s.envelope.userId));
+
+    // Re-derive KPIs on focused set.
+    const stuck2 = focusedMembers.filter((m) => m.stateBadge === 'stuck').length;
+    const help2 = focusedMembers.filter((m) => m.stateBadge === 'needs_help').length;
+    const risky2 = focusedMembers.filter((m) => m.warnings.some((w) => /危险|risky/i.test(w))).length;
+    const todayCost2 = focusedMembers.reduce((a, m) => a + (m.today?.costUsd ?? 0), 0);
+    const high2 = focusedMembers.filter((m) => m.deltaVs7dAvgPct > 0.2);
+    const avgHigh2 = high2.length === 0 ? 0 : high2.reduce((a, m) => a + m.deltaVs7dAvgPct, 0) / high2.length;
+    // Project active/maintaining/dormant under filter: keep only projects matching filter.project
+    const focusedProjects = input.filter.project
+      ? projects.filter((p) => p.name.toLowerCase() === input.filter!.project!.toLowerCase())
+      : projects;
+    finalKpis = {
+      teamActivity: { value: focusedSessions.length, deltaVsAvg: 0 },
+      attention: {
+        value: stuck2 + help2 + risky2,
+        deltaToday: 0,
+        breakdown: { stuck: stuck2, needsHelp: help2, riskyAction: risky2 },
+      },
+      projects: {
+        active: focusedProjects.filter((p) => p.state === 'active').length,
+        maintaining: focusedProjects.filter((p) => p.state === 'maintaining').length,
+        dormant: focusedProjects.filter((p) => p.state === 'dormant').length,
+      },
+      pace: kpis.pace, // team-wide pace stays — rhythm needs team baseline
+      highOutput: { count: high2.length, avgDeltaPct: avgHigh2 },
+      todayCostUsd: Math.round(todayCost2 * 100) / 100,
+    };
+    finalAttention = attention.filter((a) => {
+      // Drop attention items that don't touch focused members / project.
+      if (input.filter!.focus && a.kind === 'member') {
+        const local = (a.refId.split('@')[0] ?? '').toLowerCase();
+        if (local !== input.filter!.focus.toLowerCase()) return false;
+      }
+      if (input.filter!.project && a.kind === 'project') {
+        if (a.refId.toLowerCase() !== input.filter!.project.toLowerCase()) return false;
+      }
+      return true;
+    });
+    finalHighlights = highlightsTop.filter((h) => {
+      if (input.filter!.focus && h.by.toLowerCase() !== input.filter!.focus.toLowerCase()) return false;
+      if (input.filter!.project && h.project.toLowerCase() !== input.filter!.project.toLowerCase()) return false;
+      return true;
+    });
+    finalCollaboration = collaboration.filter((c) => {
+      if (input.filter!.focus) {
+        if (!c.members.some((email) => (email.split('@')[0] ?? '').toLowerCase() === input.filter!.focus!.toLowerCase())) return false;
+      }
+      return true;
+    });
+  }
+  // ────────────────────────────────────────────────────────────────────────────
+
   const snap: OverviewSnapshot = {
     schemaVersion: 1,
     range: {
@@ -248,14 +334,15 @@ export function buildOverviewSnapshot(input: BuildOverviewInput): OverviewSnapsh
       label: String(input.range.label),
     },
     computedAt: input.now.toISOString(),
-    kpis,
+    kpis: finalKpis,
     members,
     projects,
-    collaboration,
-    attention,
-    highlights: highlightsTop,
+    collaboration: finalCollaboration,
+    attention: finalAttention,
+    highlights: finalHighlights,
   };
   if (staleness) snap.staleness = staleness;
+  if (input.filter && !isDefaultFilter(input.filter)) snap.appliedFilter = input.filter;
 
   // L-8: attach LLM narrative fields from the cache when a cache is provided.
   // Cache-only path — never calls the LLM here. Worker (L-9) fills the cache
