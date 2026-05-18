@@ -11,3 +11,4 @@ packages/*/.riven/
 packages/*/.teamagent/
 .env
 .env.local
+.superpowers/

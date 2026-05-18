@@ -1,0 +1,325 @@
+/**
+ * Slide-over (drawer) renderers for the Leadership Dashboard — P-B6.
+ *
+ * The v7 redesign retires the Phase-1 full-page detail views (`/members/:id`
+ * and `/projects/:name`) and instead mounts a single 520-px slide-over panel
+ * inside the Overview shell. The shell ships with empty `<div id="so-...">`
+ * slots; the panel is populated on demand by the client refresh script,
+ * which fetches `/api/members/:id` (or `/api/projects/:name`) and swaps in
+ * the four HTML fragments returned under `data._html`.
+ *
+ * Exports:
+ *   renderSlideoverShell()                    → static markup (scrim + panel)
+ *   renderMemberSlideoverFragments(m, d)      → { callout, stats, evolve, projects }
+ *   renderProjectSlideoverFragments(p, d)     → same shape
+ *
+ * XSS hygiene: every user-controlled string passes through escapeHtml().
+ */
+
+import type {
+  MemberSnapshot,
+  MemberDetail,
+  ProjectSnapshot,
+  ProjectDetail,
+} from '../types.js';
+import {
+  phaseLabel,
+  stateLabel,
+  trendLabel,
+  trendArrow,
+  healthLabel,
+  healthDotColor,
+  shortFile,
+  etaLabel,
+  idleSince,
+} from './_leader-lang.js';
+
+export interface SlideoverFragments {
+  callout: string;
+  stats: string;
+  evolve: string;
+  projects: string;
+}
+
+// ---------------------------------------------------------------------------
+// Shell — static markup injected into the Overview page once.
+// ---------------------------------------------------------------------------
+
+export function renderSlideoverShell(): string {
+  return `
+<div class="scrim" id="scrim" onclick="window.closeSO && window.closeSO()"></div>
+<aside class="slideover" id="so">
+  <div class="so-head">
+    <div class="so-avatar" id="so-avatar"></div>
+    <div class="so-id">
+      <div class="so-name" id="so-name"></div>
+      <div class="so-meta" id="so-meta"></div>
+    </div>
+    <button class="so-close" type="button" onclick="window.closeSO && window.closeSO()" aria-label="关闭">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="so-body">
+    <div id="so-callout"></div>
+    <div class="so-section"><div class="so-h">本周快照</div><div id="so-stats"></div></div>
+    <div class="so-section"><div class="so-h">prompt 的演变 · 看他都在问什么</div><div id="so-evolve"></div></div>
+    <div class="so-section"><div class="so-h">在哪些项目里</div><div id="so-projects"></div></div>
+  </div>
+</aside>`;
+}
+
+// ---------------------------------------------------------------------------
+// Member fragments
+// ---------------------------------------------------------------------------
+
+export function renderMemberSlideoverFragments(
+  member: MemberSnapshot,
+  detail: MemberDetail,
+): SlideoverFragments {
+  // Member callout: build a one-sentence narrative from real fields rather
+  // than the generic "idle X hours" boilerplate. Branches on the (already
+  // distribution-calibrated) stateBadge so the message matches the leader's
+  // mental model of why this person is in the drawer.
+  const idleHours = computeIdleHours(detail);
+  const topFile = detail.topFiles[0]?.path;
+  const topProject = member.topProject ?? mostCommonProject(detail);
+  const shortTopFile = topFile ? shortFile(topFile) : '';
+  let calloutSentence: string;
+  if (member.stateBadge === 'needs_help') {
+    calloutSentence = topProject
+      ? `${escapeHtml(member.displayName)} 在 <em>${escapeHtml(topProject)}</em> 上反复受阻 — <em>看一眼是否需要支援</em>。`
+      : `${escapeHtml(member.displayName)} 工具调用反复失败 — <em>看一眼是否需要支援</em>。`;
+  } else if (member.stateBadge === 'stuck') {
+    if (shortTopFile) {
+      calloutSentence = `${escapeHtml(member.displayName)} 卡在 <em>${escapeHtml(shortTopFile)}</em> 已经 ${escapeHtml(idleSince(idleHours))} — <em>可能需要支援</em>。`;
+    } else {
+      calloutSentence = `${escapeHtml(member.displayName)} 在反复尝试相似问题 — <em>可能需要支援</em>。`;
+    }
+  } else if (member.stateBadge === 'low_activity') {
+    calloutSentence = `${escapeHtml(member.displayName)} 已经 ${escapeHtml(idleSince(idleHours))} 没有新动作 — <em>本周参与不多</em>。`;
+  } else if (member.stateBadge === 'quiet') {
+    calloutSentence = `${escapeHtml(member.displayName)} 本窗口无活动 — <em>暂无新工作</em>。`;
+  } else {
+    const trend = trendLabel(member.trend7d);
+    calloutSentence = topProject
+      ? `${escapeHtml(member.displayName)} 正常推进 <em>${escapeHtml(topProject)}</em>，本周 <em>${escapeHtml(trend)}</em>。`
+      : `${escapeHtml(member.displayName)} 正常推进，本周 <em>${escapeHtml(trend)}</em>。`;
+  }
+  const callout = `<div class="so-callout">
+    <div class="so-callout-icon">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    </div>
+    <div class="so-callout-text serif">${calloutSentence}</div>
+  </div>`;
+
+  // Stats block — 3 narrative phrases instead of raw numbers. Leader can
+  // still see counts on the member detail page (Phase 3); this drawer is
+  // editorial-first. CSS class `.so-stat-num` is preserved (test contract)
+  // even though the content is now a phrase, not a number.
+  const trendText = trendLabel(member.trend7d);
+  const focusProject = topProject ?? '—';
+  const focusPhase = '聚焦 ' + (focusProject === '—' ? '—' : focusProject);
+  const stateText = stateLabel(member.stateBadge);
+  const stats = `<div class="so-stats">
+    <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(trendText)}</div><div class="so-stat-label">本周节奏</div></div>
+    <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(focusPhase)}</div><div class="so-stat-label">焦点</div></div>
+    <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(stateText)}</div><div class="so-stat-label">状态</div></div>
+  </div>`;
+
+  const evolve = renderMemberEvolve(detail);
+  const projects = renderMemberProjects(detail);
+  return { callout, stats, evolve, projects };
+}
+
+/** Best-effort topProject fallback when MemberSnapshot.topProject is empty. */
+function mostCommonProject(detail: MemberDetail): string | undefined {
+  const counts = new Map<string, number>();
+  for (const s of detail.sessions) {
+    counts.set(s.projectName, (counts.get(s.projectName) ?? 0) + 1);
+  }
+  let top: string | undefined;
+  let topN = 0;
+  for (const [name, n] of counts) if (n > topN) { topN = n; top = name; }
+  return top;
+}
+
+function renderMemberEvolve(detail: MemberDetail): string {
+  const rows: { ts: string; text: string; latest: boolean }[] = [];
+  for (const s of detail.sessions) {
+    for (const p of s.allPrompts) {
+      rows.push({ ts: formatHHMM(p.ts), text: p.preview, latest: rows.length === 0 });
+      if (rows.length >= 6) break;
+    }
+    if (rows.length >= 6) break;
+  }
+  if (rows.length === 0) {
+    return `<div class="so-evolve"><div class="so-evolve-item"><div class="so-evolve-text serif">没有 prompt 记录</div></div></div>`;
+  }
+  const items = rows
+    .map(
+      (r) => `
+    <div class="so-evolve-item${r.latest ? ' latest' : ''}">
+      <div class="so-evolve-time mono">${escapeHtml(r.ts)}</div>
+      <div class="so-evolve-text serif">${escapeHtml(r.text)}</div>
+    </div>`,
+    )
+    .join('');
+  return `<div class="so-evolve">${items}</div>`;
+}
+
+function renderMemberProjects(detail: MemberDetail): string {
+  const counts = new Map<string, number>();
+  for (const s of detail.sessions) {
+    counts.set(s.projectName, (counts.get(s.projectName) ?? 0) + 1);
+  }
+  const entries = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) {
+    return `<div style="color:var(--ink-3);font-size:13px;">该窗口内无项目活动</div>`;
+  }
+  const items = entries
+    .map(
+      ([name, n]) => `
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--surface-2);border-radius:var(--r-md);">
+      <div class="proj-icon" style="width:24px;height:24px;font-size:10px;">${escapeHtml(projectInitials(name))}</div>
+      <div style="flex:1;font-size:13.5px;color:var(--ink-1);font-weight:500;">${renderProjectTitleHtml(name)}</div>
+      <div style="font-size:12px;color:var(--ink-3);">${n} 会话</div>
+    </div>`,
+    )
+    .join('');
+  return `<div style="display:flex;flex-direction:column;gap:8px;">${items}</div>`;
+}
+
+/**
+ * 2-character initials for a project icon. When the name is in the
+ * `owner/repo` form produced by the github-remote project identity, the
+ * initials come from the **repo** part (the meaningful identifier) rather
+ * than the owner. Cwd-derived names use the first two characters as-is.
+ */
+function projectInitials(name: string): string {
+  const slash = name.indexOf('/');
+  if (slash >= 0) {
+    const repo = name.slice(slash + 1);
+    return repo.slice(0, 2).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+/**
+ * Render an `owner/repo` name with the `owner/` prefix dimmed. Plain names
+ * pass through unchanged. Both branches escape so output is safe to drop
+ * into innerHTML directly.
+ */
+function renderProjectTitleHtml(name: string): string {
+  const slashIdx = name.indexOf('/');
+  if (slashIdx < 0) return escapeHtml(name);
+  const owner = name.slice(0, slashIdx);
+  const repo = name.slice(slashIdx + 1);
+  return `<span style="color:var(--ink-3);font-weight:400;">${escapeHtml(owner)}/</span>${escapeHtml(repo)}`;
+}
+
+/**
+ * Approximate "hours since the member's last captured session". Used by
+ * idleCallout to pick the right editorial copy. Returns 24 when there are
+ * no sessions on record (so the worst-case "建议主动问一句" copy fires).
+ */
+function computeIdleHours(detail: MemberDetail): number {
+  const latest = detail.sessions[0]?.capturedAt;
+  if (!latest) return 24;
+  const ts = Date.parse(latest);
+  if (Number.isNaN(ts)) return 24;
+  return Math.max(0, Math.round((Date.now() - ts) / 3_600_000));
+}
+
+// ---------------------------------------------------------------------------
+// Project fragments
+// ---------------------------------------------------------------------------
+
+export function renderProjectSlideoverFragments(
+  project: ProjectSnapshot,
+  detail: ProjectDetail,
+): SlideoverFragments {
+  // Callout — composed entirely from leader-language helpers. Names the
+  // project, what phase it's in, the trajectory this week, who's actively
+  // touching it today, and a calibrated ETA. No "phase=implement" or
+  // "healthScore=7/10" surfaces here — those are engineer-speak.
+  const phaseText = phaseLabel(project.phaseGuess);
+  const trendText = trendLabel(project.trend7d);
+  const etaText = etaLabel(project.etaDays);
+  const activeCount = project.activeTodayCount ?? 0;
+  // ETA "暂无预估" reads awkwardly when concatenated as "预计 暂无预估"; in
+  // that case we use the underlying phrase as a standalone sentence end.
+  const etaClause = project.etaDays == null ? etaText : `预计 ${etaText}`;
+  const calloutText = `<em>${escapeHtml(project.name)}</em> ${escapeHtml(phaseText)}，${escapeHtml(trendText)}。当前 <em>${activeCount} 人在做</em>，${escapeHtml(etaClause)}。`;
+  const dotColor = healthDotColor(project.healthScore);
+  const callout = `<div class="so-callout">
+    <div class="so-callout-icon" style="color:${dotColor};">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    </div>
+    <div class="so-callout-text serif">${calloutText}</div>
+  </div>`;
+
+  // Stats — 3 narrative phrases instead of raw counts.
+  const teamSize = `${project.contributors.length} 位贡献者${project.contributors.length === 1 ? '（单人项目）' : ''}`;
+  const healthText = healthLabel(project.healthScore);
+  const stats = `<div class="so-stats">
+    <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(trendArrow(project.trend7d))} ${escapeHtml(trendText)}</div><div class="so-stat-label">本周节奏</div></div>
+    <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(teamSize)}</div><div class="so-stat-label">团队规模</div></div>
+    <div class="so-stat"><div class="so-stat-num" style="font-size:14px;font-weight:500;">${escapeHtml(healthText)}</div><div class="so-stat-label">整体健康</div></div>
+  </div>`;
+
+  const evolve = renderProjectEvolve(detail);
+  const projects = renderProjectRecentFiles(detail);
+  return { callout, stats, evolve, projects };
+}
+
+function renderProjectEvolve(detail: ProjectDetail): string {
+  const ms = detail.milestones.slice(0, 6);
+  if (ms.length === 0) {
+    return `<div class="so-evolve"><div class="so-evolve-item"><div class="so-evolve-text serif">本窗口内暂无里程碑</div></div></div>`;
+  }
+  const items = ms
+    .map(
+      (m, i) => `
+    <div class="so-evolve-item${i === 0 ? ' latest' : ''}">
+      <div class="so-evolve-time mono">${escapeHtml(m.ts.slice(0, 10))}</div>
+      <div class="so-evolve-text serif">${escapeHtml(m.type)} · ${escapeHtml(m.detail)}</div>
+    </div>`,
+    )
+    .join('');
+  return `<div class="so-evolve">${items}</div>`;
+}
+
+function renderProjectRecentFiles(detail: ProjectDetail): string {
+  if (detail.recentFiles.length === 0) {
+    return `<div style="color:var(--ink-3);font-size:13px;">该窗口内无文件编辑</div>`;
+  }
+  const items = detail.recentFiles
+    .slice(0, 5)
+    .map(
+      (f) => `
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--surface-2);border-radius:var(--r-md);">
+      <div style="flex:1;font-size:13.5px;color:var(--ink-1);font-weight:500;font-family:var(--mono,monospace);">${escapeHtml(f.path)}</div>
+      <div style="font-size:12px;color:var(--ink-3);">${f.touches}</div>
+    </div>`,
+    )
+    .join('');
+  return `<div style="display:flex;flex-direction:column;gap:8px;">${items}</div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Local helpers
+// ---------------------------------------------------------------------------
+
+function escapeHtml(s: string): string {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatHHMM(ts: string): string {
+  if (ts.length >= 16 && ts[10] === 'T') return ts.slice(11, 16);
+  return ts;
+}

@@ -44,6 +44,13 @@ import { detectSensitiveText, redactSensitiveText } from '@matrix-riven/shared';
 // Leadership overview (Task 8) — GET /api/overview wires these two together.
 import { scanForOverview } from './overview/disk-scan.js';
 import { buildOverview } from './overview/aggregator.js';
+// Task 15 — Leadership API + HTML routes (replaces legacy /api/overview in the
+// dispatch order so the new aggregator + cache wins over the old disk-scan path).
+import { TtlCache } from './leadership/cache.js';
+import { handleLeadershipRequest } from './leadership/routes.js';
+// P-D1 — on-disk session index. Built async at startup when missing, appended
+// after each successful POST so scanAllSessions has a fast cold-start path.
+import { appendIndex, rebuildAllIndexes } from './leadership/index.js';
 
 /** Cap raw POST body to bound memory + reject obvious DoS payloads. */
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -592,7 +599,21 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
     readEnvWithLegacy(process.env, 'RIVEN_AUTH_TOKEN', 'BPP_AUTH_TOKEN') ??
     '';
 
+  // Task 15 — shared TTL cache for all leadership endpoints (30s TTL keeps the
+  // dashboard snappy under polling while bounding disk-scan frequency).
+  const leadershipCache = new TtlCache<unknown>(30_000);
+  const leadershipDeps = {
+    collectorDir: outputDir,
+    cache: leadershipCache,
+    now,
+  };
+
   const requestHandler = (req: IncomingMessage, res: ServerResponse): void => {
+    // Task 15 — Leadership API + HTML routes take precedence over the legacy
+    // GET handler so the new aggregator wins over /api/overview etc.
+    if (req.method === 'GET' && handleLeadershipRequest(req, res, leadershipDeps)) {
+      return;
+    }
     if (req.method === 'GET') {
       handleGet(req, res, outputDir, now);
       return;
@@ -747,6 +768,34 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
         mkdirSync(targetDir, { recursive: true });
         atomicWriteFileSync(targetFile, decoded);
 
+        // P-D1 — append to the per-leaf session index so subsequent cold-start
+        // scans can skip directory enumeration. Best-effort: any failure is
+        // recovered by the next `rebuildIndex` at server start. We read the
+        // real on-disk mtime (not `Date.now()`) because the loader validates
+        // index freshness against `statSync(...).mtimeMs`, and FS timestamp
+        // truncation can drift the two values by 1-1000 ms on some platforms.
+        if (isLog) {
+          const capturedAtRaw = envelope.captured_at;
+          const capturedAt =
+            typeof capturedAtRaw === 'string' && capturedAtRaw.length > 0
+              ? capturedAtRaw
+              : now().toISOString();
+          let mtimeMs = Date.now();
+          try {
+            mtimeMs = statSync(targetFile).mtimeMs;
+          } catch {
+            /* file should always exist here; fall back to wall clock */
+          }
+          appendIndex(targetDir, {
+            sessionId: id,
+            file: `${id}.${ext}`,
+            mtime: mtimeMs,
+            capturedAt,
+          }).catch(() => {
+            /* non-fatal: rebuildIndex will catch up on next restart */
+          });
+        }
+
         // Issue #283 — write quota.json sidecar when envelope carries a
         // well-formed quota block. Latest write per <user>/<date>/ wins
         // (overwrites). Malformed quota is silently skipped; the transcript
@@ -866,6 +915,15 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
         reject(new Error('mock server failed to bind'));
         return;
       }
+      // P-D1 — warm the per-leaf session index on first boot. Deferred via
+      // setImmediate so it can never block the `listen` callback resolving;
+      // any error is swallowed because a missing index just means the next
+      // scan falls through to legacy enumeration.
+      setImmediate(() => {
+        rebuildAllIndexes(outputDir).catch(() => {
+          /* non-fatal — scanAllSessions degrades to readdirSync */
+        });
+      });
       resolve({
         url: `${opts.tls ? 'https' : 'http'}://${host}:${addr.port}`,
         port: addr.port,
