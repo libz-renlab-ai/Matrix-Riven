@@ -164,25 +164,77 @@ function demoMemberDetail(localPart: string): MemberDetail {
   return MEMBER_DETAILS[localPart] ?? MEMBER_DETAILS.alex!;
 }
 
-function demoProjectDetail(): ProjectDetail {
-  return {
+// 2026-05-18 round-10 audit P1: same blindspot as round-9 fixed for
+// members — every project drawer returned the same hardcoded detail,
+// so clicking devops-pipelines (lastTouch=.github/workflows/ci.yml)
+// showed src/leadership/views/_overview-fragments.ts in recentFiles.
+// Now per-project, with topFiles + extensionMix matching each project's
+// actual story.
+const PROJECT_DETAILS: Record<string, ProjectDetail> = {
+  'matrix-riven': {
     todayFiles: ['src/leadership/views/_overview-fragments.ts'],
     weekFiles: [
       'src/leadership/views/_overview-fragments.ts',
       'src/leadership/aggregator.ts',
       'src/leadership/views/_slideover.html.ts',
+      'src/app/status/page.tsx',
     ],
-    extensionMix: { ts: 0.92, md: 0.06, json: 0.02 },
-    testRatio: 0.34,
+    extensionMix: { ts: 0.86, tsx: 0.09, md: 0.04, json: 0.01 },
+    testRatio: 0.42,
     milestones: [],
-    webResearchShare: 0.12,
+    webResearchShare: 0.08,
     heatmap7x24: emptyHeatmap(),
     recentFiles: [
-      { path: 'src/leadership/views/_overview-fragments.ts', touches: 6 },
-      { path: 'src/leadership/aggregator.ts', touches: 3 },
+      { path: 'src/leadership/views/_overview-fragments.ts', touches: 9 },
+      { path: 'src/leadership/aggregator.ts', touches: 4 },
+      { path: 'src/app/status/page.tsx', touches: 12 },
     ],
-    collabDensity: 0.4,
-  };
+    collabDensity: 0.55,
+  },
+  'team-graph': {
+    todayFiles: ['src/graph/render.ts'],
+    weekFiles: [
+      'src/graph/render.ts',
+      'src/graph/layout.ts',
+      'README.md',
+    ],
+    extensionMix: { ts: 0.74, md: 0.18, json: 0.08 },
+    testRatio: 0.28,
+    milestones: [],
+    webResearchShare: 0.15,
+    heatmap7x24: emptyHeatmap(),
+    recentFiles: [
+      { path: 'src/graph/render.ts', touches: 7 },
+      { path: 'src/graph/layout.ts', touches: 3 },
+      { path: 'README.md', touches: 2 },
+    ],
+    collabDensity: 0.33,
+  },
+  'devops-pipelines': {
+    // activeTodayCount=0; lastTouch yesterday. Mirror reality: no
+    // todayFiles, weekFiles only contains the CI infra casey owns.
+    todayFiles: [],
+    weekFiles: [
+      '.github/workflows/ci.yml',
+      '.github/workflows/release.yml',
+      'scripts/ci/cache-warm.sh',
+    ],
+    extensionMix: { yml: 0.62, sh: 0.31, md: 0.07 },
+    testRatio: 0.0,
+    milestones: [],
+    webResearchShare: 0.05,
+    heatmap7x24: emptyHeatmap(),
+    recentFiles: [
+      { path: '.github/workflows/ci.yml', touches: 4 },
+      { path: 'scripts/ci/cache-warm.sh', touches: 2 },
+      { path: '.github/workflows/release.yml', touches: 1 },
+    ],
+    collabDensity: 0.0,
+  },
+};
+
+function demoProjectDetail(name: string): ProjectDetail {
+  return PROJECT_DETAILS[name] ?? PROJECT_DETAILS['matrix-riven']!;
 }
 
 /**
@@ -211,7 +263,7 @@ export function getDemoProjectByName(
   const snap = getDemoSnapshot();
   const project = snap.projects.find((p) => p.name === name);
   if (!project) return null;
-  return { ...project, detail: demoProjectDetail() };
+  return { ...project, detail: demoProjectDetail(name) };
 }
 
 export function getDemoSnapshot(): OverviewSnapshot {
