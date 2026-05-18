@@ -624,6 +624,30 @@ describe('demo slideover (round-8 P0)', () => {
     const res = await fetch(`${baseUrl}/api/projects/nope?demo=1`);
     expect(res.status).toBe(404);
   });
+
+  it('GET /people?demo=1 renders the 4-member demo grid (round-15 P0)', async () => {
+    // Was rendering empty real-data shell because /people ignored ?demo=1.
+    const res = await fetch(`${baseUrl}/people?demo=1`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('class="member-tile"');
+    // Each of the four demo members should appear by displayName.
+    for (const name of ['alex', 'blake', 'casey', 'dana']) {
+      expect(html.toLowerCase()).toContain(name);
+    }
+    expect(html).not.toContain('这个窗口内没有成员活动');
+  });
+
+  it('GET /projects?demo=1 renders the 3-project demo list (round-15 P0)', async () => {
+    const res = await fetch(`${baseUrl}/projects?demo=1`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('class="proj-row"');
+    for (const name of ['matrix-riven', 'team-graph', 'devops-pipelines']) {
+      expect(html).toContain(name);
+    }
+    expect(html).not.toContain('这个窗口内没有项目活动');
+  });
 });
 
 // ── L-13/launch: end-to-end LLM-on smoke ─────────────────────────────────────

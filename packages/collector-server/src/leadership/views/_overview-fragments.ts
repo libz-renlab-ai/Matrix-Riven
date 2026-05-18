@@ -264,7 +264,11 @@ export function renderAttentionFragment(snap: OverviewSnapshot, opts: FragmentOp
       <div class="att-arrow">›</div>
     </div>`;
   }).join('');
-  const footer = renderSeeAllFooter(items.length, totalAll, '项', '/people?focus=attention');
+  // 2026-05-18 round-15 audit P1: `?focus=attention` was a dead query
+  // param — no route handler reads it, so the "see all" link landed on
+  // the unfiltered People grid. Link to /people directly until the
+  // focus filter actually exists (Phase 3).
+  const footer = renderSeeAllFooter(items.length, totalAll, '项', '/people');
   return `<section id="attention" class="section fade-in">
     <div class="section-head">
       <div class="section-title">需要你看一眼 <span class="section-count">${totalAll}</span></div>

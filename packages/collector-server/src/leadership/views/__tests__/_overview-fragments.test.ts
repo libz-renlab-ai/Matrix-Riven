@@ -488,7 +488,9 @@ describe('top-N cap + see-all footer (P-B7)', () => {
     expect((html.match(/class="att-row"/g) ?? []).length).toBe(3);
     expect((html.match(/class="see-all-row"/g) ?? []).length).toBe(1);
     expect(html).toContain('看全部 5 项');
-    expect(html).toContain('href="/people?focus=attention"');
+    // Round-15: dead query param removed; link now goes to /people.
+    expect(html).toContain('href="/people"');
+    expect(html).not.toContain('focus=attention');
   });
 
   it('members with limit 4 on 6 items → 4 tiles + 1 see-all footer', () => {

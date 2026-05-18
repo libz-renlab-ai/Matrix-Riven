@@ -582,20 +582,27 @@ function renderPeopleTab(
     sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
     return true;
   }
-  const cacheKey = `html|/people|${range.label}`;
+  // 2026-05-18 round-15 audit P0: /people?demo=1 used to render an
+  // empty real-data shell because we never checked the demo flag here.
+  // The landing CTA → /overview?demo=1 → click "People" nav tab flow
+  // cliffed silently. Mirror the /overview?demo=1 branch.
+  const isDemo = query.get('demo') === '1';
+  const cacheKey = `html|/people|${range.label}|${isDemo ? 'demo' : 'real'}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
     sendHtml(res, 200, cached as string);
     return true;
   }
   try {
-    const snap = buildOverviewSnapshot({
-      collectorDir: deps.collectorDir,
-      range,
-      now: now(),
-      mainProjects: deps.mainProjects,
-      llmCache: deps.llmCache,
-    });
+    const snap = isDemo
+      ? getDemoSnapshot()
+      : buildOverviewSnapshot({
+          collectorDir: deps.collectorDir,
+          range,
+          now: now(),
+          mainProjects: deps.mainProjects,
+          llmCache: deps.llmCache,
+        });
     const tightHero = `<header id="hero" class="hero fade-in"><div><h1 class="serif">团队 <em>${snap.members.length} 人</em></h1><div class="sub">完整成员视图 · 数据每 30 秒刷新</div></div></header>`;
     const body = snap.members.length === 0
       ? `<section id="members" class="section fade-in"><div class="lh-empty">这个窗口内没有成员活动</div></section>`
@@ -629,20 +636,24 @@ function renderProjectsTab(
     sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
     return true;
   }
-  const cacheKey = `html|/projects|${range.label}`;
+  // 2026-05-18 round-15 audit P0: mirror of the /people demo branch.
+  const isDemo = query.get('demo') === '1';
+  const cacheKey = `html|/projects|${range.label}|${isDemo ? 'demo' : 'real'}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
     sendHtml(res, 200, cached as string);
     return true;
   }
   try {
-    const snap = buildOverviewSnapshot({
-      collectorDir: deps.collectorDir,
-      range,
-      now: now(),
-      mainProjects: deps.mainProjects,
-      llmCache: deps.llmCache,
-    });
+    const snap = isDemo
+      ? getDemoSnapshot()
+      : buildOverviewSnapshot({
+          collectorDir: deps.collectorDir,
+          range,
+          now: now(),
+          mainProjects: deps.mainProjects,
+          llmCache: deps.llmCache,
+        });
     const tightHero = `<header id="hero" class="hero fade-in"><div><h1 class="serif">项目 <em>${snap.projects.length} 个</em></h1><div class="sub">完整项目视图 · 数据每 30 秒刷新</div></div></header>`;
     const body = snap.projects.length === 0
       ? `<section id="projects" class="section fade-in"><div class="lh-empty">这个窗口内没有项目活动</div></section>`

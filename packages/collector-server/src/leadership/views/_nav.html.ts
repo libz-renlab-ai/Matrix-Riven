@@ -80,9 +80,26 @@ const THEME_TOGGLE_SCRIPT = `(function() {
         try { localStorage.setItem(KEY, next || 'light'); } catch (e) {}
       });
     }
+    // 2026-05-18 round-15 audit P0: when the current page is in demo
+    // mode (?demo=1), the nav tab links must propagate the flag too —
+    // otherwise the marketing flow (landing CTA → /overview?demo=1 →
+    // click "People") drops back into the empty real-data path. Cheap
+    // client-side rewrite at bind-time.
+    function propagateDemo() {
+      try {
+        if (!/(\\?|&)demo=1(&|$)/.test(location.search)) return;
+        var anchors = document.querySelectorAll('a.tab');
+        for (var i = 0; i < anchors.length; i++) {
+          var a = anchors[i];
+          var href = a.getAttribute('href') || '';
+          if (href.indexOf('demo=1') !== -1) continue;
+          a.setAttribute('href', href + (href.indexOf('?') >= 0 ? '&' : '?') + 'demo=1');
+        }
+      } catch (e) {}
+    }
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', bind);
-    } else { bind(); }
+      document.addEventListener('DOMContentLoaded', function() { bind(); propagateDemo(); });
+    } else { bind(); propagateDemo(); }
   } catch (e) {}
 })();`;
 

@@ -219,8 +219,20 @@ export const CLIENT_REFRESH_SCRIPT = `
 
   async function pollOverview() {
     try {
+      // 2026-05-18 round-15 audit P0: same demo-flag propagation as
+      // pollSO (round-14). Without this, /overview?demo=1 silently
+      // self-destructs after 30 s -- the next tick fetches /api/overview
+      // (real, empty), the response has snap._html for every slot, and
+      // el.outerHTML = ... overwrites every demo fragment with empty
+      // "0 xiang" markup. Carry the flag through.
+      var ovQs = '';
+      try {
+        if (typeof location !== 'undefined' && /(\?|&)demo=1(&|$)/.test(location.search)) {
+          ovQs = '?demo=1';
+        }
+      } catch (e) { /* SSR / non-browser fallback */ }
       var headers = overviewEtag ? { 'if-none-match': overviewEtag } : {};
-      var resp = await fetch('/api/overview', { headers: headers });
+      var resp = await fetch('/api/overview' + ovQs, { headers: headers });
       if (resp.status === 304) {
         flashLiveDot();
         return;
