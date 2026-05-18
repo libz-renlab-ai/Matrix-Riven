@@ -576,6 +576,43 @@ describe('Detail endpoints ETag + 304 (P-C3)', () => {
   });
 });
 
+// ── round-8 audit P0: /api/members/:id and /api/projects/:name honor ?demo=1 ──
+
+describe('demo slideover (round-8 P0)', () => {
+  it('GET /api/members/alex?demo=1 returns demo detail with _html fragments', async () => {
+    const res = await fetch(`${baseUrl}/api/members/alex?demo=1`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.email).toBe('alex@example.com');
+    expect(body.detail).toBeTruthy();
+    const html = body._html as Record<string, unknown>;
+    expect(typeof html.callout).toBe('string');
+    expect(typeof html.stats).toBe('string');
+    expect(typeof html.evolve).toBe('string');
+    expect(typeof html.projects).toBe('string');
+  });
+
+  it('GET /api/members/unknown?demo=1 returns 404', async () => {
+    const res = await fetch(`${baseUrl}/api/members/nope?demo=1`);
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /api/projects/matrix-riven?demo=1 returns demo detail with _html fragments', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/matrix-riven?demo=1`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.name).toBe('matrix-riven');
+    expect(body.detail).toBeTruthy();
+    const html = body._html as Record<string, unknown>;
+    expect(typeof html.callout).toBe('string');
+  });
+
+  it('GET /api/projects/unknown?demo=1 returns 404', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/nope?demo=1`);
+    expect(res.status).toBe(404);
+  });
+});
+
 // ── L-13/launch: end-to-end LLM-on smoke ─────────────────────────────────────
 
 describe('LLM-on e2e (L-13)', () => {

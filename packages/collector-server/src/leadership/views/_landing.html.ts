@@ -40,8 +40,8 @@ const FEATURES: LandingFeature[] = [
   {
     icon: '◎',
     title: '真 $ 成本遥测',
-    copy: '今日 LLM 花了多少、每个 tier 多少 entries、距日预算还剩多少——都在 `/api/llm/status`。',
-    proof: '`LLM_DAILY_BUDGET_USD` 95% ceiling 防超额，单 cycle 实测 $0.12–0.20',
+    copy: '今日团队 LLM 花费在仪表盘 KPI 卡直接读出；启用 LLM 叙事时按 tier 计费，按 `LLM_DAILY_BUDGET_USD` 配额封顶。',
+    proof: '95% ceiling 防超额；单 cycle 实测 $0.12–0.20',
   },
   {
     icon: '◐',

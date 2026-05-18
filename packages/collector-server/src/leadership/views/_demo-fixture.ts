@@ -10,9 +10,111 @@
  * the kind of T2/T3/T4 output the real LLM tier produces.
  */
 
-import type { OverviewSnapshot } from '../types.js';
+import type {
+  OverviewSnapshot,
+  MemberSnapshot,
+  MemberDetail,
+  ProjectSnapshot,
+  ProjectDetail,
+} from '../types.js';
 
 const NOW = '2026-05-18T09:00:00Z';
+
+// 2026-05-18 round-8 audit P0: /api/members/:id and /api/projects/:name
+// previously didn't honor `?demo=1`, so a CTO clicking a row on the demo
+// overview hit a 404 in the drawer (the product's hero interaction).
+// These helpers build a minimal but presentable MemberDetail /
+// ProjectDetail so the slideover renders without crashing.
+
+function emptyHeatmap(): number[][] {
+  return Array.from({ length: 7 }, () => Array(24).fill(0));
+}
+
+function demoMemberDetail(): MemberDetail {
+  return {
+    toolFailureRate: 0,
+    overContext200kCount: 0,
+    iterationDensity: 4,
+    riskyActions: [],
+    collaborators: [],
+    modelMix: { 'claude-sonnet-4-6': 0.78, 'claude-opus-4-7': 0.18, 'claude-haiku-4-5': 0.04 },
+    webResearchCount: 2,
+    sessions: [
+      {
+        sessionId: 'demo-1',
+        capturedAt: '2026-05-18T08:30:00Z',
+        projectName: 'matrix-riven',
+        totalTokens: 42_000,
+        firstPromptPreview: '继续完善 overview 仪表盘的 hero 区',
+        firstPromptFull: '继续完善 overview 仪表盘的 hero 区，把 KPI 卡的样式收尾。',
+        allPrompts: [
+          {
+            ts: '2026-05-18T08:30:00Z',
+            preview: '继续完善 overview 仪表盘的 hero 区',
+            full: '继续完善 overview 仪表盘的 hero 区，把 KPI 卡的样式收尾。',
+          },
+        ],
+      },
+    ],
+    heatmap7x24: emptyHeatmap(),
+    topFiles: [
+      { path: 'src/leadership/views/_overview-fragments.ts', edits: 6 },
+      { path: 'src/leadership/aggregator.ts', edits: 3 },
+    ],
+    focus: { distinctCwdsToday: 1, avgSessionMinutes: 22 },
+    promptLengthSeries: [],
+    newSurfaceCount: 2,
+  };
+}
+
+function demoProjectDetail(): ProjectDetail {
+  return {
+    todayFiles: ['src/leadership/views/_overview-fragments.ts'],
+    weekFiles: [
+      'src/leadership/views/_overview-fragments.ts',
+      'src/leadership/aggregator.ts',
+      'src/leadership/views/_slideover.html.ts',
+    ],
+    extensionMix: { ts: 0.92, md: 0.06, json: 0.02 },
+    testRatio: 0.34,
+    milestones: [],
+    webResearchShare: 0.12,
+    heatmap7x24: emptyHeatmap(),
+    recentFiles: [
+      { path: 'src/leadership/views/_overview-fragments.ts', touches: 6 },
+      { path: 'src/leadership/aggregator.ts', touches: 3 },
+    ],
+    collabDensity: 0.4,
+  };
+}
+
+/**
+ * Look up a demo member by email local-part. Returns the member snapshot
+ * (from the overview fixture) plus a hand-built `detail` object. Used by
+ * `/api/members/:localPart?demo=1`.
+ */
+export function getDemoMemberByLocalPart(
+  localPart: string,
+): (MemberSnapshot & { detail: MemberDetail }) | null {
+  const snap = getDemoSnapshot();
+  const member = snap.members.find(
+    (m) => (m.email.split('@')[0] ?? '').toLowerCase() === localPart.toLowerCase(),
+  );
+  if (!member) return null;
+  return { ...member, detail: demoMemberDetail() };
+}
+
+/**
+ * Look up a demo project by name. Used by `/api/projects/:name?demo=1`.
+ */
+export function getDemoProjectByName(
+  name: string,
+): (ProjectSnapshot & { detail: ProjectDetail }) | null {
+  const snap = getDemoSnapshot();
+  const project = snap.projects.find((p) => p.name === name);
+  if (!project) return null;
+  return { ...project, detail: demoProjectDetail() };
+}
 
 export function getDemoSnapshot(): OverviewSnapshot {
   return {
@@ -120,7 +222,10 @@ export function getDemoSnapshot(): OverviewSnapshot {
         tag: '单点依赖', tagSeverity: 'calm',
         line2: 'casey 一人独撑',
         time: '昨日', severity: 4,
-        llmRewrite: 'CI 流水线仅 casey 持续投入，建议安排第二个 contributor 接手。',
+        // 2026-05-18 round-8 audit P1: was "casey 持续投入" but the project
+        // pill below shows "0/1 人在做" (activeTodayCount=0 today). Past
+        // tense matches the data.
+        llmRewrite: 'CI 流水线长期仅 casey 一人维护，今日无人推进，建议安排第二个 contributor 接手。',
       },
     ] as unknown as OverviewSnapshot['attention'],
     highlights: [

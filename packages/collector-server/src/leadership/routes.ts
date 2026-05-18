@@ -31,7 +31,11 @@ import { renderOverview, renderStaleBanner } from './views/overview.html.js';
 import { renderLanding } from './views/_landing.html.js';
 import { renderSources } from './views/_sources.html.js';
 import { renderRetro } from './views/_retro.html.js';
-import { getDemoSnapshot } from './views/_demo-fixture.js';
+import {
+  getDemoSnapshot,
+  getDemoMemberByLocalPart,
+  getDemoProjectByName,
+} from './views/_demo-fixture.js';
 import {
   renderMemberSlideoverFragments,
   renderProjectSlideoverFragments,
@@ -276,6 +280,19 @@ export function handleLeadershipRequest(
       return true;
     }
     const localPart = decodeURIComponent(membersApiMatch[1]!);
+    // 2026-05-18 round-8 audit P0: drawer click on /overview?demo=1 used
+    // to 404 because this endpoint ignored the demo flag. Now honors it
+    // and returns the hand-built demo detail + slideover fragments.
+    if (query.get('demo') === '1') {
+      const demoMember = getDemoMemberByLocalPart(localPart);
+      if (!demoMember) {
+        sendJson(res, 404, { error: 'not_found' });
+        return true;
+      }
+      const _html = renderMemberSlideoverFragments(demoMember, demoMember.detail);
+      sendJson(res, 200, { ...demoMember, _html });
+      return true;
+    }
     const rangeStr = query.get('range') ?? undefined;
     const nowDate = now();
     const range = parseRange(rangeStr, nowDate);
@@ -347,6 +364,18 @@ export function handleLeadershipRequest(
       return true;
     }
     const projectName = decodeURIComponent(projectsApiMatch[1]!);
+    // 2026-05-18 round-8 audit P0: same demo-mode short-circuit as the
+    // member endpoint so the drawer on /overview?demo=1 actually opens.
+    if (query.get('demo') === '1') {
+      const demoProject = getDemoProjectByName(projectName);
+      if (!demoProject) {
+        sendJson(res, 404, { error: 'not_found' });
+        return true;
+      }
+      const _html = renderProjectSlideoverFragments(demoProject, demoProject.detail);
+      sendJson(res, 200, { ...demoProject, _html });
+      return true;
+    }
     const rangeStr = query.get('range') ?? undefined;
     const nowDate = now();
     const range = parseRange(rangeStr, nowDate);
