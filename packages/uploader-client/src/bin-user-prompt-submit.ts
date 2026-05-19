@@ -24,7 +24,12 @@ export async function main(
     return;
   }
   if (!raw) return;
-  let parsed: { session_id?: unknown; cwd?: unknown };
+  let parsed: {
+    session_id?: unknown;
+    cwd?: unknown;
+    transcript_path?: unknown;
+    prompt?: unknown;
+  };
   try {
     parsed = JSON.parse(raw);
   } catch {
@@ -32,11 +37,22 @@ export async function main(
   }
   const cwd = typeof parsed.cwd === 'string' ? parsed.cwd : process.cwd();
   const sessionId = parsed.session_id;
+  const transcriptPath = parsed.transcript_path;
+  const prompt = parsed.prompt;
   try {
     emitCcStatus({
       event: 'user_prompt_submit',
       ...(typeof sessionId === 'string' ? { sessionId } : {}),
       cwd,
+      ...(typeof transcriptPath === 'string' && transcriptPath.length > 0
+        ? { transcriptPath }
+        : {}),
+      // rawPrompt threading is policy-gated downstream in realtime-emit
+      // (RIVEN_REALTIME_RAW_PROMPT=1); pass through unconditionally so the
+      // env gate is the single boundary.
+      ...(typeof prompt === 'string' && prompt.length > 0
+        ? { rawPrompt: prompt }
+        : {}),
     });
   } catch {
     /* never propagate */
