@@ -68,6 +68,31 @@ export const MAX_BODY_BYTES = 32 * 1024 * 1024;
 /** Cap gzip output to defeat zip-bomb DoS (jsonl rarely compresses >30x). */
 export const MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024;
 
+/**
+ * Detect synthetic transcripts produced by `bin-digital-twin inject-mock`.
+ *
+ * The CLI's `inject-mock` subcommand writes a fixed two-line transcript with
+ * `"inject-mock probe"` (user) + `"inject-mock ack"` (assistant) as evidence
+ * payload — used as a local upload-pipeline smoke test. The `RIVEN_UPLOADER_DRYRUN=1`
+ * env keeps these from hitting a server when used correctly, but historical
+ * INSTALL.md guidance had readers run the uploader without it, leaking ~376 byte
+ * synthetic sessions into prod `<user>/<date>/` dirs.
+ *
+ * INSTALL.md guidance is already fixed (bb4ca35), but server-side rejection is
+ * defense in depth: any caller (old client, custom script, AI agent reading old
+ * docs) cannot pollute the collector regardless of CLI-side gates.
+ *
+ * Returns true when both marker phrases appear in the decoded transcript text.
+ * A real session would only contain these strings if the user manually typed
+ * them; the false-positive rate is acceptable for a debug payload identifier.
+ */
+export function isInjectMockTranscript(transcriptText: string): boolean {
+  return (
+    transcriptText.includes('"inject-mock probe"') &&
+    transcriptText.includes('"inject-mock ack"')
+  );
+}
+
 export interface MockServerOptions {
   /** Port to bind. Use 0 to pick an ephemeral port. */
   port: number;
@@ -801,6 +826,33 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
         if (!isUnder(outputDir, targetFile)) {
           send(res, 400, { error: 'invalid path' });
           return;
+        }
+
+        // Reject synthetic `inject-mock` transcripts before anything lands on
+        // disk. The CLI's `inject-mock` subcommand is meant for a local
+        // upload-pipeline smoke test guarded by `RIVEN_UPLOADER_DRYRUN=1`; any
+        // payload reaching this point with both marker strings is a real POST
+        // that would pollute the collector (see `isInjectMockTranscript`
+        // doc-comment for history + rationale).
+        //
+        // Defense-in-depth on top of the INSTALL.md fix (commit bb4ca35): old
+        // clients, hand-crafted POSTs, and AI agents following stale docs all
+        // hit this gate. Returns 200 with `dropped: 'inject-mock'` rather than
+        // 4xx so clients with retry-on-error logic do not loop on this case.
+        if (isLog) {
+          const decodedText = decoded.toString('utf8');
+          if (isInjectMockTranscript(decodedText)) {
+            send(res, 200, {
+              ok: true,
+              dropped: 'inject-mock',
+              user_id: userIdSafe,
+              date,
+              detail:
+                'synthetic transcript not accepted on this endpoint; ' +
+                'use RIVEN_UPLOADER_DRYRUN=1 for local smoke tests',
+            });
+            return;
+          }
         }
 
         // M2 — server-side L2 scan ("第二层敏感信息扫描（兜底）"). The member's

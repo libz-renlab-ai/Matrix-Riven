@@ -142,7 +142,7 @@ node packages/collector-server/dist/bin-prod-server.cjs
 - `GET /api/overview?demo=1` — 同上的 JSON 形式
 
 **Receiver（POST，可选 token）：**
-- `POST /v1/cc-sessions` — 接收 transcript
+- `POST /v1/cc-sessions` — 接收 transcript（可选 token 认证）。**`inject-mock` 合成内容会被拒收**：返回 `200 {ok: true, dropped: 'inject-mock'}` 而非落盘，防止 smoke test 误推污染 prod。`RIVEN_UPLOADER_DRYRUN=1` 仍是本地烟测的正路。
 - `POST /v1/cc-status` — 接收实时状态快照
 
 **Leadership（GET，配 token 后强制鉴权）：**
