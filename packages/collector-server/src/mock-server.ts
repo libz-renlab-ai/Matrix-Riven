@@ -382,6 +382,16 @@ function handleGet(
   const path = url.split('?')[0];
 
   if (path === '/' || path === '/index.html') {
+    // Round-1 QA P0 (security): legacy Phase-1 dashboard at `/` was served
+    // without ANY security headers (no CSP, no X-Frame-Options, no nosniff,
+    // no Referrer-Policy), contradicting the /landing claim of "全路由响应都
+    // 带 nosniff + X-Frame-Options". Apply the same baseline as the
+    // leadership routes.
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('x-frame-options', 'DENY');
+    res.setHeader('referrer-policy', 'no-referrer');
+    res.setHeader('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'");
+    res.setHeader('cache-control', 'no-store');
     res.statusCode = 200;
     res.setHeader('content-type', 'text/html; charset=utf-8');
     res.end(DASHBOARD_HTML);

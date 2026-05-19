@@ -163,7 +163,9 @@ export function renderHeroFragment(snap: OverviewSnapshot): string {
       <div class="sub">${subLine}</div>
     </div>
     <div class="hero-meta">
-      <div><strong>${snap.members.length}</strong> 位成员 · <strong>${snap.projects.length}</strong> 个项目</div>
+      <div>${filterActive
+        ? `当前视图：<strong>${snap.members.length}</strong> 位成员 · <strong>${snap.projects.length}</strong> 个项目<span style="color:var(--ink-3);font-size:11px;margin-left:8px;">已按聚焦过滤</span>`
+        : `<strong>${snap.members.length}</strong> 位成员 · <strong>${snap.projects.length}</strong> 个项目`}</div>
     </div>
   </header>`;
   // T5 daily brief: a 3-line LLM-authored briefBox dropped immediately below
