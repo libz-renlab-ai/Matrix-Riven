@@ -295,6 +295,78 @@ async function main() {
     if (!suspectErr) die('manifest-suspicious not in error log');
     log(`✓ error report ingested: ${errLines.length} total lines`);
 
+    // Step 7: HMAC verification — repeat steps 1+2 with secret set
+    log('--- Step 7: HMAC manifest signing ---');
+    const secret = 'test-secret-key-do-not-use-in-prod';
+    process.env.RIVEN_CLIENT_MANIFEST_SECRET = secret;
+    // Republish with HMAC
+    rmSync(home, { recursive: true, force: true });
+    const { home: home2, digitalTwinDir: digitalTwinDir2 } = setupTempHome();
+    writeDigitalTwinConfig(home2, collector.url);
+    rmSync(targetDir, { recursive: true, force: true });
+    await sleep(50);
+    // Manually call publish-client with the env propagated
+    const pub = spawnSync(process.execPath, ['scripts/publish-client.mjs', '--local-target', targetDir], {
+      env: { ...process.env, RIVEN_CLIENT_MANIFEST_SECRET: secret },
+      stdio: 'inherit',
+    });
+    if (pub.status !== 0) die('hmac publish failed');
+    // Check manifest now has hmac_sha256
+    const signedManifest = JSON.parse(readFileSync(join(targetDir, 'manifest.json'), 'utf8'));
+    if (typeof signedManifest.hmac_sha256 !== 'string') {
+      die('manifest missing hmac_sha256 field after signed publish');
+    }
+    log(`✓ signed manifest published, hmac=${signedManifest.hmac_sha256.slice(0, 16)}...`);
+    // Run updater with same secret → should succeed
+    const r5 = await new Promise((resolve) => {
+      const child = spawn(process.execPath, ['--no-warnings', join(DIST_DIR, 'bin-auto-updater.cjs')], {
+        env: {
+          ...process.env,
+          RIVEN_HOME: home2,
+          HOME: home2,
+          USERPROFILE: home2,
+          RIVEN_CLIENT_MANIFEST_SECRET: secret,
+          RIVEN_AUTO_UPDATE_JITTER_MAX_MS: '0',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let out = '', err = '';
+      child.stdout.on('data', (b) => (out += b.toString('utf8')));
+      child.stderr.on('data', (b) => (err += b.toString('utf8')));
+      child.on('exit', (code) => resolve({ code, out, err }));
+    });
+    if (r5.code !== 0) die(`HMAC-verified updater exited ${r5.code}`, r5.err);
+    const log2 = readFileSync(join(digitalTwinDir2, 'auto-update.log'), 'utf8');
+    if (!log2.includes('UPDATED')) die('HMAC-signed update did not complete: ' + log2.split('\n').slice(-3).join(' | '));
+    log('✓ HMAC-signed manifest accepted with matching secret');
+    // Now run updater with WRONG secret → must reject
+    const r6 = await new Promise((resolve) => {
+      const home3 = mkdtempSync(join(tmpdir(), 'riven-e2e-home-'));
+      mkdirSync(join(home3, '.riven', 'digital-twin'), { recursive: true });
+      writeDigitalTwinConfig(home3, collector.url);
+      const child = spawn(process.execPath, ['--no-warnings', join(DIST_DIR, 'bin-auto-updater.cjs')], {
+        env: {
+          ...process.env,
+          RIVEN_HOME: home3,
+          HOME: home3,
+          USERPROFILE: home3,
+          RIVEN_CLIENT_MANIFEST_SECRET: 'WRONG-SECRET',
+          RIVEN_AUTO_UPDATE_JITTER_MAX_MS: '0',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let out = '', err = '';
+      child.stdout.on('data', (b) => (out += b.toString('utf8')));
+      child.stderr.on('data', (b) => (err += b.toString('utf8')));
+      child.on('exit', (code) => {
+        try { rmSync(home3, { recursive: true, force: true }); } catch {}
+        resolve({ code, out, err });
+      });
+    });
+    if (r6.code !== 0) die(`wrong-secret updater exited ${r6.code} (expected 0 with skip)`);
+    log('✓ wrong HMAC secret rejected (error reported, no files swapped)');
+    delete process.env.RIVEN_CLIENT_MANIFEST_SECRET;
+
     log('═══════════════════════════════════════');
     log('ALL E2E ASSERTIONS PASSED');
     log('═══════════════════════════════════════');

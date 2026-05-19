@@ -27,6 +27,19 @@ export interface ClientManifest {
   version: string;
   generated_at: string;
   files: ClientManifestFile[];
+  /**
+   * Emergency kill-switch. When true, clients log a one-shot "updates paused"
+   * line and skip the update — even if version+generated_at would otherwise
+   * trigger one. Operator flips this to halt a botched rollout fleet-wide
+   * without having to rewrite every machine's local manifest.
+   */
+  disabled?: boolean;
+  /**
+   * Optional operator note shown in the dashboard and the auto-update log
+   * (e.g. "investigating download issue, hold for 1h"). Capped to 256 chars
+   * by the validator.
+   */
+  note?: string;
 }
 
 export type UpdateStage =

@@ -8,7 +8,7 @@
  *
  * Computed once per UI refresh — these calls are infrequent (operator-facing).
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, openSync, closeSync, fstatSync, readSync, statSync } from 'node:fs';
 import { readLatestAllUsers } from '@matrix-riven/shared';
 import { readManifestFromDir } from './manifest-route.js';
 import { sanitizeErrorReport } from './error-ingest.js';
@@ -18,6 +18,8 @@ const MAX_RECENT_ERRORS = 50;
 const MAX_USERS_PER_VERSION_PREVIEW = 10;
 /** Tail at most this many lines from errors JSONL. Beyond this an operator wants `grep`, not a UI. */
 const MAX_ERROR_LINES_SCAN = 2000;
+/** Tail-read window: only the last 1 MiB of the JSONL gets parsed by the UI route. */
+const TAIL_BYTES = 1024 * 1024;
 /** How far back the "by_stage_24h" + recent-errors window is. */
 const ERRORS_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -26,30 +28,56 @@ function tsMs(s: string): number {
   return Number.isFinite(t) ? t : 0;
 }
 
+/**
+ * Read the tail of a JSONL log without loading the whole file into memory.
+ * CTO review: a 30-client deployment over months will grow the file
+ * unboundedly; reading the full thing OOMs the collector. We pread() the last
+ * 1 MiB from disk and parse only that.
+ */
 function readErrorsTail(filePath: string): ClientUpdateErrorReport[] {
   if (!existsSync(filePath)) return [];
-  let raw: string;
+  let fd: number | null = null;
   try {
-    raw = readFileSync(filePath, 'utf8');
+    fd = openSync(filePath, 'r');
+    const stat = fstatSync(fd);
+    const size = stat.size;
+    const readLen = Math.min(size, TAIL_BYTES);
+    const offset = size - readLen;
+    const buf = Buffer.allocUnsafe(readLen);
+    if (readLen > 0) {
+      readSync(fd, buf, 0, readLen, offset);
+    }
+    let text = buf.toString('utf8');
+    // If we started mid-line (offset > 0), drop the leading partial line.
+    if (offset > 0) {
+      const nl = text.indexOf('\n');
+      if (nl >= 0) text = text.slice(nl + 1);
+    }
+    const lines = text.split('\n');
+    const out: ClientUpdateErrorReport[] = [];
+    for (let i = lines.length - 1; i >= 0 && out.length < MAX_ERROR_LINES_SCAN; i--) {
+      const line = lines[i];
+      if (!line || line.length === 0) continue;
+      try {
+        const parsed = JSON.parse(line);
+        const r = sanitizeErrorReport(parsed);
+        if (r !== null) out.push(r);
+      } catch {
+        // skip malformed lines silently — a partial last line is normal mid-write.
+      }
+    }
+    return out;
   } catch {
     return [];
-  }
-  const lines = raw.split('\n');
-  // Tail mode: take last N non-empty lines.
-  const out: ClientUpdateErrorReport[] = [];
-  for (let i = lines.length - 1; i >= 0 && out.length < MAX_ERROR_LINES_SCAN; i--) {
-    const line = lines[i];
-    if (!line || line.length === 0) continue;
-    try {
-      const parsed = JSON.parse(line);
-      const r = sanitizeErrorReport(parsed);
-      if (r !== null) out.push(r);
-    } catch {
-      // skip malformed lines silently — JSONL is append-only, a bad partial
-      // line at the tail is normal during concurrent writes.
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // ignore
+      }
     }
   }
-  return out;
 }
 
 export interface StatusAggregateInputs {

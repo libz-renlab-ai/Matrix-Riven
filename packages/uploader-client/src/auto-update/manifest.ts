@@ -12,6 +12,7 @@ export type UpdateDecision =
   | { update: true }
   | { update: false; reason: 'no-local'; advice: 'install fresh — proceed' }
   | { update: false; reason: 'same-version' }
+  | { update: false; reason: 'disabled'; note?: string }
   | {
       update: false;
       reason: 'manifest-suspicious';
@@ -43,7 +44,10 @@ export function validateManifest(raw: unknown): ClientManifest | null {
       size: ff.size,
     });
   }
-  return { version: o.version, generated_at: o.generated_at, files };
+  const result: ClientManifest = { version: o.version, generated_at: o.generated_at, files };
+  if (typeof o.disabled === 'boolean') result.disabled = o.disabled;
+  if (typeof o.note === 'string' && o.note.length > 0) result.note = o.note.slice(0, 256);
+  return result;
 }
 
 export function readLocalManifest(path: string): ClientManifest | null {
@@ -96,6 +100,12 @@ export function shouldUpdate(
   local: ClientManifest | null,
   remote: ClientManifest,
 ): UpdateDecision {
+  // Kill-switch (operator-set) takes priority over every other gate. Even a
+  // brand-new install respects it — preventing first-time machines from
+  // pulling a known-bad release during the kill window.
+  if (remote.disabled === true) {
+    return { update: false, reason: 'disabled', ...(remote.note ? { note: remote.note } : {}) };
+  }
   if (local === null) {
     return { update: false, reason: 'no-local', advice: 'install fresh — proceed' };
   }

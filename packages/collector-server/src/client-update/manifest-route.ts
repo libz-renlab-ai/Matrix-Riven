@@ -51,7 +51,19 @@ export function validateManifest(raw: unknown): ClientManifest | null {
       size: ff.size,
     });
   }
-  return { version: o.version, generated_at: o.generated_at, files };
+  const result: ClientManifest & { hmac_sha256?: string } = {
+    version: o.version,
+    generated_at: o.generated_at,
+    files,
+  };
+  if (typeof o.disabled === 'boolean') result.disabled = o.disabled;
+  if (typeof o.note === 'string' && o.note.length > 0) result.note = o.note.slice(0, 256);
+  // Pass through hmac_sha256 if present so the route response carries it.
+  // Server doesn't verify (operator-trusted dir); client does.
+  if (typeof o.hmac_sha256 === 'string' && /^[0-9a-f]{64}$/.test(o.hmac_sha256)) {
+    result.hmac_sha256 = o.hmac_sha256;
+  }
+  return result;
 }
 
 export function readManifestFromDir(dir: string): ClientManifest | { status: 404 } | { status: 503; detail: string } {

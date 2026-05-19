@@ -31,9 +31,19 @@ export function extractBinName(urlPath: string): ClientBinName | null {
   const prefix = '/v1/client-latest/files/';
   if (!urlPath.startsWith(prefix)) return null;
   const tail = urlPath.slice(prefix.length);
-  if (tail.includes('/') || tail.includes('\\') || tail.includes('..')) return null;
-  if (!isWhitelistedBin(tail)) return null;
-  return tail;
+  // CTO review: decode percent-escapes before traversal check so `%2e%2e/`
+  // doesn't bypass the literal `..` filter. decodeURIComponent throws on
+  // malformed sequences — treat as not-found.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(tail);
+  } catch {
+    return null;
+  }
+  if (decoded.includes('/') || decoded.includes('\\') || decoded.includes('..')) return null;
+  if (decoded.includes('\0')) return null;
+  if (!isWhitelistedBin(decoded)) return null;
+  return decoded;
 }
 
 export function handleFileRequest(

@@ -85,7 +85,7 @@ function parseArgs(argv) {
 
 function printHelp() {
   process.stdout.write(`Usage: node scripts/install-client.mjs [--dry-run | --uninstall]\n`);
-  process.stdout.write(`  Stage 5 CJS bins into ~/.riven/digital-twin/ and register Claude Code hooks.\n`);
+  process.stdout.write(`  Stage 6 CJS bins into ~/.riven/digital-twin/ and register Claude Code hooks.\n`);
   process.stdout.write(`  See INSTALL.md for the full agent-driven flow.\n`);
 }
 
@@ -374,6 +374,7 @@ if (!args.dryRun) {
 log(`done.`);
 log(`next steps:`);
 log(`  1. Restart Claude Code (so it re-reads ~/.claude/settings.json).`);
-log(`  2. Verify with: node ${join(stageDir, 'bin-digital-twin.cjs')} inject-mock`);
-log(`  3. Then run: node ${join(stageDir, 'bin-uploader.cjs')}`);
-log(`  4. Check that http://192.168.22.88:8933/api/users lists your user_id.`);
+log(`  2. Verify status: node ${join(stageDir, 'bin-digital-twin.cjs')} status`);
+log(`     Expect: enabled=true, endpoint set, client_version visible after first auto-update tick.`);
+log(`  3. Real uploads happen automatically when your next CC Stop hook fires.`);
+log(`  4. After your next session, check the dashboard for your user_id.`);

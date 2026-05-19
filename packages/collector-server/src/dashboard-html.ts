@@ -399,8 +399,16 @@ header button:hover { background: #1d4ed8; }
     if (!m) { body.innerHTML = '<div class="empty">No manifest published yet. Operator: run <code>node scripts/publish-client.mjs --server &lt;host&gt;</code>.</div>'; return; }
     var ts = new Date(m.generated_at).toLocaleString();
     var html = '<div><b>Version:</b> <code>' + escHtml(m.version) + '</code></div>' +
-      '<div><b>Published:</b> ' + escHtml(ts) + '</div>' +
-      '<div style="margin-top:6px"><b>Files (' + m.files.length + '):</b></div>';
+      '<div><b>Published:</b> ' + escHtml(ts) + '</div>';
+    if (m.disabled === true) {
+      html += '<div style="margin:6px 0; padding:6px 10px; background:#fef2f2; border-left:3px solid #dc2626; color:#991b1b">' +
+        '<b>⛔ KILL SWITCH ACTIVE</b> &mdash; clients will NOT update. ' +
+        (m.note ? '<span class="muted">note: ' + escHtml(m.note) + '</span>' : '') +
+        '</div>';
+    } else if (m.note) {
+      html += '<div class="muted">note: ' + escHtml(m.note) + '</div>';
+    }
+    html += '<div style="margin-top:6px"><b>Files (' + m.files.length + '):</b></div>';
     m.files.forEach(function (f) {
       html += '<div class="file-row"><span class="name">' + escHtml(f.name) + '</span>' +
         '<span class="size">' + formatBytes(f.size) + '</span>' +

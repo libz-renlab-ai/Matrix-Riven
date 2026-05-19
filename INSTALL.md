@@ -169,7 +169,7 @@ node scripts/install-client.mjs --uninstall
 
 会：
 - 从 `~/.claude/settings.json` 删除 3 个带 `_rivenTag` 的 hook 条目（同时清理老 `_teamagentTag` 条目）
-- 删除 `~/.riven/digital-twin/` 下的 5 个 `.cjs` bin
+- 删除 `~/.riven/digital-twin/` 下的 6 个 `.cjs` bin
 
 不会：
 - 删 `~/.riven/digital-twin/queue/` 队列（有未上传的数据）

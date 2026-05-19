@@ -29,25 +29,47 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-function readPid(path: string): number | null {
+function readPidRecord(path: string): { pid: number; start_at?: string } | null {
   if (!existsSync(path)) return null;
   try {
     const raw = readFileSync(path, 'utf8').trim();
-    // Existing uploader daemon writes JSON: {"pid":12345,"start_at":"..."}
     if (raw.startsWith('{')) {
-      const parsed = JSON.parse(raw) as { pid?: unknown };
+      const parsed = JSON.parse(raw) as { pid?: unknown; start_at?: unknown };
       if (typeof parsed.pid === 'number' && Number.isFinite(parsed.pid) && parsed.pid > 0) {
-        return parsed.pid;
+        return {
+          pid: parsed.pid,
+          ...(typeof parsed.start_at === 'string' ? { start_at: parsed.start_at } : {}),
+        };
       }
       return null;
     }
-    // Fallback: plain integer.
     const n = Number(raw);
-    if (Number.isFinite(n) && n > 0) return n;
+    if (Number.isFinite(n) && n > 0) return { pid: n };
   } catch {
     return null;
   }
   return null;
+}
+
+/**
+ * Read PID — kept for backward compat with earlier signatures.
+ */
+function readPid(path: string): number | null {
+  return readPidRecord(path)?.pid ?? null;
+}
+
+/**
+ * Defensive check: refuse to kill if `start_at` says the recorded process is
+ * older than 30 days. PID has almost certainly been recycled by the OS to a
+ * completely unrelated process (Chrome, VS Code, …). Without start_at field
+ * (e.g. legacy plain-integer pid file) we proceed but log a caution.
+ */
+const STALE_PID_RECORD_MS = 30 * 24 * 60 * 60 * 1000;
+function pidLooksRecycled(record: { pid: number; start_at?: string }): boolean {
+  if (!record.start_at) return false; // no signal — assume valid
+  const t = Date.parse(record.start_at);
+  if (!Number.isFinite(t)) return true; // garbage timestamp — refuse
+  return Date.now() - t > STALE_PID_RECORD_MS;
 }
 
 async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
@@ -83,9 +105,17 @@ export async function restartUploader(opts: {
   pidFile: string;
   logFile: string;
 }): Promise<DaemonRestartResult> {
-  const oldPid = readPid(opts.pidFile);
+  const pidRecord = readPidRecord(opts.pidFile);
+  const oldPid = pidRecord?.pid ?? null;
   let killedOld = false;
-  if (oldPid !== null && pidAlive(oldPid)) {
+  // CTO review: refuse to kill a recycled-looking PID (record older than 30
+  // days → PID is almost certainly a different process now).
+  if (
+    pidRecord !== null &&
+    oldPid !== null &&
+    pidAlive(oldPid) &&
+    !pidLooksRecycled(pidRecord)
+  ) {
     try {
       process.kill(oldPid); // default SIGTERM on POSIX; Windows: kills immediately
     } catch (err) {

@@ -31,6 +31,7 @@ import {
   shouldUpdate,
   validateManifest,
 } from './manifest.js';
+import { verifyManifestHmac } from './hmac.js';
 import { downloadAllFiles } from './download.js';
 import {
   applyReplacements,
@@ -146,6 +147,14 @@ async function fetchRemoteManifest(
   }
   const m = validateManifest(json);
   if (!m) return { ok: false, status: 'invalid', detail: 'manifest schema validation failed' };
+  // HMAC verification — opt-in. If env unset, skipped silently. If env set,
+  // a missing or mismatched hmac aborts with `invalid`.
+  // We pass the raw parsed JSON so the hmac_sha256 field is visible to verify.
+  const rawWithHmac = json as ClientManifest & { hmac_sha256?: unknown };
+  const verify = verifyManifestHmac(rawWithHmac);
+  if (!verify.ok) {
+    return { ok: false, status: 'invalid', detail: `manifest HMAC verification failed: ${verify.reason}` };
+  }
   return { ok: true, manifest: m };
 }
 
@@ -236,6 +245,11 @@ async function runWithLock(
       appendLog(paths.autoUpdateLogFile, `current (version=${remote.version})`);
       return { ok: true, outcome: 'same-version', to_version: remote.version };
     }
+    if (decision.reason === 'disabled') {
+      const noteSuffix = decision.note ? ` note="${decision.note}"` : '';
+      appendLog(paths.autoUpdateLogFile, `PAUSED (operator kill-switch) version=${remote.version}${noteSuffix}`);
+      return { ok: true, outcome: 'same-version', to_version: remote.version, detail: 'kill-switch' };
+    }
     if (decision.reason === 'manifest-suspicious') {
       await emitError(
         'manifest-suspicious',
@@ -285,10 +299,29 @@ async function runWithLock(
     logFile: paths.uploaderLogFile,
   });
   if (!restart.ok) {
-    // We've already swapped + probed; daemon respawn is best-effort. Keep new files,
-    // surface the error so the dashboard can flag it. Next SessionStart will try again.
+    // CTO review 2026-05-19: if we get here we've killed the old daemon and
+    // failed to spawn the new one. Writing the new local manifest now would
+    // cause the next SessionStart to short-circuit on `same-version` and the
+    // machine would be stuck without a running uploader. Skip the manifest
+    // write so the next SessionStart re-runs the full pipeline. The .old
+    // backups have been swapped onto live disk already; rollback would not
+    // bring the daemon back. Best fallback: try one more spawn (no kill),
+    // mark as updated-but-degraded.
     await emitError('daemon-restart', remote.version, restart.detail ?? 'unknown restart failure');
-    // Still treat as success in terms of file replacement — daemon will respawn next time.
+    appendLog(
+      paths.autoUpdateLogFile,
+      `DEGRADED daemon-restart failed: ${restart.detail ?? 'unknown'} — next SessionStart will retry`,
+    );
+    // Note: we still clean up .old (running daemon would have been killed
+    // anyway). Don't write manifest. The Stop hook's tap path (which
+    // unconditionally spawns the daemon if missing) will eventually pick up.
+    cleanupOldBackups(plans);
+    return {
+      ok: false,
+      outcome: 'daemon-restart-failed',
+      detail: restart.detail,
+      to_version: remote.version,
+    };
   }
 
   // 9. write new local manifest

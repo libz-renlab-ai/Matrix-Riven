@@ -33,6 +33,10 @@ export interface ClientManifest {
   /** ISO timestamp the manifest was generated. Client uses this as the second gate against version-string typo. */
   generated_at: string;
   files: ClientManifestFile[];
+  /** Emergency kill switch. true → clients skip update even if version changed. */
+  disabled?: boolean;
+  /** Optional operator note rendered on dashboard + auto-update.log. */
+  note?: string;
 }
 
 /** Body of `POST /v1/client-update-error`. */

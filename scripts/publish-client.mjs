@@ -29,7 +29,7 @@ import {
   renameSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -57,13 +57,23 @@ function fatal(line) {
 }
 
 function parseArgs(argv) {
-  const out = { server: null, localTarget: null, targetDir: null, dryRun: false, help: false };
+  const out = {
+    server: null,
+    localTarget: null,
+    targetDir: null,
+    dryRun: false,
+    help: false,
+    killSwitch: false,
+    note: null,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--server') out.server = argv[++i];
     else if (a === '--local-target') out.localTarget = argv[++i];
     else if (a === '--target-dir') out.targetDir = argv[++i];
     else if (a === '--dry-run') out.dryRun = true;
+    else if (a === '--kill-switch') out.killSwitch = true;
+    else if (a === '--note') out.note = argv[++i];
     else if (a === '--help' || a === '-h') out.help = true;
     else fatal(`unknown flag: ${a}`);
   }
@@ -107,7 +117,26 @@ function preflight() {
   if (!existsSync(PKG_PATH)) fatal(`missing ${PKG_PATH}`);
 }
 
-function buildManifest() {
+/**
+ * Canonical JSON for HMAC signing. Must match
+ * packages/uploader-client/src/auto-update/hmac.ts `canonicalize`.
+ */
+function canonicalize(manifest) {
+  const copy = {};
+  const ordered = ['version', 'generated_at', 'disabled', 'note', 'files'];
+  for (const k of ordered) {
+    const v = manifest[k];
+    if (v === undefined) continue;
+    if (k === 'files' && Array.isArray(v)) {
+      copy.files = v.map((f) => ({ name: f.name, sha256: f.sha256, size: f.size }));
+    } else {
+      copy[k] = v;
+    }
+  }
+  return JSON.stringify(copy);
+}
+
+function buildManifest(extras = {}) {
   const pkg = JSON.parse(readFileSync(PKG_PATH, 'utf8'));
   const sha = gitShortSha();
   const version = `${pkg.version}+${sha}`;
@@ -118,7 +147,16 @@ function buildManifest() {
     const size = statSync(p).size;
     files.push({ name: bin, sha256: sha256Of(p), size });
   }
-  return { version, generated_at, files };
+  const manifest = { version, generated_at, files, ...extras };
+  // HMAC: opt-in via env var. Same env name client uses to verify.
+  const secret = process.env.RIVEN_CLIENT_MANIFEST_SECRET;
+  if (secret && secret.length > 0) {
+    manifest.hmac_sha256 = createHmac('sha256', secret).update(canonicalize(manifest), 'utf8').digest('hex');
+    log(`signed manifest with HMAC-SHA256 (RIVEN_CLIENT_MANIFEST_SECRET set)`);
+  } else {
+    log(`WARN: RIVEN_CLIENT_MANIFEST_SECRET unset — manifest not signed. Set it to enable HMAC verification.`);
+  }
+  return manifest;
 }
 
 function publishLocal(targetDir, manifest, dryRun) {
@@ -170,46 +208,68 @@ function publishLocal(targetDir, manifest, dryRun) {
   log(`published ${BINS.length} bins + manifest to ${targetDir}`);
 }
 
+/**
+ * POSIX single-quote a string for safe use in a remote shell command. Doubles
+ * any embedded single quote via `'\''`. CTO review: without this, `--target-dir`
+ * was a shell-injection sink.
+ */
+function shellQuote(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Reject obviously unsafe path strings before they reach ssh. Defense-in-depth
+ * on top of shellQuote.
+ */
+function assertPathSafe(p, role) {
+  if (!/^[A-Za-z0-9._/~+@:\\-]+$/.test(p)) {
+    fatal(`unsafe ${role} path: ${JSON.stringify(p)} (only letters, digits, . _ / ~ + @ : \\ -)`);
+  }
+}
+
 function runRemote(server, command) {
-  log(`ssh ${server} '${command}'`);
+  log(`ssh ${server} ${command}`);
   const r = spawnSync('ssh', [server, command], { stdio: 'inherit' });
-  if (r.status !== 0) fatal(`ssh failed (exit ${r.status})`);
+  if (r.status !== 0) fatal(`ssh failed (exit ${r.status}). Check that you can run \`ssh ${server} echo ok\` interactively; if it prompts for password or fails, configure keys first.`);
 }
 
 function scpUpload(server, files, remoteDir) {
   log(`scp ${files.length} files -> ${server}:${remoteDir}/`);
   const args = [...files, `${server}:${remoteDir}/`];
   const r = spawnSync('scp', args, { stdio: 'inherit' });
-  if (r.status !== 0) fatal(`scp failed (exit ${r.status})`);
+  if (r.status !== 0) fatal(`scp failed (exit ${r.status}). Common causes: ssh key not configured for ${server}, remote dir doesn't exist or has wrong permissions, or local files missing.`);
 }
 
 function publishRemote(server, targetDir, manifest, dryRun) {
+  assertPathSafe(targetDir, '--target-dir');
+  const targetQ = shellQuote(targetDir);
+  const incomingQ = shellQuote(`${targetDir}/incoming`);
   // Stage manifest to a temp local file
   const tmpManifest = join(REPO_ROOT, '.publish-manifest.tmp.json');
   writeFileSync(tmpManifest, JSON.stringify(manifest, null, 2), 'utf8');
-  const incoming = `${targetDir}/incoming`;
   if (dryRun) {
-    log(`[dry-run] would ssh ${server} mkdir -p ${incoming}`);
-    log(`[dry-run] would scp 6 .cjs + manifest.json to ${server}:${incoming}/`);
+    log(`[dry-run] would ssh ${server} mkdir -p ${incomingQ}`);
+    log(`[dry-run] would scp 6 .cjs + manifest.json to ${server}:${targetDir}/incoming/`);
     log(`[dry-run] would ssh ${server} mv (atomic rotate into ${targetDir})`);
     try { rmSync(tmpManifest, { force: true }); } catch {}
     return;
   }
   try {
-    runRemote(server, `mkdir -p ${incoming}`);
+    runRemote(server, `mkdir -p ${incomingQ}`);
     const localFiles = BINS.map((b) => join(DIST_DIR, b)).concat([tmpManifest]);
-    // scp doesn't let us rename inline — upload tmpManifest as manifest.json.tmp on remote
-    scpUpload(server, localFiles, incoming);
-    // Rename the local-temp manifest name on remote to match
+    scpUpload(server, localFiles, `${targetDir}/incoming`);
+    // Rename the local-temp manifest name on remote
     runRemote(
       server,
-      `mv ${incoming}/.publish-manifest.tmp.json ${incoming}/manifest.json`,
+      `mv ${shellQuote(`${targetDir}/incoming/.publish-manifest.tmp.json`)} ${shellQuote(`${targetDir}/incoming/manifest.json`)}`,
     );
     // Promote .cjs files first, manifest.json LAST
-    const moveBins = BINS.map((b) => `mv ${incoming}/${b} ${targetDir}/${b}`).join(' && ');
+    const moveBins = BINS.map((b) =>
+      `mv ${shellQuote(`${targetDir}/incoming/${b}`)} ${shellQuote(`${targetDir}/${b}`)}`,
+    ).join(' && ');
     runRemote(
       server,
-      `cd ${targetDir} && ${moveBins} && mv ${incoming}/manifest.json ${targetDir}/manifest.json && rmdir ${incoming}`,
+      `cd ${targetQ} && ${moveBins} && mv ${shellQuote(`${targetDir}/incoming/manifest.json`)} ${shellQuote(`${targetDir}/manifest.json`)} && rmdir ${incomingQ}`,
     );
     log(`published to ${server}:${targetDir}`);
   } finally {
@@ -229,7 +289,10 @@ if (!args.server && !args.localTarget) {
 }
 
 preflight();
-const manifest = buildManifest();
+const extras = {};
+if (args.killSwitch) extras.disabled = true;
+if (args.note) extras.note = String(args.note).slice(0, 256);
+const manifest = buildManifest(extras);
 log(`manifest: version=${manifest.version} generated_at=${manifest.generated_at} files=${manifest.files.length}`);
 for (const f of manifest.files) log(`  ${f.name.padEnd(32)} ${f.size.toString().padStart(8)} ${f.sha256.slice(0, 12)}...`);
 
@@ -243,5 +306,28 @@ if (args.localTarget) {
 }
 
 if (!args.dryRun) {
+  // CTO review: spec promised a post-publish verification fetch. Try to do it
+  // when --server has an obvious HTTP endpoint we can probe (host:port).
+  if (args.server) {
+    const m = String(args.server).match(/@([^:]+)$/);
+    const hostOnly = m ? m[1] : args.server;
+    const probeUrl = `http://${hostOnly}:8933/v1/client-latest/manifest`;
+    log(`verifying via GET ${probeUrl}`);
+    try {
+      const resp = await fetch(probeUrl);
+      if (!resp.ok) {
+        log(`WARN: verify GET returned HTTP ${resp.status}. Manual check recommended.`);
+      } else {
+        const live = await resp.json();
+        if (live.version !== manifest.version) {
+          log(`WARN: server reports version=${live.version}; expected ${manifest.version}. Did the collector reload?`);
+        } else {
+          log(`✓ server now serves ${live.version}`);
+        }
+      }
+    } catch (err) {
+      log(`WARN: verify GET failed: ${err && err.message ? err.message : err}. If the collector is on a non-standard port, check it manually.`);
+    }
+  }
   log(`done. Clients will pick up version=${manifest.version} on their next SessionStart hook.`);
 }

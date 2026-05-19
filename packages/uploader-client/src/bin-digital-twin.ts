@@ -16,7 +16,7 @@
  * point at a tmp HOME and capture stdout without touching the real shell.
  */
 import { homedir as osHomedir } from 'node:os';
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import { ulid as defaultUlid } from 'ulid';
 import {
@@ -270,6 +270,33 @@ export function executeDigitalTwinStatus(deps: DigitalTwinDeps = {}): DigitalTwi
   const pid = readPidFile(home);
   const aliveFn = r.isPidAlive ?? isPidAlive;
 
+  // Read local manifest for client_version (auto-update self-diagnosis).
+  let clientVersion = '(none)';
+  let manifestTs = '';
+  try {
+    if (existsSync(paths.manifestFile)) {
+      const m = JSON.parse(readFileSync(paths.manifestFile, 'utf8')) as {
+        version?: unknown;
+        generated_at?: unknown;
+      };
+      if (typeof m.version === 'string') clientVersion = m.version;
+      if (typeof m.generated_at === 'string') manifestTs = m.generated_at;
+    }
+  } catch {
+    // ignore — manifest is opportunistic
+  }
+  // Read tail of auto-update.log if present
+  let autoUpdateLastLine = '(no log)';
+  try {
+    if (existsSync(paths.autoUpdateLogFile)) {
+      const log = readFileSync(paths.autoUpdateLogFile, 'utf8');
+      const lines = log.split('\n').filter((l) => l.length > 0);
+      if (lines.length > 0) autoUpdateLastLine = lines[lines.length - 1] ?? '(empty)';
+    }
+  } catch {
+    // ignore
+  }
+
   const lines: string[] = [];
   lines.push('digital-twin status');
   lines.push(`  config:    ${paths.configFile}`);
@@ -278,6 +305,7 @@ export function executeDigitalTwinStatus(deps: DigitalTwinDeps = {}): DigitalTwi
   lines.push(`  user_id:   ${existing.identity.user_id}`);
   lines.push(`  machine_id: ${existing.identity.machine_id}`);
   lines.push(`  token:     ${existing.uploader.token ? '[redacted]' : '(none)'}`);
+  lines.push(`  client_version: ${clientVersion}${manifestTs ? ` (installed ${manifestTs})` : ''}`);
   lines.push('  queue:');
   lines.push(`    pending:     ${pending}`);
   lines.push(`    dead-letter: ${deadLetter}`);
@@ -298,6 +326,9 @@ export function executeDigitalTwinStatus(deps: DigitalTwinDeps = {}): DigitalTwi
   lines.push(
     `    last_error: ${lastErr ? `${lastErr.line} (line ${lastErr.lineno})` : '(none)'}`,
   );
+  lines.push('  auto-update:');
+  lines.push(`    log:        ${paths.autoUpdateLogFile}`);
+  lines.push(`    last_event: ${autoUpdateLastLine}`);
   r.print(lines.join('\n'));
   return { exitCode: 0 };
 }
