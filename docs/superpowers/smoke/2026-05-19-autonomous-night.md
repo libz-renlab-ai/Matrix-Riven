@@ -144,6 +144,15 @@
 | POST /v1/cc-status 加 isValidUserId（兄弟路径漏修，no-token 模式同 payload 仍可污染） | 安全 round-3 P1 |
 | model id allowlist 放宽：`claude-` + `[A-Za-z0-9._-]{3,80}`，接受 v3 / v4 系列全部 Anthropic 模型 | 安全 round-3 P2 |
 
+### Round-7 追加修复（commit `0dacbbb`，EM round-3 反馈）
+
+| 项 | 来源 |
+|---|---|
+| /overview `<title>` 残留 `Leadership · Matrix-Riven` 修了；renderTabPage 标题改成中文映射（团队 / 项目 / 活动流 / 洞察 / 周回顾 / 实时看板）+ middot 品牌 | EM round-3 P0 |
+| 渗透残留账号在读路径过滤（transcript-loader + disk-scan 都加 isValidUserIdShape，含 pentest 子串黑名单 anon_attacker / script_alert / xss / svg_onload / 等）+ 老数据 dir 已清 | EM round-3 P0 |
+| /people/<id> 会话列表 prompt 原文不再写入 HTML（v1 仅显示元数据 + 字符数；v2 上线 audit-log endpoint 后改 XHR-on-click） | EM round-3 P0 |
+| Slideover evolve 改成 topic class + 字符数（不再直接渲染 prompt preview） | EM round-3 P0 衍生 |
+
 ## 上线步骤（明早醒来照做）
 
 1. `git pull` 拿到本分支最新 commit
