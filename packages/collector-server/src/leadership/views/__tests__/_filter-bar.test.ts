@@ -50,7 +50,7 @@ describe('renderFilterBar', () => {
 
   it('state chip active uses human label', () => {
     const html = renderFilterBar(mkOpts({ range: 'today', state: 'stuck' }));
-    expect(html).toContain('卡住');
+    expect(html).toContain('进展受阻');
     expect(html).toContain('data-fb-clear="state"');
   });
 
@@ -61,7 +61,7 @@ describe('renderFilterBar', () => {
     expect(html).toContain('blake');
     expect(html).toContain('matrix-riven');
     expect(html).toContain('近 7 天');
-    expect(html).toContain('卡住');
+    expect(html).toContain('进展受阻');
     expect(html).toContain('data-active="true"');
   });
 

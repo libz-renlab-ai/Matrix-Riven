@@ -23,7 +23,7 @@ describe('stateLabel', () => {
   it.each([
     ['active',       '正常推进'],
     ['quiet',        '本周节奏放缓'],
-    ['stuck',        '进展缓慢'],
+    ['stuck',        '进展受阻'],
     ['needs_help',   '可能需要支援'],
     ['low_activity', '本周参与不多'],
   ])('%s → %s', (s, expected) => {

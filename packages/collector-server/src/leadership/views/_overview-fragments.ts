@@ -406,7 +406,7 @@ function stateHumanLabel(s: string): string {
   switch (s) {
     case 'active': return '活跃中';
     case 'quiet': return '安静';
-    case 'stuck': return '卡住';
+    case 'stuck': return '进展受阻';
     case 'needs_help': return '求助';
     case 'low_activity': return '本周参与不多';
     default: return s;

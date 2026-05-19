@@ -741,6 +741,23 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
       return;
     }
 
+    // Round-1 QA P2 (security): CSRF / DNS-rebinding hardening. Reject POST
+    // requests carrying browser-origin signals — uploader clients send a
+    // bespoke `X-Riven-Client: uploader` header (or the legacy `User-Agent:
+    // matrix-riven-uploader`), so any POST that looks like a browser
+    // (Origin / Referer set, no riven client marker) is refused. This blocks
+    // a DNS-rebound site at 127.0.0.1 from submitting forged sessions.
+    const xClient = String(req.headers['x-riven-client'] ?? '');
+    const ua = String(req.headers['user-agent'] ?? '');
+    const looksLikeRivenClient =
+      xClient === 'uploader' || /matrix-riven-uploader/i.test(ua);
+    const origin = String(req.headers['origin'] ?? '');
+    const referer = String(req.headers['referer'] ?? '');
+    if (!looksLikeRivenClient && (origin.length > 0 || referer.length > 0)) {
+      send(res, 403, { error: 'csrf_blocked' });
+      return;
+    }
+
     // M2 — token auth on the conversation-upload endpoint. When BPP_AUTH_TOKEN
     // is set, POST /v1/cc-sessions requires a matching Bearer token. Checked
     // BEFORE the body read so a missing/wrong token 401s regardless of payload.

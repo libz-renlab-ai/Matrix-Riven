@@ -10,7 +10,7 @@ function mkMember(overrides: Partial<MemberSnapshot> = {}): MemberSnapshot {
     today: { sessions: 3, tokens: 12300, estMinutes: 90, costUsd: 4.5 },
     trend7d: [1, 2, 0, 5, 3, 4, 2],
     deltaVs7dAvgPct: 0.2,
-    warnings: ['卡住 3 天'],
+    warnings: ['受阻 3 天'],
     topProject: 'matrix-riven',
     ...overrides,
   };
@@ -50,7 +50,7 @@ describe('renderMemberDetail', () => {
     const html = renderMemberDetail(mkMember(), mkDetail());
     expect(html).toContain('blake');
     expect(html).toContain('blake@example.com');
-    expect(html).toContain('卡住');
+    expect(html).toContain('进展受阻');
     expect(html).toContain('返回团队');
     expect(html).toContain('matrix-riven');
   });

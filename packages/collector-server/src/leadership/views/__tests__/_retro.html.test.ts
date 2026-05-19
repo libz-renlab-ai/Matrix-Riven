@@ -53,7 +53,7 @@ describe('renderRetro', () => {
         { ts: '2026-05-17T00:00:00Z', type: 'pr', by: 'blake', project: 'm', detail: 'y' },
       ] as unknown as OverviewSnapshot['highlights'],
       attention: [
-        { kind: 'member', refId: 'x@y', displayName: 'x', initials: 'x', tag: '卡住', tagSeverity: 'urgent', line2: '', time: '', severity: 9 },
+        { kind: 'member', refId: 'x@y', displayName: 'x', initials: 'x', tag: '进展受阻', tagSeverity: 'urgent', line2: '', time: '', severity: 9 },
       ] as unknown as OverviewSnapshot['attention'],
     });
     const html = renderRetro(snap);

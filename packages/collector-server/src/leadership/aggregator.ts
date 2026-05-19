@@ -943,11 +943,11 @@ function deriveAttention(
     if (m.stateBadge === 'stuck') {
       const topFile = topEditedFile(memSessions);
       const line2 = topFile
-        ? `卡在 <span class="mono">${escapeHtmlEmail(shortFilePath(topFile))}</span>`
+        ? `推进受阻于 <span class="mono">${escapeHtmlEmail(shortFilePath(topFile))}</span>`
         : `反复尝试相似问题`;
       items.push({
         kind: 'member', refId: m.email, displayName: m.displayName, initials,
-        tag: '疑似卡住', tagSeverity: 'urgent',
+        tag: '进展受阻', tagSeverity: 'urgent',
         line2,
         time: timeAgo(m.lastSessionAt), severity: 9,
       });
