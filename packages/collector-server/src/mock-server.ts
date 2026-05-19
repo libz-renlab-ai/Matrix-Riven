@@ -93,6 +93,148 @@ export function isInjectMockTranscript(transcriptText: string): boolean {
   );
 }
 
+/**
+ * Email TLDs we treat as "real" — Matrix-Riven's `getUserId()` produces these
+ * out of `git config user.email`. Anything outside this allowlist is treated
+ * as a hostname-fallback "ghost" identifier.
+ *
+ * Keep small + explicit. False-positive cost (rejecting a real user) is
+ * higher than false-negative cost (failing to filter a ghost).
+ */
+const REAL_EMAIL_TLDS = [
+  '.com', '.cn', '.io', '.org', '.net', '.dev', '.ai', '.co',
+  '.app', '.me', '.us', '.uk', '.eu', '.gov', '.edu',
+];
+
+/**
+ * Detect Matrix-Riven's `${unix_user}@${hostname}` identity fallback.
+ *
+ * `getUserId()` (packages/shared/src/identity.ts) calls
+ * `git config user.email` and falls back to `${userInfo().username}@${hostname()}`
+ * when git is absent, `user.email` is unset, or the shell-out times out.
+ * That fallback produces user_ids the collector treats as full members
+ * (own `<user>/<date>/` tree), even though they're typically the SAME
+ * physical person whose Stop hook tags transcripts with their real email
+ * via `cfg.identity.user_id` from `~/.riven/digital-twin.json`.
+ *
+ *   isGhostUserId('hrdai@qq.com')                              → false
+ *   isGhostUserId('horton2048@users.noreply.github.com')       → false (`.com`)
+ *   isGhostUserId('19723@hut')                                 → true  (bare host)
+ *   isGhostUserId('blink@BlinkdeMacBook-Air.local')            → true  (`.local`)
+ *   isGhostUserId('neurobot@NeuroBot')                         → true
+ *
+ * Shape test only. A "sole-identity ghost" (someone whose only upload identity
+ * IS this form) still matches — the redundant-vs-sole distinction is made by
+ * the call site cross-referencing against existing non-ghost transcripts.
+ */
+export function isGhostUserId(userId: string): boolean {
+  const at = userId.lastIndexOf('@');
+  if (at <= 0) return false; // empty local part or no '@' → not classified
+  const host = userId.slice(at + 1);
+  if (host.length === 0) return false;
+  if (host.endsWith('.local')) return true;
+  const lower = host.toLowerCase();
+  for (const tld of REAL_EMAIL_TLDS) {
+    if (lower.endsWith(tld)) return false;
+  }
+  // Plain bare hostname (no `.`) — classic `${user}@${hostname}` fallback.
+  if (!host.includes('.')) return true;
+  // Dot present but unknown TLD → conservative: treat as real.
+  return false;
+}
+
+/**
+ * Return true when some non-ghost user_id already has a transcript for
+ * `sessionId` on `date` under `outputDir`. Used to detect "redundant ghost"
+ * cc-status uploads: a cc-status snapshot arrives tagged with a ghost
+ * user_id, but the real-email user on the same machine has already POSTed
+ * (or will POST, race window only) the full transcript for the same session.
+ *
+ * Scoped to a single date subdir for cost — Matrix-Riven session_ids are
+ * UUIDv4 / ULID, unique per CC instance, so cross-day collisions are
+ * effectively impossible. `date` is derived from the snapshot's `ts` field
+ * by the caller.
+ */
+function hasNonGhostTranscript(
+  outputDir: string,
+  sessionId: string,
+  date: string,
+): boolean {
+  let users: string[];
+  try {
+    users = readdirSync(outputDir);
+  } catch {
+    return false;
+  }
+  for (const u of users) {
+    if (isGhostUserId(u)) continue;
+    const candidate = join(outputDir, u, date, `${sessionId}.jsonl`);
+    // Defense-in-depth: confirm the resolved path still sits under outputDir
+    // before we trust the `readdirSync` entry. Symlinks / traversal-laden
+    // user_ids that survived `safeUserId` shouldn't reach this code, but
+    // the existsSync below would happily follow a symlink out.
+    if (!isUnder(outputDir, candidate)) continue;
+    if (existsSync(candidate)) return true;
+  }
+  return false;
+}
+
+/**
+ * Counterpart to `hasNonGhostTranscript`: after a transcript lands, sweep
+ * every ghost-shape user dir for a paired `<sessionId>.cc-status.jsonl`
+ * fragment and unlink it. Pre-PR landing of `realtime-emit` identity-from-
+ * config (libz-renlab-ai/Matrix-Riven#3) clients still emit cc-status under
+ * the hostname fallback even when transcripts go to the real email; this
+ * sweep keeps the on-disk tree from accumulating those orphans for the
+ * leadership dashboard / `/api/users` listing.
+ *
+ * Peer-gated. Mirrors the precondition of the cc-status pre-check (gate #1):
+ * the sweep only fires when a NON-GHOST user already holds the transcript
+ * for `sessionId` on `date`. If the just-arrived transcript itself was
+ * posted by a sole-identity ghost (e.g. `lv@lvjiawendeMacBook-Air.local`
+ * — whose ONLY upload identity is the hostname form, no real-email peer
+ * exists), the sweep bails. Without this gate the sweep would unlink the
+ * sole-identity ghost's OWN cc-status under their own user dir — a P0
+ * data-loss bug caught in cold-read of an earlier rev of this commit.
+ *
+ * Best-effort. Errors are swallowed — a sweep failure must not 5xx a
+ * successful transcript write.
+ *
+ * Returns the number of files removed (for the response payload + logging).
+ */
+function sweepRedundantGhostCcStatus(
+  outputDir: string,
+  sessionId: string,
+  date: string,
+): number {
+  // Peer gate: identical semantics to gate #1's `hasNonGhostTranscript`.
+  // Only proceed when a non-ghost user holds a transcript for the same
+  // session_id on the same date — otherwise nothing is "redundant" to clean.
+  if (!hasNonGhostTranscript(outputDir, sessionId, date)) return 0;
+
+  let users: string[];
+  try {
+    users = readdirSync(outputDir);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const u of users) {
+    if (!isGhostUserId(u)) continue;
+    const candidate = join(outputDir, u, date, `${sessionId}.cc-status.jsonl`);
+    if (!isUnder(outputDir, candidate)) continue;
+    try {
+      if (existsSync(candidate)) {
+        unlinkSync(candidate);
+        removed++;
+      }
+    } catch {
+      // best-effort — next sweep will retry
+    }
+  }
+  return removed;
+}
+
 export interface MockServerOptions {
   /** Port to bind. Use 0 to pick an ephemeral port. */
   port: number;
@@ -759,6 +901,37 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
       // body 400s (unlike the optional quota sidecar on /v1/cc-sessions, the
       // snapshot IS the payload here).
       if (route === ROUTE_CC_STATUS) {
+        // Redundant-ghost gate: reject cc-status snapshots that arrive tagged
+        // with a hostname-fallback user_id when the same session_id already
+        // has a real transcript under a non-ghost user_id. The realtime hook
+        // bin pre-PR #3 emits under the `${user}@${host}` form even when the
+        // transcript-upload Stop hook reads identity from
+        // `~/.riven/digital-twin.json` — same physical CC session, two
+        // different user_ids on disk. Reject the ghost snapshot fragment
+        // here rather than write+sweep later.
+        //
+        // Return 200 (not 4xx) so any client retry-on-error path doesn't
+        // hammer the gate.
+        const snapObj = json as Record<string, unknown>;
+        const snapUid = typeof snapObj.user_id === 'string' ? snapObj.user_id : '';
+        const snapSid = typeof snapObj.session_id === 'string' ? snapObj.session_id : '';
+        const snapTs = typeof snapObj.ts === 'string' ? snapObj.ts : '';
+        if (snapUid && snapSid && isGhostUserId(snapUid)) {
+          const snapDate = dateStamp(snapTs, now());
+          if (hasNonGhostTranscript(outputDir, snapSid, snapDate)) {
+            send(res, 200, {
+              ok: true,
+              dropped: 'redundant-ghost',
+              user_id: snapUid,
+              session_id: snapSid,
+              date: snapDate,
+              detail:
+                'cc-status under hostname-fallback user_id; real transcript ' +
+                'already present under a non-ghost user for this session_id',
+            });
+            return;
+          }
+        }
         const r = appendCcStatusSnapshot(outputDir, json, now());
         if (!r.ok) {
           if (r.reason === 'path') {
@@ -878,6 +1051,25 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
         mkdirSync(targetDir, { recursive: true });
         atomicWriteFileSync(targetFile, decoded);
 
+        // Redundant-ghost sweep: if the realtime cc-status snapshots for this
+        // session were already POSTed under a hostname-fallback user_id (the
+        // pre-PR #3 client bug) BEFORE this transcript arrived, the cc-status
+        // gate above couldn't catch them — at that earlier moment no
+        // transcript existed yet. Now that the transcript is on disk, sweep
+        // every ghost-shape user dir on the same date and unlink any
+        // `<sid>.cc-status.jsonl` orphan.
+        //
+        // Best-effort. Errors swallowed: a sweep failure must never 5xx an
+        // otherwise-successful transcript write.
+        let ghostSweepRemoved = 0;
+        if (isLog) {
+          try {
+            ghostSweepRemoved = sweepRedundantGhostCcStatus(outputDir, id, date);
+          } catch {
+            // tracked via response field; explicit catch silences lint
+          }
+        }
+
         // P-D1 — append to the per-leaf session index so subsequent cold-start
         // scans can skip directory enumeration. Best-effort: any failure is
         // recovered by the next `rebuildIndex` at server start. We read the
@@ -981,7 +1173,13 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
           }
         }
 
-        send(res, 200, { ok: true, id, user_id: userIdSafe, date });
+        send(res, 200, {
+          ok: true,
+          id,
+          user_id: userIdSafe,
+          date,
+          ...(ghostSweepRemoved > 0 ? { ghost_cc_status_swept: ghostSweepRemoved } : {}),
+        });
       } catch (err) {
         // 2026-05-19 QA-5 ops P2: distinguish "client sent bad bytes"
         // (400) from "we couldn't write to disk" (500). Zlib raises

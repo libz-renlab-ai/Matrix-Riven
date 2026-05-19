@@ -14,6 +14,7 @@ import { gzipSync } from 'node:zlib';
 import {
   startMockServer,
   isInjectMockTranscript,
+  isGhostUserId,
   type MockServerHandle,
 } from '../mock-server.js';
 import { safeUserId, dateStamp } from '@matrix-riven/shared';
@@ -326,6 +327,235 @@ describe('isInjectMockTranscript', () => {
 
   it('returns false on empty string', () => {
     expect(isInjectMockTranscript('')).toBe(false);
+  });
+});
+
+describe('isGhostUserId', () => {
+  it('returns false for real email TLDs', () => {
+    expect(isGhostUserId('hrdai@qq.com')).toBe(false);
+    expect(isGhostUserId('charleyplztrybest@outlook.com')).toBe(false);
+    expect(isGhostUserId('liboze2026@163.com')).toBe(false);
+    expect(isGhostUserId('chenjr@nb-ai.com')).toBe(false);
+    expect(isGhostUserId('witkowskiloeser@gmail.com')).toBe(false);
+    expect(isGhostUserId('horton2048@users.noreply.github.com')).toBe(false);
+  });
+
+  it('returns true for bare hostname fallback', () => {
+    expect(isGhostUserId('19723@hut')).toBe(true);
+    expect(isGhostUserId('asus@yilinFormula1')).toBe(true);
+    expect(isGhostUserId('neurobot@NeuroBot')).toBe(true);
+  });
+
+  it('returns true for .local mDNS hostname suffix', () => {
+    expect(isGhostUserId('blink@BlinkdeMacBook-Air.local')).toBe(true);
+    expect(isGhostUserId('lv@lvjiawendeMacBook-Air.local')).toBe(true);
+    expect(isGhostUserId('zhangziyi@zhangziyideMacBook-Air-2.local')).toBe(true);
+    expect(isGhostUserId('alexpeng@pengchengdeMacBook-Air.local')).toBe(true);
+  });
+
+  it('handles edge cases', () => {
+    expect(isGhostUserId('')).toBe(false);
+    expect(isGhostUserId('no-at-sign')).toBe(false);
+    expect(isGhostUserId('@host')).toBe(false); // empty local part
+  });
+
+  it('leans conservative on unknown TLDs (dot present, not in allowlist → real)', () => {
+    expect(isGhostUserId('person@company.example')).toBe(false);
+  });
+});
+
+describe('mock-server — redundant-ghost rejection on POST /v1/cc-status', () => {
+  let server: MockServerHandle;
+  let outputDir: string;
+
+  beforeEach(async () => {
+    outputDir = mkdtempSync(join(tmpdir(), 'dt-mock-ghost-'));
+    server = await startMockServer({ port: 0, outputDir, now: () => FROZEN });
+  });
+
+  afterEach(async () => {
+    await server.close();
+  });
+
+  it('drops cc-status from ghost user_id when same session_id has a non-ghost transcript', async () => {
+    // 1. Real-email user posts the transcript first (via direct disk write —
+    //    skips the POST so we isolate the cc-status gate logic).
+    const realDir = join(outputDir, 'hrdai@qq.com', FROZEN_DATE);
+    mkdirSync(realDir, { recursive: true });
+    writeFileSync(join(realDir, 'session-X.jsonl'), '{"role":"user"}\n');
+
+    // 2. Ghost user_id POSTs a cc-status snapshot for the SAME session_id.
+    const res = await fetch(`${server.url}/v1/cc-status`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema_version: 1,
+        session_id: 'session-X',
+        user_id: 'neurobot@NeuroBot',
+        ts: '2026-05-09T03:14:00.000Z',
+        event: 'user_prompt_submit',
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      dropped?: string;
+      user_id: string;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.dropped).toBe('redundant-ghost');
+    expect(body.user_id).toBe('neurobot@NeuroBot');
+
+    // 3. Ghost user dir MUST NOT exist on disk.
+    expect(existsSync(join(outputDir, 'neurobot@NeuroBot'))).toBe(false);
+  });
+
+  it('accepts ghost cc-status when NO non-ghost peer holds the session_id (sole-identity ghost)', async () => {
+    const res = await fetch(`${server.url}/v1/cc-status`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema_version: 1,
+        session_id: 'lonely-session',
+        user_id: 'blink@BlinkdeMacBook-Air.local',
+        ts: '2026-05-09T03:14:00.000Z',
+        event: 'session_start',
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; dropped?: string };
+    expect(body.ok).toBe(true);
+    expect(body.dropped).toBeUndefined();
+  });
+
+  it('accepts real-email cc-status regardless of any same-session peer (gate is ghost-only)', async () => {
+    // A real-email user's cc-status MUST always be accepted, even if some
+    // other path looks "redundant" — the gate is shape-gated, never fires
+    // on a real-email caller.
+    const res = await fetch(`${server.url}/v1/cc-status`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema_version: 1,
+        session_id: 'real-session',
+        user_id: 'hrdai@qq.com',
+        ts: '2026-05-09T03:14:00.000Z',
+        event: 'session_start',
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; dropped?: string };
+    expect(body.ok).toBe(true);
+    expect(body.dropped).toBeUndefined();
+  });
+});
+
+describe('mock-server — redundant-ghost sweep on POST /v1/cc-sessions', () => {
+  let server: MockServerHandle;
+  let outputDir: string;
+
+  beforeEach(async () => {
+    outputDir = mkdtempSync(join(tmpdir(), 'dt-mock-sweep-'));
+    server = await startMockServer({ port: 0, outputDir, now: () => FROZEN });
+  });
+
+  afterEach(async () => {
+    await server.close();
+  });
+
+  it('removes pre-existing ghost cc-status orphans for the same session_id on the same date', async () => {
+    // Plant a ghost cc-status fragment on disk before the transcript arrives.
+    // Mirrors the real-world ordering: realtime hook fires first under ghost,
+    // Stop hook fires later under real email.
+    const ghostDir = join(outputDir, 'neurobot@NeuroBot', '2026-05-09');
+    mkdirSync(ghostDir, { recursive: true });
+    writeFileSync(
+      join(ghostDir, 'sess-Y.cc-status.jsonl'),
+      '{"schema_version":1,"session_id":"sess-Y","user_id":"neurobot@NeuroBot","ts":"...","event":"session_start"}\n',
+    );
+
+    // Real-email transcript POST for sess-Y.
+    const transcript = '{"role":"user","content":"hello"}\n';
+    const compressed = gzipSync(Buffer.from(transcript));
+    const res = await fetch(`${server.url}/v1/cc-sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema_version: '1.0',
+        envelope: {
+          session_id: 'sess-Y',
+          user_id: 'hrdai@qq.com',
+          captured_at: '2026-05-09T03:00:00.000Z',
+        },
+        transcript: { content: compressed.toString('base64') },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      id: string;
+      ghost_cc_status_swept?: number;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.ghost_cc_status_swept).toBe(1);
+
+    // Ghost orphan gone, real transcript present.
+    expect(existsSync(join(ghostDir, 'sess-Y.cc-status.jsonl'))).toBe(false);
+    expect(
+      existsSync(join(outputDir, 'hrdai@qq.com', '2026-05-09', 'sess-Y.jsonl')),
+    ).toBe(true);
+  });
+
+  it('leaves sole-identity ghost cc-status alone when the SAME ghost posts the transcript (no real-email peer exists)', async () => {
+    // Sole-identity ghost (e.g. lv@...local): both the transcript AND the
+    // cc-status legitimately live under this ghost dir — no real-email peer
+    // holds the data. Cold-read of an earlier rev of this commit caught a
+    // P0 bug: the sweep iterated every ghost dir and would unlink the
+    // sole-identity ghost's OWN cc-status when they posted their transcript.
+    // The peer-gated sweep (`hasNonGhostTranscript` first) fixes it.
+    const ghostDir = join(
+      outputDir,
+      'lv@lvjiawendeMacBook-Air.local',
+      '2026-05-09',
+    );
+    mkdirSync(ghostDir, { recursive: true });
+    const ccStatusPath = join(ghostDir, 'sole-Z.cc-status.jsonl');
+    writeFileSync(
+      ccStatusPath,
+      '{"schema_version":1,"session_id":"sole-Z","user_id":"lv@lvjiawendeMacBook-Air.local","ts":"2026-05-09T02:55:00.000Z","event":"session_start"}\n',
+    );
+
+    const transcript = '{"role":"user","content":"hi"}\n';
+    const compressed = gzipSync(Buffer.from(transcript));
+    const res = await fetch(`${server.url}/v1/cc-sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema_version: '1.0',
+        envelope: {
+          session_id: 'sole-Z',
+          user_id: 'lv@lvjiawendeMacBook-Air.local',
+          captured_at: '2026-05-09T03:00:00.000Z',
+        },
+        transcript: { content: compressed.toString('base64') },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      ghost_cc_status_swept?: number;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.ghost_cc_status_swept ?? 0).toBe(0);
+    // The transcript landed under the ghost dir (sole identity).
+    expect(
+      existsSync(
+        join(outputDir, 'lv@lvjiawendeMacBook-Air.local', '2026-05-09', 'sole-Z.jsonl'),
+      ),
+    ).toBe(true);
+    // The pre-existing cc-status MUST still be there. This is the bug fix
+    // the cold-read flagged.
+    expect(existsSync(ccStatusPath)).toBe(true);
   });
 });
 
