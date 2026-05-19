@@ -324,29 +324,55 @@ if (args.localTarget) {
   publishRemote(args.server, target, manifest, args.dryRun);
 }
 
-if (!args.dryRun) {
-  // CTO review: spec promised a post-publish verification fetch. Try to do it
-  // when --server has an obvious HTTP endpoint we can probe (host:port).
-  if (args.server) {
-    const m = String(args.server).match(/@([^:]+)$/);
-    const hostOnly = m ? m[1] : args.server;
-    const probeUrl = `http://${hostOnly}:8933/v1/client-latest/manifest`;
-    log(`verifying via GET ${probeUrl}`);
-    try {
-      const resp = await fetch(probeUrl);
-      if (!resp.ok) {
-        log(`WARN: verify GET returned HTTP ${resp.status}. Manual check recommended.`);
-      } else {
-        const live = await resp.json();
-        if (live.version !== manifest.version) {
-          log(`WARN: server reports version=${live.version}; expected ${manifest.version}. Did the collector reload?`);
-        } else {
-          log(`✓ server now serves ${live.version}`);
-        }
-      }
-    } catch (err) {
-      log(`WARN: verify GET failed: ${err && err.message ? err.message : err}. If the collector is on a non-standard port, check it manually.`);
-    }
+/**
+ * Post-publish verify — canonical-byte comparison of the served manifest
+ * against the local one. Round-2 chaos found that the old version-only check
+ * missed sha tampering. Now we canonicalize both and warn on any diff.
+ *
+ * Works for --server (probes http://host:8933) and --local-target
+ * (skips silently if 127.0.0.1:8933 isn't running).
+ */
+async function verifyPublished(manifestLocal, hostHint, isLocal) {
+  let probeUrl;
+  if (isLocal) {
+    probeUrl = 'http://127.0.0.1:8933/v1/client-latest/manifest';
+  } else {
+    const m = String(hostHint).match(/@([^:]+)$/);
+    const hostOnly = m ? m[1] : hostHint;
+    probeUrl = `http://${hostOnly}:8933/v1/client-latest/manifest`;
   }
+  log(`verifying via GET ${probeUrl}`);
+  let resp;
+  try {
+    resp = await fetch(probeUrl);
+  } catch (err) {
+    if (isLocal) {
+      log(`(skip) verify GET unreachable: ${err && err.message ? err.message : err}`);
+      return;
+    }
+    log(`WARN: verify GET failed: ${err && err.message ? err.message : err}. If the collector is on a non-standard port, check it manually.`);
+    return;
+  }
+  if (!resp.ok) {
+    log(`WARN: verify GET returned HTTP ${resp.status}. Manual check recommended.`);
+    return;
+  }
+  const live = await resp.json();
+  // Canonicalize both sides (without the hmac signature — that's already
+  // verified by clients). If bytes differ, something on the server changed
+  // between scp and GET — operator should investigate.
+  const localCanon = canonicalize(manifestLocal);
+  const liveCanon = canonicalize(live);
+  if (localCanon !== liveCanon) {
+    log(`WARN: served manifest differs from local. This usually means the server is serving a stale or tampered manifest.`);
+    log(`  local: ${localCanon.slice(0, 120)}...`);
+    log(`  live:  ${liveCanon.slice(0, 120)}...`);
+    return;
+  }
+  log(`✓ server serves byte-identical manifest (version=${live.version})`);
+}
+
+if (!args.dryRun) {
+  await verifyPublished(manifest, args.server, !!args.localTarget);
   log(`done. Clients will pick up version=${manifest.version} on their next SessionStart hook.`);
 }

@@ -45,7 +45,8 @@ export type DigitalTwinSubcommand =
   | 'pause'
   | 'resume'
   | 'inject-mock'
-  | 'member-stats';
+  | 'member-stats'
+  | 'update';
 
 export interface DigitalTwinDeps {
   homedir?: () => string;
@@ -96,7 +97,7 @@ export function parseDigitalTwinArgs(rest: string[]): DigitalTwinParsedArgs {
   const sub = rest[0];
   if (!sub) {
     throw new DigitalTwinArgError(
-      'Usage: bin-digital-twin <login|logout|status|pause|resume|inject-mock|member-stats> [args]',
+      'Usage: bin-digital-twin <login|logout|status|pause|resume|inject-mock|member-stats|update> [args]',
     );
   }
   switch (sub) {
@@ -111,6 +112,7 @@ export function parseDigitalTwinArgs(rest: string[]): DigitalTwinParsedArgs {
     case 'status':
     case 'pause':
     case 'resume':
+    case 'update':
       return { sub };
     case 'inject-mock': {
       const result: DigitalTwinParsedArgs = { sub: 'inject-mock' };
@@ -148,7 +150,7 @@ export function parseDigitalTwinArgs(rest: string[]): DigitalTwinParsedArgs {
     }
     default:
       throw new DigitalTwinArgError(
-        `Unknown digital-twin subcommand: ${sub}. Use one of login|logout|status|pause|resume|inject-mock|member-stats.`,
+        `Unknown digital-twin subcommand: ${sub}. Use one of login|logout|status|pause|resume|inject-mock|member-stats|update.`,
       );
   }
 }
@@ -466,6 +468,43 @@ export async function executeDigitalTwinMemberStats(
   return { exitCode: 0 };
 }
 
+/**
+ * `update` subcommand — synchronously run the auto-updater and surface its
+ * outcome to stdout. Useful for diagnosis ("auto-update not working, run it
+ * manually and tell me why") and for letting users force-pull without
+ * waiting for the next CC session.
+ *
+ * Imports runUpdater lazily so the rest of the CLI doesn't pay startup cost.
+ */
+export async function executeDigitalTwinUpdate(
+  deps: DigitalTwinDeps = {},
+): Promise<DigitalTwinResult> {
+  const r = resolveDeps(deps);
+  let runUpdater: typeof import('./auto-update/index.js').runUpdater;
+  try {
+    ({ runUpdater } = await import('./auto-update/index.js'));
+  } catch (err) {
+    r.printErr(`digital-twin update: cannot load auto-updater: ${err instanceof Error ? err.message : String(err)}`);
+    return { exitCode: 1 };
+  }
+  // Run synchronously; bypass jitter since user invoked manually.
+  process.env.RIVEN_AUTO_UPDATE_JITTER_MAX_MS = '0';
+  let result: Awaited<ReturnType<typeof runUpdater>>;
+  try {
+    result = await runUpdater();
+  } catch (err) {
+    r.printErr(`digital-twin update: runUpdater threw: ${err instanceof Error ? err.message : String(err)}`);
+    return { exitCode: 1 };
+  }
+  const lines: string[] = [];
+  lines.push(`digital-twin update`);
+  lines.push(`  outcome: ${result.outcome}`);
+  if (result.to_version) lines.push(`  target_version: ${result.to_version}`);
+  if (result.detail) lines.push(`  detail: ${result.detail}`);
+  r.print(lines.join('\n'));
+  return { exitCode: result.ok ? 0 : 1 };
+}
+
 /** Top-level dispatcher used by bin.ts. */
 export async function executeDigitalTwin(
   parsed: DigitalTwinParsedArgs,
@@ -486,6 +525,8 @@ export async function executeDigitalTwin(
       return executeDigitalTwinInjectMock(parsed, deps);
     case 'member-stats':
       return executeDigitalTwinMemberStats(parsed, deps);
+    case 'update':
+      return executeDigitalTwinUpdate(deps);
   }
 }
 

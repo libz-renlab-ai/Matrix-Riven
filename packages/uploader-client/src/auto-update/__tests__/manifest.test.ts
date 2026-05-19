@@ -8,8 +8,9 @@ import {
   writeLocalManifest,
   shouldUpdate,
 } from '../manifest.js';
+import type { ClientManifest } from '../types.js';
 
-const VALID = {
+const VALID: ClientManifest = {
   version: '0.3.1+abc',
   generated_at: '2026-05-19T12:00:00.000Z',
   files: [{ name: 'bin-uploader.cjs', sha256: 'a'.repeat(64), size: 1024 }],

@@ -167,8 +167,9 @@ function resolveClientVersion(): string {
     const raw = readFileSync(paths.manifestFile, 'utf8');
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed.version === 'string' && parsed.version.length > 0) {
-      cachedClientVersion = parsed.version.slice(0, 64);
-      return cachedClientVersion;
+      const v: string = parsed.version.slice(0, 64);
+      cachedClientVersion = v;
+      return v;
     }
   } catch {
     // fall through

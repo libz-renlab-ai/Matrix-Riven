@@ -103,8 +103,20 @@
   + 修了 doc count 不一致 5↔6、隐蔽升级路径等。
 
 ### Round 2（2 个并行 agent）
-- **安全工程师 / SRE 复审**：……（agent 还在跑）
-- **Chaos engineering 测试**：……（agent 还在跑）
+
+**安全工程师 / SRE 复审** — 找出 12 issue。最严重：
+
+- **P1 新引入的真 bug**: round 1 的 PID 防回收修复**在 daemon-restart.ts 里产生了
+  双 daemon 竞态**——`pidLooksRecycled=true` 时跳过 kill 但仍 unlink + spawn 新
+  daemon → 老 daemon 还在跑 + 新 daemon 也在跑。✅ **已修**（commit `9e0cec6`）
+- **HMAC canonicalize 字段白名单**：未来加字段不会被签名 → 攻击注入未签字段。
+  ✅ **已修**（改为对所有顶层 key 排序签名）
+- **kill switch + 新机器**：disabled=true 把 fresh install 也锁死，导致新机器永远
+  进不来。✅ **已修**（disabled 只挡升级，no-local 走原路径）
+- **HMAC 静默 skip 风险**（v2 路线图）：env 未设时 `skipped` 没上报。建议
+  manifest 加 `require_signature: true` 字段，操作员显式开关。
+
+**Chaos engineering 测试** — agent 还在跑，结果待补。
 
 ---
 

@@ -382,7 +382,7 @@ header button:hover { background: #1d4ed8; }
       .then(function (r) { return r.json(); })
       .then(function (d) {
         renderRelease(d.manifest);
-        renderDistribution(d.distribution || []);
+        renderDistribution(d.distribution || [], d.manifest ? d.manifest.version : null);
         renderErrors(d.errors || { total_24h: 0, by_stage_24h: {}, recent: [] });
         setTs();
       })
@@ -417,20 +417,37 @@ header button:hover { background: #1d4ed8; }
     body.innerHTML = html;
   }
 
-  function renderDistribution(dist) {
+  function renderDistribution(dist, latestVersion) {
     var body = $('panel-distribution').querySelector('.panel-body');
     if (!dist || dist.length === 0) { body.innerHTML = '<div class="empty">No client_version data — clients have not reported yet today.</div>'; return; }
     var maxCount = Math.max.apply(null, dist.map(function (d) { return d.user_count; }));
     var totalUsers = dist.reduce(function (a, d) { return a + d.user_count; }, 0);
-    var html = '<div class="muted">Total: ' + totalUsers + ' user' + (totalUsers !== 1 ? 's' : '') + ' reporting</div>';
+    var onLatest = 0, lagging = 0, unknown = 0;
+    dist.forEach(function (d) {
+      if (d.client_version === 'unknown') unknown += d.user_count;
+      else if (latestVersion && d.client_version === latestVersion) onLatest += d.user_count;
+      else lagging += d.user_count;
+    });
+    var summary = '<div style="margin-bottom:6px">';
+    if (latestVersion) {
+      summary += '<b>' + onLatest + '/' + totalUsers + '</b> on latest';
+      if (lagging) summary += ', <b style="color:#d97706">' + lagging + ' lagging</b>';
+      if (unknown) summary += ', <span class="muted">' + unknown + ' unknown (likely pre-auto-update)</span>';
+    } else {
+      summary += '<b>' + totalUsers + '</b> user' + (totalUsers !== 1 ? 's' : '') + ' reporting';
+    }
+    summary += '</div>';
+    var html = summary;
     dist.forEach(function (d) {
       var pctW = maxCount > 0 ? (d.user_count / maxCount) * 240 : 4;
       var preview = (d.users || []).slice(0, 5).join(', ');
       if ((d.users || []).length > 5) preview += ', +' + ((d.users || []).length - 5) + ' more';
       var barClass = d.client_version === 'unknown' ? 'vbar unknown' : 'vbar';
+      var isLatest = latestVersion && d.client_version === latestVersion;
+      var marker = isLatest ? ' ✓' : '';
       html += '<div class="ver-row">' +
         '<span class="' + barClass + '" style="width:' + pctW + 'px"></span>' +
-        '<span class="vlabel"><code>' + escHtml(d.client_version) + '</code> &mdash; ' +
+        '<span class="vlabel"><code>' + escHtml(d.client_version) + '</code>' + marker + ' &mdash; ' +
           '<b>' + d.user_count + '</b> user' + (d.user_count !== 1 ? 's' : '') +
           (preview ? ' <span class="muted">(' + escHtml(preview) + ')</span>' : '') +
           '</span></div>';
