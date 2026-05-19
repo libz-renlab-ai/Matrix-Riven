@@ -52,6 +52,10 @@ Claude Code Stop hook
 
 ## 自动更新
 
+> ⚠️ **v0.2.x 老用户必读**：升到 v0.3.0 需要**手动跑一次**
+> `node scripts/install-client.mjs`（详见下面"升级一次性"段）。
+> 跑完之后再也不用手动 install，所有后续更新全自动。
+
 v0.3.0 起客户端会在**每次 Claude Code 启动**时（SessionStart hook）后台异步检查 collector
 server 上是否有新版本。有的话自动下载、原子替换 `~/.riven/digital-twin/` 下的 6 个
 `.cjs` 文件，必要时优雅重启 uploader daemon。**整个过程不阻塞 CC 启动，不需要用户介入**。
@@ -79,7 +83,18 @@ node scripts/publish-client.mjs --server <collector-host>
 ```
 
 效果：scp 6 个 .cjs + 原子 manifest 替换到 server。所有客户端**下次** Claude Code 启动
-时就会拉到新版。`--dry-run` 可以先看计划不写远端，`--local-target <dir>` 适合本地测试。
+时就会拉到新版（带 0–30s 随机 jitter，避免 30 台机器同毫秒打 server）。
+
+**可选参数**：
+- `--dry-run` 只打印计划，不写远端
+- `--local-target <dir>` 写本地目录（用于测试 / staging）
+- `--kill-switch` 把 manifest 标 `disabled: true`，所有客户端拒绝更新（紧急回滚用）
+- `--note "<msg>"` 把注释附到 manifest，dashboard 会显示
+
+**HMAC 签名（推荐生产环境启用）**：在发布机和每台开发机都设置同一个
+`RIVEN_CLIENT_MANIFEST_SECRET=<long-random-string>` 环境变量。publish-client 自动用它
+HMAC-SHA256 签 manifest；客户端用它验证。secret 未设两侧都是 backward-compat 跳过模式。
+**强烈建议生产部署启用**——这是防止运维账号被盗后下推 RCE 的最后一道防线。
 
 ### Dashboard 看升级状况
 

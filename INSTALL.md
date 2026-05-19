@@ -157,7 +157,35 @@ cat ~/.riven/digital-twin.json
 node ~/.riven/digital-twin/bin-digital-twin.cjs status
 ```
 
-`user_id` 字段就是你在看板上的标识。
+`user_id` 字段就是你在看板上的标识。新版 `status` 命令还会显示 `client_version` 和
+`auto-update.last_event`，可以直接看到 auto-update 上次跑成功 / 失败。
+
+### §D. 自动更新失败
+
+`status` 输出里如果 `auto-update.last_event` 显示 `ERROR stage=...`，看：
+
+```bash
+tail -20 ~/.riven/digital-twin/auto-update.log
+```
+
+常见原因：
+- `stage=fetch-manifest`：collector 不通 / endpoint 配错
+- `stage=download` + `HTTP 404`：server 上 manifest 引用的文件没传上
+- `stage=sha256`：server 上文件被改但 manifest 没重算（用 `--target-dir` 自定义部署常见）
+- `stage=probe`：新版本的 `bin-uploader.cjs` 启动就崩了——客户端**已自动回滚**到 .old
+- `stage=daemon-restart`：probe OK 但 spawn 新 daemon 失败（磁盘 / 杀软锁文件）—— 下次
+  SessionStart 会再试
+- `stage=manifest-suspicious`：远端 `generated_at` 不比本地新（防降级闸触发）—— 联系运维
+
+紧急关掉自动更新：
+
+```bash
+# 单机临时：
+export RIVEN_AUTO_UPDATE_DISABLED=1
+
+# 全员紧急停（运维操作）：
+node scripts/publish-client.mjs --server <host> --kill-switch --note "halted for incident X"
+```
 
 ---
 
