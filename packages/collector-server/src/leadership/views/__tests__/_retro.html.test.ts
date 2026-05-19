@@ -46,7 +46,7 @@ describe('renderRetro', () => {
     expect(html).not.toMatch(/今日.{0,10}明日/);
   });
 
-  it('renders a weekly summary block instead (deterministic, week-shaped)', () => {
+  it('renders a qualitative weekly summary judgement (not a count duplicate)', () => {
     const snap = makeSnap({
       highlights: [
         { ts: '2026-05-18T00:00:00Z', type: 'commit', by: 'alex', project: 'm', detail: 'x' },
@@ -58,17 +58,17 @@ describe('renderRetro', () => {
     });
     const html = renderRetro(snap);
     expect(html).toContain('weekly summary');
-    expect(html).toContain('本周累计交付');
-    expect(html).toContain('<strong>2</strong>');
-    expect(html).toContain('待跟进');
+    // Summary must NOT pre-print the same counts the section headers already
+    // show — that was the duplicate (EM Round-1 P1).
+    expect(html).not.toContain('本周累计交付 <strong>2</strong>');
+    expect(html).toContain('需要跟进的关注项');
   });
 
   it('weekly summary collapses gracefully when zero counts', () => {
     const snap = makeSnap();
     const html = renderRetro(snap);
-    expect(html).toContain('本周累计交付 <strong>0</strong> 件');
-    expect(html).not.toContain('待跟进');
-    expect(html).not.toContain('节奏突出');
+    expect(html).toContain('weekly summary');
+    expect(html).toContain('低谷或数据稀疏');
   });
 
   it('still includes 本周回顾 H1 and the canonical sections', () => {

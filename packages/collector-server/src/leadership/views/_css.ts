@@ -613,6 +613,21 @@ export const LEADERSHIP_CSS_V2 = `
   }
   .so-id .so-name { font-size: 17px; font-weight: 600; color: var(--ink-1); letter-spacing: -0.01em; }
   .so-id .so-meta { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
+  .so-action-btn {
+    font: inherit;
+    font-size: 12.5px;
+    padding: 7px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--hairline);
+    background: var(--surface-2);
+    color: var(--ink-1);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s var(--ease), color .15s var(--ease);
+  }
+  .so-action-btn:hover { background: var(--accent-soft); color: var(--accent-ink); }
+  .so-action-primary { background: var(--accent-ink); color: var(--surface); border-color: var(--accent-ink); }
+  .so-action-primary:hover { filter: brightness(1.08); color: var(--surface); }
   .so-close {
     width: 32px; height: 32px; border-radius: 10px;
     background: transparent; border: 0;

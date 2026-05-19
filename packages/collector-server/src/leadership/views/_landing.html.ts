@@ -35,8 +35,8 @@ const FEATURES: LandingFeature[] = [
   {
     icon: '◆',
     title: '诚实的过时数据横幅',
-    copy: '数据快照超过 24 小时？我们直接在 hero 上方告诉你，不假装新鲜。',
-    proof: '`<staleness>` 字段一路从 aggregator 透传到 UI',
+    copy: '数据快照超过 24 小时？/healthz 立刻显示 lastIngestAt 与 ageSec；下一版会把同一条数据横幅前置到 hero。',
+    proof: '/healthz 即时可查，nav 实时 dot + range chip 双重提示当前窗口',
   },
   {
     icon: '◎',
@@ -67,10 +67,15 @@ export function renderLanding(opts: { hasAuth: boolean }): string {
         <div class="lc-proof">${escapeHtml(f.proof)}</div>
       </div>`).join('');
 
+  // Round-1 QA: CTA priority was inverted. Demo was primary (taking
+  // first-time visitors into static fixtures) and "real data" was the
+  // de-emphasized secondary. Buyers / engineering leads should land on
+  // their own data first; demo is the "preview" fallback.
   const ctaPrimary = opts.hasAuth
-    ? `<a class="lc-cta-secondary" href="/overview">凭 token 进入实时看板 →</a>`
-    : `<a class="lc-cta-primary" href="/overview?demo=1">查看 Demo 看板 →</a>
-       <a class="lc-cta-secondary" href="/overview">直连真实数据 →</a>`;
+    ? `<a class="lc-cta-primary" href="/overview">凭 token 进入看板 →</a>
+       <a class="lc-cta-secondary" href="/overview?demo=1">先看 Demo 演示 →</a>`
+    : `<a class="lc-cta-primary" href="/sources#install">接入你的团队（30 秒） →</a>
+       <a class="lc-cta-secondary" href="/overview?demo=1">先看 Demo 演示 →</a>`;
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -103,8 +108,8 @@ ${CONSENT_BANNER_CSS}
 <div class="shell">
 <div class="lc-page">
   <section class="lc-hero">
-    <h1>不再看一堆 <em>0 会话 · 推进新功能 · ↘ 近期已收尾</em>。<br>看每个人在做什么、谁卡住了、今天团队真正进展到哪。</h1>
-    <p class="lead">Matrix-Riven 不是又一个 Notion 看板。它直接读你团队的 Claude Code transcript，跑 16 个信号检测器 + 五层 LLM 叙事，每 30 秒给你一份会说人话的仪表盘——而且诚实地告诉你数据多新、花了多少钱、谁该挪一下。</p>
+    <h1>不再读一堆 <em>0 会话 · 推进新功能 · ↘ 近期已收尾</em>。<br>看团队在做什么、哪条线在卡、今天进展到哪。</h1>
+    <p class="lead">Matrix-Riven 直接读你团队的 Claude Code transcript，跑 16 个信号检测器 + 五层 LLM 叙事，每 30 秒近实时刷新一份会说人话的仪表盘——并且诚实告诉你数据多新、花了多少钱、哪条线该补人。<br><strong>透明承诺</strong>：默认聚合化数字 + LLM 改写摘要；查看 prompt 原文需 leader 主动展开，每次查阅都会落 audit log。<a href="/sources" style="border-bottom:1px solid currentColor;">查看完整数据来源 →</a></p>
     <div class="lc-cta">${ctaPrimary}</div>
   </section>
 
@@ -113,11 +118,11 @@ ${CONSENT_BANNER_CSS}
   </section>
 
   <footer class="lc-foot">
-    <div>Matrix-Riven · Leadership Edition · v0.1</div>
+    <div>Matrix·Riven · 团队工程节奏仪表盘</div>
     <div>
       <a href="/overview">实时看板</a> ·
       <a href="/retro">本周回顾</a> ·
-      <a href="/sources">数据来源</a>
+      <a href="/sources">数据来源与透明度</a>
     </div>
   </footer>
 </div>

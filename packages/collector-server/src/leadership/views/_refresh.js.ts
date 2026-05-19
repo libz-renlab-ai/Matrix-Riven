@@ -176,10 +176,77 @@ export const CLIENT_REFRESH_SCRIPT = `
     if (nameEl) nameEl.textContent = id;
     if (metaEl) metaEl.textContent = '';
     if (avatarEl) avatarEl.textContent = String(id).slice(0, 2).toLowerCase();
+    // Round-1 QA P0 (EM): wire next-action affordance. Member drawer shows
+    // 3 buttons (draft Slack opener / add to 1:1 / show evidence). Hidden
+    // for project drawers (no useful 1:1 / Slack scope there).
+    var actEl = document.getElementById('so-actions');
+    if (actEl) actEl.hidden = (kind !== 'member');
     // Immediate first paint, then arm 30 s live polling.
     await pollSO();
     soInterval = setInterval(pollSO, 30000);
   };
+
+  // Round-1 QA P0 (EM): wire the three slideover action buttons. Each emits
+  // a clearly-scoped artifact (no backend), so a leader can move from
+  // "看到 blake 卡住" → some next step in one click instead of dashboard-staring.
+  function copyTextSafe(text) {
+    try {
+      if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text);
+      }
+    } catch (e) {}
+    // Fallback: temporary textarea + execCommand.
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'absolute';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (e) {}
+    return null;
+  }
+  function flashToast(msg) {
+    var t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = 'position:fixed;left:50%;bottom:30px;transform:translateX(-50%);background:#222;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:10000;opacity:0;transition:opacity .2s;';
+    document.body.appendChild(t);
+    requestAnimationFrame(function () { t.style.opacity = '1'; });
+    setTimeout(function () {
+      t.style.opacity = '0';
+      setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 250);
+    }, 2200);
+  }
+  document.addEventListener('click', function (e) {
+    var target = e.target;
+    if (!target || !target.closest) return;
+    var btn = target.closest('#so-act-draft, #so-act-11, #so-act-evidence');
+    if (!btn) return;
+    if (!soId || soKind !== 'member') return;
+    var nameEl = document.getElementById('so-name');
+    var name = (nameEl && nameEl.textContent) || soId;
+    var calloutEl = document.querySelector('#so-callout .so-callout-text');
+    var calloutText = (calloutEl && calloutEl.textContent) ? calloutEl.textContent.trim() : '';
+    if (btn.id === 'so-act-draft') {
+      var draft = '@' + name + ' 我刚看到一条标记，想确认下：\\n\\n' + (calloutText || '最近的进度好像不太顺。') + '\\n\\n要不要明天找个 15 分钟聊一下，看看有没有能帮上忙的地方？';
+      copyTextSafe(draft);
+      flashToast('Slack 开场已复制到剪贴板');
+    } else if (btn.id === 'so-act-11') {
+      var key = 'riven.next-1on1';
+      var existing = [];
+      try { existing = JSON.parse(localStorage.getItem(key) || '[]'); } catch (e) {}
+      existing.push({ name: name, addedAt: new Date().toISOString(), note: calloutText });
+      try { localStorage.setItem(key, JSON.stringify(existing.slice(-50))); } catch (e) {}
+      flashToast('已加入 ' + name + ' 的下次 1:1 议程（保存在本机）');
+    } else if (btn.id === 'so-act-evidence') {
+      var stats = document.getElementById('so-stats');
+      if (stats) stats.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      flashToast('已滚动到本周快照 — 信号证据');
+    }
+  });
 
   window.closeSO = function () {
     var scrim = document.getElementById('scrim');

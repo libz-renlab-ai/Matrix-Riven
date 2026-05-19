@@ -251,7 +251,7 @@ describe('renderAttentionFragment (P-B4)', () => {
       }],
     }));
     expect(html).toMatch(/class="attention-headline serif"/);
-    expect(html).toMatch(/一件事在等你/);
+    expect(html).toMatch(/一件事需关注/);
   });
 
   it('escapes user-supplied displayName', () => {
@@ -608,7 +608,7 @@ describe('L-10 LLM narrative — hero brief box (T5)', () => {
   it('renders no .brief-box when llmBrief is absent', () => {
     const html = renderHeroFragment(makeSnapshot());
     expect(html).not.toContain('brief-box');
-    expect(html).not.toContain('aria-label="leader daily brief"');
+    expect(html).not.toContain('aria-label="team daily brief"');
   });
 
   it('renders no .brief-box when llmBrief is an empty array', () => {
@@ -621,7 +621,7 @@ describe('L-10 LLM narrative — hero brief box (T5)', () => {
       llmBrief: ['第一条 brief 文案', '第二条 brief 文案', '第三条 brief 文案'],
     }));
     expect(html).toContain('class="brief-box');
-    expect(html).toContain('aria-label="leader daily brief"');
+    expect(html).toContain('aria-label="team daily brief"');
     expect(html).toContain('第一条 brief 文案');
     expect(html).toContain('第二条 brief 文案');
     expect(html).toContain('第三条 brief 文案');

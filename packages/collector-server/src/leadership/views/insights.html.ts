@@ -225,22 +225,25 @@ function renderTimeAxis(snap: InsightsSnapshot): string {
 function renderPeopleAxis(snap: InsightsSnapshot): string {
   const rows = snap.axes.people.rows;
   if (rows.length === 0) return `<div class="lh-empty">无人员数据</div>`;
-  const maxTok = Math.max(...rows.map((r) => r.metrics.tokens), 1);
+  // Round-1 QA P0 (designer + journalist + dogfooder): absolute token bar
+  // chart per named individual = HR leaderboard / viral hit-piece material.
+  // Switch to *relative session count* + project breadth, drop the absolute
+  // token number from the row. Bar width still encodes participation but
+  // without the "256x ratio between alex and dana" framing.
+  const maxSessions = Math.max(...rows.map((r) => r.metrics.sessions), 1);
   return `<div class="ins-people-chart">
     <ol class="ins-bar-list">
       ${rows.map((r) => {
-        const pct = (r.metrics.tokens / maxTok) * 100;
+        const pct = (r.metrics.sessions / maxSessions) * 100;
         return `<li class="ins-bar-row">
           <span class="ins-bar-name">${escapeHtml(r.displayName)}</span>
           <span class="ins-bar"><span class="ins-bar-fill" style="width:${pct.toFixed(1)}%"></span></span>
-          <span class="ins-bar-val">${r.metrics.tokens} tok · ${r.metrics.sessions} 会话 · ${r.metrics.projectsTouched} 项目</span>
+          <span class="ins-bar-val">${r.metrics.sessions} 会话 · ${r.metrics.projectsTouched} 项目</span>
         </li>`;
       }).join('')}
     </ol>
-    <div class="ins-people-narrative">
-      ${snap.axes.people.narrative
-        ? escapeHtml(snap.axes.people.narrative)
-        : '<em>按 token 量横切对比。结合 7-day delta 看每人节奏走向。</em>'}
+    <div class="ins-people-narrative" style="font-size:12px;color:var(--ink-3,#888);margin-top:8px;">
+      <strong>说明</strong>：横条按会话数对比，不包含绝对 token 量（token 量受任务种类影响过大，不适合个人间横向比较）。${snap.axes.people.narrative ? '<br>' + escapeHtml(snap.axes.people.narrative) : ''}
     </div>
   </div>`;
 }

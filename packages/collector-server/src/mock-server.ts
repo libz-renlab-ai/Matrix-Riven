@@ -698,6 +698,23 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
       return;
     }
     if (req.method === 'GET') {
+      // Round-1 QA P0 (security): legacy GET surface (/api/file, /api/users,
+      // /api/dates, /api/sessions, /api/quota, /api/cc-status/*, /v1/member-
+      // stats) returns raw transcript content + user PII. Until each route is
+      // individually re-evaluated, gate the whole surface on `authToken` when
+      // it's configured. The Phase-1 dashboard at `/` is still served (it
+      // needs ?sid= which is a separate ACL).
+      const legacyPath = (req.url ?? '').split('?')[0] ?? '';
+      const legacyNeedsAuth =
+        legacyPath.startsWith('/api/') ||
+        legacyPath === '/v1/member-stats';
+      if (authToken && legacyNeedsAuth) {
+        const auth = requireBearerToken(req.headers, authToken);
+        if (!auth.ok) {
+          send(res, 401, { error: 'unauthorized' });
+          return;
+        }
+      }
       handleGet(req, res, outputDir, now);
       return;
     }

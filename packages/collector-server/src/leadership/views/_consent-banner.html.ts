@@ -129,6 +129,7 @@ export function renderConsentBanner(opts: { demo: boolean }): string {
     </div>
     <div class="consent-banner-actions">
       <button type="button" class="consent-banner-btn" onclick="window.open('/sources','_blank')">查看完整说明</button>
+      <button type="button" class="consent-banner-btn" id="consent-banner-later" title="本次会话稍后再决定">稍后再说</button>
       <button type="button" class="consent-banner-btn consent-banner-btn-primary" id="consent-banner-ack">我已告知团队 · 继续</button>
     </div>
   </div>
@@ -177,6 +178,15 @@ export const CONSENT_BANNER_SCRIPT = `
         } catch (e) { /* swallow — UX dismiss anyway, even if storage failed */ }
         dismiss(banner, scrim);
       });
+    }
+    // Round-1 QA P0 (journalist): consent banner used to only have "我已告知 ·
+    // 继续" — a dark-pattern single path that screen-reads as forced acceptance.
+    // Add a "稍后再说" escape: dismisses for the current session only (no
+    // localStorage write), so the banner reappears on next page load until
+    // the leader makes an explicit decision.
+    var later = document.getElementById('consent-banner-later');
+    if (later) {
+      later.addEventListener('click', function () { dismiss(banner, scrim); });
     }
   }
   if (document.readyState === 'loading') {

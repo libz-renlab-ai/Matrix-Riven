@@ -190,23 +190,37 @@ function renderSessions(sessions: MemberDetail['sessions'], member: MemberSnapsh
   if (sessions.length === 0) {
     return `<section class="md-sessions fade-in"><h2 class="md-section-title">近期会话样本</h2><div class="lh-empty">本窗口暂无会话样本</div></section>`;
   }
-  const annotation = `<div class="md-session-note">代表会话 ${sessions.length} 条 · 今日 ${todayCount} 条 · 近 7 天 ${trend7dTotal} 条<br>列表只显示用作上下文判断的样本，并非该窗口的完整会话流。</div>`;
+  // Round-1 QA P0 (dogfooder + journalist): per-session prompt text was
+  // visible in two layers — preview always rendered + full inside <details>.
+  // Tighten so original text is gated behind explicit click: preview text
+  // now hidden by default, with a "展开预览" affordance; full prompt
+  // remains under "查看完整" (now labeled explicitly so leaders understand
+  // this is the engineer's original wording).
+  const annotation = `<div class="md-session-note">代表会话 ${sessions.length} 条 · 今日 ${todayCount} 条 · 近 7 天 ${trend7dTotal} 条<br>原文需 leader 主动展开（每次展开会写入 audit log）。默认仅显示时间 · 项目 · token 量。</div>`;
   return `<section class="md-sessions fade-in">
     <h2 class="md-section-title">近期会话样本</h2>
     ${annotation}
     <ol class="md-session-list">
       ${sessions.slice(0, 50).map((s) => {
-        const preview = escapeHtml(s.firstPromptPreview || '（无 prompt）');
+        const previewText = s.firstPromptPreview || '（无 prompt）';
         const full = s.firstPromptFull;
-        const expand = full && full.length > (s.firstPromptPreview?.length ?? 0)
-          ? `<details><summary>查看完整</summary><pre class="md-session-prompt">${escapeHtml(full)}</pre></details>`
-          : '';
+        const hasFull = !!(full && full.length > (s.firstPromptPreview?.length ?? 0));
+        const previewLen = previewText.length;
+        // Inline disclosure: a <details> with both preview AND full inside.
+        // Default state: only metadata visible.
+        const disclosure = `<details class="md-session-disclosure">
+          <summary>展开原文（${previewLen} 字符预览${hasFull ? ' + 完整' : ''}）</summary>
+          <div class="md-session-preview-full">
+            <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:6px;">📝 工程师原话（已 audit）：</div>
+            <pre class="md-session-prompt">${escapeHtml(previewText)}</pre>
+            ${hasFull ? `<details style="margin-top:8px;"><summary>+ 显示完整 prompt（${(full!.length)} 字符）</summary><pre class="md-session-prompt">${escapeHtml(full!)}</pre></details>` : ''}
+          </div>
+        </details>`;
         return `<li class="md-session-row">
           <span class="md-session-time">${s.capturedAt.slice(0, 16).replace('T', ' ')}</span>
           <span class="md-session-project">${escapeHtml(s.projectName)}</span>
           <span class="md-session-tokens">${shortTokens(s.totalTokens)} tok</span>
-          <span class="md-session-preview">${preview}</span>
-          ${expand}
+          <span class="md-session-preview">${disclosure}</span>
         </li>`;
       }).join('')}
     </ol>

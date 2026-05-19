@@ -126,20 +126,32 @@ ${renderConsentBanner({ demo: opts.demo === true })}
 }
 
 function renderWeeklySummary(snap: OverviewSnapshot): string {
-  // Deterministic weekly summary — week-shaped sentence, no daily/today copy.
-  // Counts come from the same snapshot fields the retro sections use, so the
-  // top-line summary and section counts are always in sync.
+  // Round-1 QA P1 (EM): previous version repeated the same numbers that
+  // appear in each section header right below (本周交付 5 · 本周交付 5 兵
+  // 突出表现 2 · 突出表现 2). Re-shape the top line so it's a qualitative
+  // judgement, not a leading duplicate of the counts.
   const delivered = (snap.highlights ?? []).filter((h) => ['commit', 'push', 'pr', 'release', 'tag'].includes(h.type)).length;
   const concerns = snap.attention.length;
   const standoutN = snap.members.filter((m) => m.stateBadge === 'active' && m.deltaVs7dAvgPct > 0.1).length;
   const dormantN = snap.projects.filter((p) => p.state === 'dormant').length;
-  const parts: string[] = [];
-  parts.push(`本周累计交付 <strong>${delivered}</strong> 件`);
-  if (concerns > 0) parts.push(`待跟进 <strong>${concerns}</strong> 项`);
-  if (standoutN > 0) parts.push(`<strong>${standoutN}</strong> 位成员节奏突出`);
-  if (dormantN > 0) parts.push(`<strong>${dormantN}</strong> 个项目沉睡`);
-  const line = parts.join(' · ');
-  return `<div class="rt-brief" aria-label="weekly summary"><div>${line}。</div></div>`;
+  // Pick one qualitative sentence based on the dominant signal. The exact
+  // counts live in the section headers below — no need to pre-print them.
+  let judgement: string;
+  if (delivered === 0 && concerns === 0) {
+    judgement = '本周窗口内无明显交付与关注项 — 团队节奏处于低谷或数据稀疏。';
+  } else if (concerns === 0 && standoutN > 0) {
+    judgement = '本周交付稳健、无待跟进项；下方有节奏突出的成员表现。';
+  } else if (concerns > 0 && dormantN > 0) {
+    judgement = '本周有需要跟进的关注项，叠加沉睡项目；建议优先看下方"需要看一眼"段。';
+  } else if (concerns > 0) {
+    judgement = '本周有需要跟进的关注项；下方按严重度排序。';
+  } else if (dormantN > 0) {
+    judgement = '本周交付正常，但有沉睡项目需要安排接手或归档。';
+  } else {
+    judgement = '本周节奏平稳，交付落地。';
+  }
+  void delivered; void concerns; void standoutN; void dormantN;
+  return `<div class="rt-brief" aria-label="weekly summary"><div>${judgement}</div></div>`;
 }
 
 function verbLabel(type: HighlightEvent['type']): string {

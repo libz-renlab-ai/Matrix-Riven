@@ -65,8 +65,13 @@ export function renderSlideoverShell(): string {
   </div>
   <div class="so-body">
     <div id="so-callout"></div>
+    <div class="so-actions" id="so-actions" hidden style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 18px;">
+      <button type="button" class="so-action-btn so-action-primary" id="so-act-draft" title="基于这条 attention 草一段开场">起草 Slack 开场 →</button>
+      <button type="button" class="so-action-btn" id="so-act-11" title="把这条 attention 加到下次 1:1 议程">加入下次 1:1 →</button>
+      <button type="button" class="so-action-btn" id="so-act-evidence" title="展开触发该判定的原始信号">看证据</button>
+    </div>
     <div class="so-section"><div class="so-h">本周快照</div><div id="so-stats"></div></div>
-    <div class="so-section"><div class="so-h">他这段时间在问什么 · 看是否需要搭把手</div><div id="so-evolve"></div></div>
+    <div class="so-section"><div class="so-h">近期会话主题</div><div id="so-evolve"></div></div>
     <div class="so-section"><div class="so-h">在哪些项目里</div><div id="so-projects"></div></div>
   </div>
 </aside>`;

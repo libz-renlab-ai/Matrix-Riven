@@ -65,9 +65,11 @@ export function focusedHeroHeadline(ctx: {
 }
 
 export function attentionLead(count: number): string {
-  if (count === 1) return `一件事在等你 — <em>看一眼，决定要不要插手</em>。`;
-  if (count < 5) return `${count} 件事在等你 — <em>看一眼，决定要不要插手</em>。`;
-  return `${count} 件事需要你留意 — <em>按红/黄/灰排序，先处理最上面那条</em>。`;
+  // Round-1 QA P1 (designer): tone softened — drop "你"/"插手"/"留意" combo
+  // that reads as god-mode imperative copy. Lean factual.
+  if (count === 1) return `一件事需关注 — <em>下方按严重度排序</em>。`;
+  if (count < 5) return `${count} 件事需关注 — <em>下方按严重度排序</em>。`;
+  return `${count} 件事需关注 — <em>建议先看红色那条</em>。`;
 }
 
 export function idleCallout(ctx: { displayName: string; idleHours: number; lastFile?: string }): string {

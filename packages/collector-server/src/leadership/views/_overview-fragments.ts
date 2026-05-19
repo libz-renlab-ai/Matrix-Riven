@@ -150,11 +150,17 @@ export function renderHeroFragment(snap: OverviewSnapshot): string {
          ].filter(Boolean).join(' · ')}
        </div>`
     : '';
+  // Round-1 QA P0 (EM): empty / zero-data sub-header read "5月19日 · 数据每
+  // 30 秒刷新" even when envelopeCount=0, giving a false sense of activity.
+  // When there's nothing to refresh, say so.
+  const subLine = noData
+    ? `${date} · 等待第一条 transcript`
+    : `${date} · 每 30 秒近实时刷新`;
   const header = `<header id="hero" class="hero fade-in">
     <div>
       ${filterCrumb}
       <h1 class="serif">${headline}</h1>
-      <div class="sub">${date} · 数据每 30 秒刷新</div>
+      <div class="sub">${subLine}</div>
     </div>
     <div class="hero-meta">
       <div><strong>${snap.members.length}</strong> 位成员 · <strong>${snap.projects.length}</strong> 个项目</div>
@@ -165,13 +171,19 @@ export function renderHeroFragment(snap: OverviewSnapshot): string {
   // misses, `llmBrief` is undefined and we render only the header (existing
   // byte-identical behavior). We tolerate any non-empty array but only render
   // the first three lines, matching the T5 contract.
+  //
+  // Round-1 QA P0 (EM): when a filter is active (focus / project / state),
+  // the team-wide T5 brief reads as "团队级 noise" inside a single-person
+  // view. Suppress the brief in any filtered view; the focus-aware headline
+  // already conveys the right narrative.
+  if (filterActive) return header;
   const brief = snap.llmBrief;
   if (!brief || brief.length === 0) return header;
   const lineStyle = "font-family:'Newsreader',serif;font-size:15px;line-height:1.6;color:var(--ink-1);";
   const lines = brief.slice(0, 3)
     .map(l => `<div class="brief-line" style="${lineStyle}">${escapeHtml(l)}</div>`)
     .join('');
-  const briefBox = `<div class="brief-box fade-in" aria-label="leader daily brief" style="margin-top:12px;padding:14px 16px;background:var(--surface);border-left:3px solid var(--accent-ink);border-radius:var(--r-lg);box-shadow:var(--shadow-1);">${lines}</div>`;
+  const briefBox = `<div class="brief-box fade-in" aria-label="team daily brief" style="margin-top:12px;padding:14px 16px;background:var(--surface);border-left:3px solid var(--accent-ink);border-radius:var(--r-lg);box-shadow:var(--shadow-1);">${lines}</div>`;
   return header + briefBox;
 }
 

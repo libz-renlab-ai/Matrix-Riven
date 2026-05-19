@@ -99,9 +99,12 @@ describe('renderMemberDetail', () => {
     expect(html).toContain('近期会话样本');
     expect(html).toContain('今日 3 条');
     expect(html).toContain('近 7 天 17 条');
+    // Round-1 QA P0 (dogfooder + journalist): preview is gated behind an
+    // explicit click. Prompt text only appears inside <details>.
     expect(html).toContain('修一下抽屉');
-    expect(html).toContain('<details>');
-    expect(html).toContain('查看完整');
+    expect(html).toContain('md-session-disclosure');
+    expect(html).toContain('展开原文');
+    expect(html).toContain('audit log');
   });
 
   it('renders empty states gracefully', () => {
