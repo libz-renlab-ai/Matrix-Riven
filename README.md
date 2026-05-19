@@ -50,6 +50,59 @@ Claude Code Stop hook
 
 ---
 
+## 自动更新
+
+v0.3.0 起客户端会在**每次 Claude Code 启动**时（SessionStart hook）后台异步检查 collector
+server 上是否有新版本。有的话自动下载、原子替换 `~/.riven/digital-twin/` 下的 6 个
+`.cjs` 文件，必要时优雅重启 uploader daemon。**整个过程不阻塞 CC 启动，不需要用户介入**。
+
+### 老版本升级到自动更新版本（一次性）
+
+**已经装过 v0.2.x 的机器**需要手动跑一次以下命令，把 `bin-auto-updater.cjs` 装进去
++ 让 SessionStart hook 知道要拋它：
+
+```bash
+cd Matrix-Riven
+git pull
+pnpm install
+pnpm -r build
+node scripts/install-client.mjs
+```
+
+之后所有更新（包括对 `bin-auto-updater.cjs` 自身的更新）都会自动进行。
+
+### 运维发新版
+
+```bash
+pnpm -r build
+node scripts/publish-client.mjs --server <collector-host>
+```
+
+效果：scp 6 个 .cjs + 原子 manifest 替换到 server。所有客户端**下次** Claude Code 启动
+时就会拉到新版。`--dry-run` 可以先看计划不写远端，`--local-target <dir>` 适合本地测试。
+
+### Dashboard 看升级状况
+
+切到 dashboard 的 **"🔄 Updates"** tab：
+- **Current Release**：当前发布版本 / 时间 / 6 个文件的 sha256/size
+- **Client Version Distribution**：今日哪些用户跱哪个版本（按 cc-status 聚合）
+- **Update Errors (Last 24h)**：失败的 stage / 用户 / 错误消息
+
+错误也以 JSONL 形式 append 在 `<RIVEN_COLLECTOR_DIR>/client-update-errors.jsonl`，
+运维直接 `tail -f` 也能看。
+
+### 双闸防误降级
+
+客户端只在 `remote.version != local.version` **且** `remote.generated_at > local.generated_at`
+两个条件都成立时才更新。如果运维误改 version 字符串但 generated_at 没动，客户端会
+上报一条 `manifest-suspicious` 错误并**拒绝**更新——防止全员一夜回滚。
+
+### 关掉自动更新
+
+设置 `RIVEN_AUTO_UPDATE_DISABLED=1` 环境变量即可。CC 不会再拋 updater 子进程。
+
+---
+
 ## 客户端部署
 
 ### 1. 构建

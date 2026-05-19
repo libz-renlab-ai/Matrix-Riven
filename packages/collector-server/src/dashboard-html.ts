@@ -94,6 +94,24 @@ header button:hover { background: #1d4ed8; }
 .ov-panel .panel-body .row.clickable:hover { background: #f3f4f6; }
 .big-number { font-size: 28px; font-weight: 600; padding: 4px 0; }
 .muted { color: #6b7280; font-size: 11px; }
+.updates-wrap { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+.up-panel .panel-body { padding: 10px 12px; font-size: 13px; }
+.up-panel .ver-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.up-panel .vbar { display: inline-block; height: 10px; background: #2563eb; border-radius: 2px; min-width: 4px; }
+.up-panel .vbar.unknown { background: #9ca3af; }
+.up-panel .vlabel { flex: 1; }
+.up-panel table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 11px; }
+.up-panel th { text-align: left; color: #6b7280; font-weight: 500; border-bottom: 1px solid #e5e7eb; padding: 4px 6px; }
+.up-panel td { padding: 4px 6px; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
+.up-panel td.stage { font-weight: 600; color: #dc2626; }
+.up-panel td.msg { font-family: ui-monospace, monospace; color: #4b5563; }
+.up-panel .file-row { font-family: ui-monospace, monospace; font-size: 11px; color: #4b5563; padding: 1px 0; }
+.up-panel .file-row .name { display: inline-block; width: 240px; }
+.up-panel .file-row .size { display: inline-block; width: 90px; text-align: right; color: #6b7280; }
+.up-panel .file-row .sha { color: #9ca3af; margin-left: 8px; }
+.up-panel .errstats { display: flex; gap: 14px; flex-wrap: wrap; margin: 4px 0 6px; }
+.up-panel .errstats span { font-size: 12px; }
+.up-panel .errstats b { font-weight: 600; color: #dc2626; }
 </style>
 </head>
 <body>
@@ -102,6 +120,7 @@ header button:hover { background: #1d4ed8; }
   <nav class="tab-nav">
     <button id="tab-btn-browse" class="tab-btn active" onclick="activateTab('browse')">Browse</button>
     <button id="tab-btn-overview" class="tab-btn" onclick="activateTab('overview')">Overview</button>
+    <button id="tab-btn-updates" class="tab-btn" onclick="activateTab('updates')">🔄 Updates</button>
   </nav>
   <span class="ts" id="ts"></span>
   <button id="refresh">Refresh</button>
@@ -133,6 +152,22 @@ header button:hover { background: #1d4ed8; }
     </article>
     <article class="panel ov-panel" id="panel-quality">
       <h2>⚠️ Quality</h2>
+      <div class="panel-body"><div class="empty">loading…</div></div>
+    </article>
+  </div>
+</section>
+<section id="tab-updates" class="tab-content" hidden>
+  <div class="updates-wrap">
+    <article class="panel up-panel" id="panel-release">
+      <h2>📦 Current Release</h2>
+      <div class="panel-body"><div class="empty">loading…</div></div>
+    </article>
+    <article class="panel up-panel" id="panel-distribution">
+      <h2>👥 Client Version Distribution (Today)</h2>
+      <div class="panel-body"><div class="empty">loading…</div></div>
+    </article>
+    <article class="panel up-panel" id="panel-errors">
+      <h2>⚠️ Update Errors (Last 24h)</h2>
       <div class="panel-body"><div class="empty">loading…</div></div>
     </article>
   </div>
@@ -310,24 +345,122 @@ header button:hover { background: #1d4ed8; }
     return esc;
   }
   function activateTab(name) {
-    var browseSec = $('tab-browse'), overviewSec = $('tab-overview');
-    var browseBtn = $('tab-btn-browse'), overviewBtn = $('tab-btn-overview');
-    if (name === 'overview') {
-      browseSec.setAttribute('hidden', '');
-      overviewSec.removeAttribute('hidden');
-      browseBtn.classList.remove('active');
-      overviewBtn.classList.add('active');
-      loadOverview();
-    } else {
-      overviewSec.setAttribute('hidden', '');
-      browseSec.removeAttribute('hidden');
-      overviewBtn.classList.remove('active');
-      browseBtn.classList.add('active');
-    }
+    var sections = ['tab-browse', 'tab-overview', 'tab-updates'];
+    var buttons = ['tab-btn-browse', 'tab-btn-overview', 'tab-btn-updates'];
+    var target = 'tab-browse';
+    var targetBtn = 'tab-btn-browse';
+    if (name === 'overview') { target = 'tab-overview'; targetBtn = 'tab-btn-overview'; }
+    if (name === 'updates') { target = 'tab-updates'; targetBtn = 'tab-btn-updates'; }
+    sections.forEach(function (id) {
+      var el = $(id);
+      if (!el) return;
+      if (id === target) el.removeAttribute('hidden');
+      else el.setAttribute('hidden', '');
+    });
+    buttons.forEach(function (id) {
+      var el = $(id);
+      if (!el) return;
+      if (id === targetBtn) el.classList.add('active');
+      else el.classList.remove('active');
+    });
+    if (name === 'overview') loadOverview();
+    else if (name === 'updates') loadUpdates();
   }
   // Expose for the inline header onclick handlers — the IIFE wraps everything
   // else, but the buttons in the rendered HTML reference the global scope.
   window.activateTab = activateTab;
+
+  function formatBytes(n) {
+    if (!isFinite(n) || n < 0) return String(n);
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  function loadUpdates() {
+    fetch('/api/client-update-status')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        renderRelease(d.manifest);
+        renderDistribution(d.distribution || []);
+        renderErrors(d.errors || { total_24h: 0, by_stage_24h: {}, recent: [] });
+        setTs();
+      })
+      .catch(function (e) {
+        var msg = '<div class="err">load failed: ' + escHtml(e.message) + '</div>';
+        ['panel-release', 'panel-distribution', 'panel-errors'].forEach(function (id) {
+          $(id).querySelector('.panel-body').innerHTML = msg;
+        });
+      });
+  }
+
+  function renderRelease(m) {
+    var body = $('panel-release').querySelector('.panel-body');
+    if (!m) { body.innerHTML = '<div class="empty">No manifest published yet. Operator: run <code>node scripts/publish-client.mjs --server &lt;host&gt;</code>.</div>'; return; }
+    var ts = new Date(m.generated_at).toLocaleString();
+    var html = '<div><b>Version:</b> <code>' + escHtml(m.version) + '</code></div>' +
+      '<div><b>Published:</b> ' + escHtml(ts) + '</div>' +
+      '<div style="margin-top:6px"><b>Files (' + m.files.length + '):</b></div>';
+    m.files.forEach(function (f) {
+      html += '<div class="file-row"><span class="name">' + escHtml(f.name) + '</span>' +
+        '<span class="size">' + formatBytes(f.size) + '</span>' +
+        '<span class="sha">' + escHtml(f.sha256.slice(0, 12)) + '…</span></div>';
+    });
+    body.innerHTML = html;
+  }
+
+  function renderDistribution(dist) {
+    var body = $('panel-distribution').querySelector('.panel-body');
+    if (!dist || dist.length === 0) { body.innerHTML = '<div class="empty">No client_version data — clients have not reported yet today.</div>'; return; }
+    var maxCount = Math.max.apply(null, dist.map(function (d) { return d.user_count; }));
+    var totalUsers = dist.reduce(function (a, d) { return a + d.user_count; }, 0);
+    var html = '<div class="muted">Total: ' + totalUsers + ' user' + (totalUsers !== 1 ? 's' : '') + ' reporting</div>';
+    dist.forEach(function (d) {
+      var pctW = maxCount > 0 ? (d.user_count / maxCount) * 240 : 4;
+      var preview = (d.users || []).slice(0, 5).join(', ');
+      if ((d.users || []).length > 5) preview += ', +' + ((d.users || []).length - 5) + ' more';
+      var barClass = d.client_version === 'unknown' ? 'vbar unknown' : 'vbar';
+      html += '<div class="ver-row">' +
+        '<span class="' + barClass + '" style="width:' + pctW + 'px"></span>' +
+        '<span class="vlabel"><code>' + escHtml(d.client_version) + '</code> &mdash; ' +
+          '<b>' + d.user_count + '</b> user' + (d.user_count !== 1 ? 's' : '') +
+          (preview ? ' <span class="muted">(' + escHtml(preview) + ')</span>' : '') +
+          '</span></div>';
+    });
+    body.innerHTML = html;
+  }
+
+  function renderErrors(errs) {
+    var body = $('panel-errors').querySelector('.panel-body');
+    var total = errs.total_24h || 0;
+    var byStage = errs.by_stage_24h || {};
+    var stageKeys = Object.keys(byStage).sort();
+    var statsHtml = '<div class="errstats"><span>Total: <b>' + total + '</b></span>';
+    stageKeys.forEach(function (k) {
+      statsHtml += '<span>' + escHtml(k) + ': <b>' + byStage[k] + '</b></span>';
+    });
+    statsHtml += '</div>';
+    var html = statsHtml;
+    var recent = errs.recent || [];
+    if (recent.length === 0) {
+      html += '<div class="empty">No errors recorded. 🎉</div>';
+    } else {
+      html += '<table><thead><tr><th>Time</th><th>User</th><th>Machine</th><th>From → To</th><th>Stage</th><th>Message</th></tr></thead><tbody>';
+      recent.forEach(function (e) {
+        var ts = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+        html += '<tr>' +
+          '<td>' + escHtml(ts) + '</td>' +
+          '<td>' + escHtml(e.user_id || '') + '</td>' +
+          '<td><span class="muted">' + escHtml(e.machine_id || '') + '</span></td>' +
+          '<td><code>' + escHtml((e.from_version || 'none').slice(0, 16)) + '</code> → <code>' + escHtml((e.to_version || 'none').slice(0, 16)) + '</code></td>' +
+          '<td class="stage">' + escHtml(e.stage || '') + '</td>' +
+          '<td class="msg">' + escHtml((e.error_message || '').slice(0, 240)) + '</td>' +
+          '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+    body.innerHTML = html;
+  }
 
   function loadOverview() {
     fetch('/api/overview?date=' + encodeURIComponent(todayUtc()))

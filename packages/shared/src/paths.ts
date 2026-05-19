@@ -37,6 +37,20 @@ export interface DigitalTwinPaths {
    * `riven digital-twin status` surfaces the last error line from here.
    */
   uploaderLogFile: string;
+  /**
+   * Local copy of the most-recently-installed client manifest. Auto-updater
+   * compares this against the server's `/v1/client-latest/manifest` to decide
+   * whether to fetch new bins. Missing = pre-auto-update install (treated as
+   * "first ever update" by the double-gate).
+   */
+  manifestFile: string;
+  /**
+   * Auto-updater single-flight lock. Holds `PID=<pid>\nTS=<iso>` of the running
+   * updater so concurrent SessionStart hooks short-circuit.
+   */
+  autoUpdateLockFile: string;
+  /** Append-only log of every auto-update attempt (success or failure). */
+  autoUpdateLogFile: string;
 }
 
 const RIVEN_DIRNAME = '.riven';
@@ -110,6 +124,9 @@ export function digitalTwinPaths(home: string = homedir()): DigitalTwinPaths {
     lastHourlyScanFile: join(digitalTwinDir, 'last-hourly-scan.txt'),
     quotaCacheFile: join(digitalTwinDir, 'quota-cache.json'),
     uploaderLogFile: join(digitalTwinDir, 'uploader.log'),
+    manifestFile: join(digitalTwinDir, 'manifest.json'),
+    autoUpdateLockFile: join(digitalTwinDir, 'auto-update.lock'),
+    autoUpdateLogFile: join(digitalTwinDir, 'auto-update.log'),
   };
 }
 

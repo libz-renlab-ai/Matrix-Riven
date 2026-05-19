@@ -220,7 +220,11 @@ function preflightDist() {
   if (!existsSync(join(DIST_DIR, 'bin-digital-twin.cjs'))) {
     fatal(`missing ${join(DIST_DIR, 'bin-digital-twin.cjs')} — rerun \`pnpm -r build\``);
   }
-  log(`OK: all 5 bins present in ${DIST_DIR}`);
+  // bin-auto-updater.cjs is fired by SessionStart hook; verify it's built.
+  if (!existsSync(join(DIST_DIR, 'bin-auto-updater.cjs'))) {
+    fatal(`missing ${join(DIST_DIR, 'bin-auto-updater.cjs')} — rerun \`pnpm -r build\``);
+  }
+  log(`OK: all 6 bins present in ${DIST_DIR}`);
 }
 
 function stageBins(home, dryRun) {
@@ -230,6 +234,7 @@ function stageBins(home, dryRun) {
     ...HOOKS.map((h) => h.bin),
     'bin-uploader.cjs',
     'bin-digital-twin.cjs',
+    'bin-auto-updater.cjs',
   ];
   for (const bin of allBins) {
     const src = join(DIST_DIR, bin);
@@ -250,6 +255,7 @@ function unstageBins(home, dryRun) {
     ...HOOKS.map((h) => h.bin),
     'bin-uploader.cjs',
     'bin-digital-twin.cjs',
+    'bin-auto-updater.cjs',
   ];
   let removed = 0;
   for (const bin of allBins) {

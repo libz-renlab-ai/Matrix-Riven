@@ -44,6 +44,16 @@ import { detectSensitiveText, redactSensitiveText } from '@matrix-riven/shared';
 // Leadership overview (Task 8) — GET /api/overview wires these two together.
 import { scanForOverview } from './overview/disk-scan.js';
 import { buildOverview } from './overview/aggregator.js';
+// Client auto-update (2026-05-19) — manifest / file / error-ingest / status routes.
+import {
+  handleManifestRequest,
+  handleFileRequest,
+  sanitizeErrorReport,
+  appendErrorReport,
+  buildClientUpdateStatus,
+  resolveClientLatestDir,
+  resolveErrorsJsonlPath,
+} from './client-update/index.js';
 
 /** Cap raw POST body to bound memory + reject obvious DoS payloads. */
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -84,6 +94,8 @@ export interface MockServerHandle {
 const ROUTE_CC_SESSIONS = '/v1/cc-sessions';
 /** Issue #350 — lightweight CC runtime status snapshot ingress (plain JSON, not gzipped). */
 const ROUTE_CC_STATUS = '/v1/cc-status';
+/** Client auto-update — operator-visible error ingest. */
+const ROUTE_CLIENT_UPDATE_ERROR = '/v1/client-update-error';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ID_RE = /^[A-Za-z0-9._-]+$/;
@@ -319,7 +331,7 @@ function handleGet(
   now: () => Date,
 ): void {
   const url = req.url ?? '';
-  const path = url.split('?')[0];
+  const path = url.split('?')[0] ?? '';
 
   if (path === '/' || path === '/index.html') {
     res.statusCode = 200;
@@ -500,6 +512,30 @@ function handleGet(
     return;
   }
 
+  // Client auto-update — manifest fetch
+  if (path === '/v1/client-latest/manifest') {
+    handleManifestRequest(req, res, resolveClientLatestDir(outputDir));
+    return;
+  }
+
+  // Client auto-update — file stream
+  if (path.startsWith('/v1/client-latest/files/')) {
+    handleFileRequest(res, resolveClientLatestDir(outputDir), path);
+    return;
+  }
+
+  // Client auto-update — dashboard data
+  if (path === '/api/client-update-status') {
+    const status = buildClientUpdateStatus({
+      clientLatestDir: resolveClientLatestDir(outputDir),
+      errorsJsonlPath: resolveErrorsJsonlPath(outputDir),
+      outputDir,
+      now: now(),
+    });
+    send(res, 200, status);
+    return;
+  }
+
   if (path === '/api/file') {
     const user = validateUserParam(q.get('user') ?? undefined);
     const date = validateDateParam(q.get('date') ?? undefined);
@@ -604,7 +640,8 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
     const route = (req.url ?? '').split('?')[0] ?? '';
     if (
       route !== ROUTE_CC_SESSIONS &&
-      route !== ROUTE_CC_STATUS
+      route !== ROUTE_CC_STATUS &&
+      route !== ROUTE_CLIENT_UPDATE_ERROR
     ) {
       send(res, 404);
       return;
@@ -647,6 +684,25 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
           error: 'invalid json',
           detail: err instanceof Error ? err.message : String(err),
         });
+        return;
+      }
+
+      // Client auto-update — POST /v1/client-update-error: append validated
+      // report to JSONL. Best-effort writes; ingest never 5xx's a disk error.
+      if (route === ROUTE_CLIENT_UPDATE_ERROR) {
+        const report = sanitizeErrorReport(json);
+        if (report === null) {
+          send(res, 400, { error: 'invalid error report' });
+          return;
+        }
+        const r = appendErrorReport(resolveErrorsJsonlPath(outputDir), report);
+        if (!r.ok) {
+          // Don't 5xx — the failing path is server-disk, not client's fault.
+          // 202 Accepted communicates "we got it but couldn't persist".
+          send(res, 202, { ok: false, persisted: false, reason: r.reason });
+          return;
+        }
+        send(res, 200, { ok: true });
         return;
       }
 

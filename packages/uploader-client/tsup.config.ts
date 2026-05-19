@@ -16,6 +16,7 @@ export default defineConfig([
       'src/bin-session-start.ts',
       'src/bin-user-prompt-submit.ts',
       'src/bin-digital-twin.ts',
+      'src/bin-auto-updater.ts',
     ],
     format: ['cjs'],
     target: 'node16',

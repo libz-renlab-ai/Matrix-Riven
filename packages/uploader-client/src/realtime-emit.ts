@@ -126,6 +126,7 @@ function debugLog(line: string): void {
 // config picks up — the `|| !cachedUserId` clause handles that.
 let cachedUserId: string | null = null;
 let cachedMachineId: string | null = null;
+let cachedClientVersion: string | null = null;
 
 /**
  * Cached digital-twin config-derived realtime URL. Read once per process from
@@ -143,7 +144,37 @@ let cachedConfigBaseUrl: string | null | typeof CONFIG_URL_UNREAD = CONFIG_URL_U
 export function __resetIdentityCacheForTests(): void {
   cachedUserId = null;
   cachedMachineId = null;
+  cachedClientVersion = null;
   cachedConfigBaseUrl = CONFIG_URL_UNREAD;
+}
+
+/**
+ * Read the locally-installed manifest version. Cached on first call to keep
+ * the hook critical path cheap. Returns "unknown" if the file is missing or
+ * malformed — old pre-auto-update installs report that string in cc-status
+ * payloads, which makes them visible in the Updates dashboard.
+ */
+function resolveClientVersion(): string {
+  if (cachedClientVersion !== null) return cachedClientVersion;
+  try {
+    const paths = digitalTwinPaths(homeForConfig());
+    // Lazy require to avoid loading fs at module init.
+    const { existsSync, readFileSync } = require('node:fs') as typeof import('node:fs');
+    if (!existsSync(paths.manifestFile)) {
+      cachedClientVersion = 'unknown';
+      return cachedClientVersion;
+    }
+    const raw = readFileSync(paths.manifestFile, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.version === 'string' && parsed.version.length > 0) {
+      cachedClientVersion = parsed.version.slice(0, 64);
+      return cachedClientVersion;
+    }
+  } catch {
+    // fall through
+  }
+  cachedClientVersion = 'unknown';
+  return cachedClientVersion;
 }
 
 /**
@@ -254,6 +285,7 @@ function buildSnapshot(input: EmitInput): CcStatusSnapshot {
     event: input.event,
     display_name: userId.split("@")[0] || userId,
     machine_id: machineId,
+    client_version: resolveClientVersion(),
   };
   if (input.cwd) snap.cwd = input.cwd;
   if (input.gitBranch) snap.git_branch = input.gitBranch;
