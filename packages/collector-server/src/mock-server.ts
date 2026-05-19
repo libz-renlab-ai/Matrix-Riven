@@ -830,6 +830,16 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
       // body 400s (unlike the optional quota sidecar on /v1/cc-sessions, the
       // snapshot IS the payload here).
       if (route === ROUTE_CC_STATUS) {
+        // Round-3 QA P1 (security): /v1/cc-sessions gates user_id via
+        // isValidUserId; this sibling path didn't. In no-token mode the
+        // same pentest payload (`xss_+alert_1___@test.com` etc.) could
+        // still pollute the dashboard via /v1/cc-status. Apply the same
+        // gate here BEFORE handing to appendCcStatusSnapshot.
+        const ccUser = (json as Record<string, unknown> | null)?.user_id;
+        if (typeof ccUser === 'string' && ccUser.length > 0 && !isValidUserId(ccUser)) {
+          send(res, 400, { error: 'invalid user_id', detail: 'user_id must be an email or [A-Za-z0-9][A-Za-z0-9._-]{0,63} local-part' });
+          return;
+        }
         const r = appendCcStatusSnapshot(outputDir, json, now());
         if (!r.ok) {
           if (r.reason === 'path') {
