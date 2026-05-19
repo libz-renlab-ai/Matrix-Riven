@@ -128,13 +128,21 @@
 
 ## 仓库状态
 
-- 分支：`worktree-sleepy-fluttering-gem`
-- HEAD：`dd13e38`
-- 领先 main：5 commits
+- 分支：`worktree-sleepy-fluttering-gem`（已 push 到 origin）
+- HEAD：`40f9a9c`
+- 领先 main：7 commits
+- PR：https://github.com/libz-renlab-ai/Matrix-Riven/pull/6
 - 测试：1250 passing · 16 skipped
 - typecheck：clean
 - build：clean
 - 服务器：`PORT=18939 LLM_ENABLED=false RIVEN_COLLECTOR_DIR=/tmp/riven-empty-data RIVEN_LEADERSHIP_DEMO_ALLOWED=1`
+
+### Round-6 追加修复（commit `40f9a9c`，安全 round-3 反馈）
+
+| 项 | 来源 |
+|---|---|
+| POST /v1/cc-status 加 isValidUserId（兄弟路径漏修，no-token 模式同 payload 仍可污染） | 安全 round-3 P1 |
+| model id allowlist 放宽：`claude-` + `[A-Za-z0-9._-]{3,80}`，接受 v3 / v4 系列全部 Anthropic 模型 | 安全 round-3 P2 |
 
 ## 上线步骤（明早醒来照做）
 
