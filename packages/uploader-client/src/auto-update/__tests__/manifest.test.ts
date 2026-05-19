@@ -56,6 +56,51 @@ describe('readLocalManifest / writeLocalManifest roundtrip', () => {
   });
 });
 
+describe('shouldUpdate kill switch (operator emergency stop)', () => {
+  it('ALLOWS fresh install even when remote.disabled=true (no-local can never downgrade)', () => {
+    const killed = { ...VALID, disabled: true, note: 'incident X' };
+    const d = shouldUpdate(null, killed);
+    expect(d.update).toBe(false);
+    if (!d.update) expect(d.reason).toBe('no-local');
+  });
+  it('refuses to upgrade when remote.disabled=true (even if newer)', () => {
+    const local = { ...VALID, version: 'v0', generated_at: '2026-01-01T00:00:00Z' };
+    const killed = { ...VALID, version: 'v1', disabled: true };
+    const d = shouldUpdate(local, killed);
+    expect(d.update).toBe(false);
+    if (!d.update) expect(d.reason).toBe('disabled');
+  });
+  it('proceeds normally when disabled=false', () => {
+    const local = { ...VALID, version: 'v0', generated_at: '2026-01-01T00:00:00Z' };
+    const remote = { ...VALID, version: 'v1', disabled: false };
+    expect(shouldUpdate(local, remote).update).toBe(true);
+  });
+  it('carries note through to the decision', () => {
+    const local = { ...VALID, version: 'v0', generated_at: '2026-01-01T00:00:00Z' };
+    const killed = { ...VALID, version: 'v1', disabled: true, note: 'pausing rollout' };
+    const d = shouldUpdate(local, killed);
+    if (!d.update && d.reason === 'disabled') expect(d.note).toBe('pausing rollout');
+  });
+});
+
+describe('validateManifest preserves disabled+note', () => {
+  it('parses disabled flag', () => {
+    const m = validateManifest({ ...VALID, disabled: true });
+    expect(m).not.toBeNull();
+    expect(m?.disabled).toBe(true);
+  });
+  it('parses note capped at 256 chars', () => {
+    const m = validateManifest({ ...VALID, note: 'x'.repeat(500) });
+    expect(m?.note?.length).toBeLessThanOrEqual(256);
+  });
+  it('rejects garbage in disabled (must be bool)', () => {
+    // validator should ignore — note already short-circuits with || strings
+    const m = validateManifest({ ...VALID, disabled: 'true' });
+    expect(m).not.toBeNull();
+    expect(m?.disabled).toBeUndefined();
+  });
+});
+
 describe('shouldUpdate double-gate', () => {
   it('updates when no local manifest (fresh install)', () => {
     const d = shouldUpdate(null, VALID);

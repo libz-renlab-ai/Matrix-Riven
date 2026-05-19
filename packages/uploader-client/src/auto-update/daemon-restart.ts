@@ -108,13 +108,27 @@ export async function restartUploader(opts: {
   const pidRecord = readPidRecord(opts.pidFile);
   const oldPid = pidRecord?.pid ?? null;
   let killedOld = false;
-  // CTO review: refuse to kill a recycled-looking PID (record older than 30
-  // days → PID is almost certainly a different process now).
+  // Round-2 review fix: if the recorded PID looks recycled (record older than
+  // 30 days OR garbage start_at), do NOT proceed. Round-1's previous code
+  // would unconditionally unlink the pid file and spawn a new daemon — but
+  // because we'd just refused to kill the recorded PID, we'd end up with TWO
+  // daemons running. Safer: bail out, log, let next SessionStart retry.
   if (
     pidRecord !== null &&
     oldPid !== null &&
     pidAlive(oldPid) &&
-    !pidLooksRecycled(pidRecord)
+    pidLooksRecycled(pidRecord)
+  ) {
+    return {
+      ok: false,
+      killedOld: false,
+      detail: `pid file points to live PID ${oldPid} but start_at looks recycled (${pidRecord.start_at ?? 'missing'}) — refusing to spawn duplicate daemon. Operator should verify and clear ${opts.pidFile} manually.`,
+    };
+  }
+  if (
+    pidRecord !== null &&
+    oldPid !== null &&
+    pidAlive(oldPid)
   ) {
     try {
       process.kill(oldPid); // default SIGTERM on POSIX; Windows: kills immediately

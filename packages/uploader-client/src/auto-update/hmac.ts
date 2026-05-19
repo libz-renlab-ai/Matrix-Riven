@@ -23,28 +23,38 @@ import type { ClientManifest } from './types.js';
 const ENV_SECRET = 'RIVEN_CLIENT_MANIFEST_SECRET';
 
 /**
- * Stable JSON serialization for signing: sorted keys, no whitespace, hmac_sha256
- * field stripped if present. Both sides MUST produce identical bytes.
+ * Stable JSON serialization for signing.
+ *
+ * Round-2 review fix: round 1 used a fixed whitelist of fields, which meant
+ * any future field added to the manifest would not be signed. Now we sign
+ * EVERY top-level key (alphabetically sorted) EXCEPT `hmac_sha256` itself,
+ * and inside `files[]` we also sort+serialize known sub-keys deterministically.
+ * Any future-added field automatically gets covered by the signature.
  */
+function sortedKeys(obj: Record<string, unknown>): string[] {
+  return Object.keys(obj).filter((k) => k !== 'hmac_sha256').sort();
+}
+
 function canonicalize(m: ClientManifest): string {
+  const o = m as unknown as Record<string, unknown>;
   const copy: Record<string, unknown> = {};
-  // Iterate in fixed order for determinism. Don't include hmac_sha256.
-  const ordered: Array<keyof ClientManifest | 'hmac_sha256'> = [
-    'version',
-    'generated_at',
-    'disabled',
-    'note',
-    'files',
-  ];
-  for (const k of ordered) {
-    const v = (m as unknown as Record<string, unknown>)[k];
+  for (const k of sortedKeys(o)) {
+    const v = o[k];
     if (v === undefined) continue;
     if (k === 'files' && Array.isArray(v)) {
-      copy.files = (v as Array<Record<string, unknown>>).map((f) => ({
-        name: f.name,
-        sha256: f.sha256,
-        size: f.size,
-      }));
+      // Deterministic file serialization: sort by name then list known fields
+      // in fixed order. New file-level fields must be added here AND the
+      // schema_version bumped (which is itself signed because we sort all keys).
+      const files = [...(v as Array<Record<string, unknown>>)].sort((a, b) =>
+        String(a.name).localeCompare(String(b.name)),
+      );
+      copy.files = files.map((f) => {
+        const out: Record<string, unknown> = {};
+        for (const fk of Object.keys(f).sort()) {
+          out[fk] = f[fk];
+        }
+        return out;
+      });
     } else {
       copy[k] = v;
     }

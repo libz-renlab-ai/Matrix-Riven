@@ -100,10 +100,13 @@ export function shouldUpdate(
   local: ClientManifest | null,
   remote: ClientManifest,
 ): UpdateDecision {
-  // Kill-switch (operator-set) takes priority over every other gate. Even a
-  // brand-new install respects it — preventing first-time machines from
-  // pulling a known-bad release during the kill window.
-  if (remote.disabled === true) {
+  // Round-2 review fix: kill-switch should block UPGRADES but not fresh
+  // installs. The original "halt all clients" intent is about not letting
+  // existing fleet members pull a known-bad release — a brand-new machine
+  // can't be "downgraded" since it has nothing yet. Without this, an operator
+  // who flips kill_switch=true permanently locks every freshly-bootstrapped
+  // machine out of the system.
+  if (remote.disabled === true && local !== null) {
     return { update: false, reason: 'disabled', ...(remote.note ? { note: remote.note } : {}) };
   }
   if (local === null) {

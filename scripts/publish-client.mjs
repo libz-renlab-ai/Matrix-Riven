@@ -120,15 +120,22 @@ function preflight() {
 /**
  * Canonical JSON for HMAC signing. Must match
  * packages/uploader-client/src/auto-update/hmac.ts `canonicalize`.
+ * Round-2 fix: sort ALL keys (except hmac_sha256), so future-added fields
+ * are automatically signed without requiring a code change here.
  */
 function canonicalize(manifest) {
+  const sorted = Object.keys(manifest).filter((k) => k !== 'hmac_sha256').sort();
   const copy = {};
-  const ordered = ['version', 'generated_at', 'disabled', 'note', 'files'];
-  for (const k of ordered) {
+  for (const k of sorted) {
     const v = manifest[k];
     if (v === undefined) continue;
     if (k === 'files' && Array.isArray(v)) {
-      copy.files = v.map((f) => ({ name: f.name, sha256: f.sha256, size: f.size }));
+      const files = [...v].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      copy.files = files.map((f) => {
+        const out = {};
+        for (const fk of Object.keys(f).sort()) out[fk] = f[fk];
+        return out;
+      });
     } else {
       copy[k] = v;
     }
@@ -219,11 +226,23 @@ function shellQuote(s) {
 
 /**
  * Reject obviously unsafe path strings before they reach ssh. Defense-in-depth
- * on top of shellQuote.
+ * on top of shellQuote. Round-2 fix: also reject `..` segments (the previous
+ * regex allowed them because `.` is in the whitelist) and require the path
+ * to start with `/`, `~`, or a drive letter.
  */
 function assertPathSafe(p, role) {
   if (!/^[A-Za-z0-9._/~+@:\\-]+$/.test(p)) {
     fatal(`unsafe ${role} path: ${JSON.stringify(p)} (only letters, digits, . _ / ~ + @ : \\ -)`);
+  }
+  // Block `..` segments (e.g. `/srv/x/../etc`)
+  const segments = p.split(/[\/\\]/);
+  for (const seg of segments) {
+    if (seg === '..') {
+      fatal(`unsafe ${role} path: ${JSON.stringify(p)} (contains '..' segment)`);
+    }
+  }
+  if (!/^([\/~]|[A-Za-z]:)/.test(p)) {
+    fatal(`unsafe ${role} path: ${JSON.stringify(p)} (must start with '/', '~', or drive letter)`);
   }
 }
 
