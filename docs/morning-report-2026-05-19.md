@@ -3,7 +3,7 @@
 **日期**：2026-05-19 夜 → 2026-05-20 晨
 **目标**：用户睡前授权全自主完成。明早上线一个完整的客户端自动更新系统。
 **当前 branch**：`worktree-parsed-rolling-quasar`
-**最新 commit**：`c4e34fb`
+**最新 commit**：`42db9cc`
 
 ---
 
@@ -12,10 +12,11 @@
 ✅ **系统可上线**。从 spec → 实现 → 测试 → 2 轮多 agent 验证 → 修复 → 重测
 完整闭环走完。
 
-- **6 commits** since brainstorming spec
-- **579 单元测试 + 1 skip + 8 端到端 chaos 测试** 全过
-- 2 轮共 **5 个验证 agent**（CTO / 投资人 / 用户 / SRE / Chaos）
-- 5 agent 加总找出 **40+ issue**，修了 **30+ 个**，其余分类为 **v2 路线图**
+- **8 commits** since brainstorming spec
+- **579 单元测试 + 1 skip + 8 端到端 + 10 chaos 场景** 全过
+- 3 轮共 **6 个验证 agent**（CTO / 投资人 / 用户 / SRE / Chaos / 独立审计）
+- 6 agent 加总找出 **45+ issue**，修了 **32+ 个**，其余分类为 **v2 路线图**
+- 第 3 轮独立审计师**最终结论：SHIP**。无 ship-blocker，2 个 P1 已应用
 - 关键能力：双闸 + HMAC 签名 + kill-switch + jitter + PID 防回收 + 路径白名单 +
   错误上报 + 全员版本分布看板 + 防降级 + 防双 daemon + 防 OOM
 
@@ -167,6 +168,23 @@ node ~/.riven/digital-twin/bin-digital-twin.cjs update   # 手动同步跑一次
 - ✅ post-publish verify 改成 canonical byte 比对（不只是 version 字段）
 - ✅ Local-target 模式也做 verify（best-effort 探 http://127.0.0.1:8933）
 
+**Round 3（独立审计师，单 agent）**：
+
+最终结论 **SHIP**。复核了 round 1+2 的所有修复，无伪修、无回归。发现 2 个 P1（非
+ship-blocker），均已修：
+
+- **P1: 服务端 `validateManifest` 字段过滤会破坏 HMAC**：round 2 把 HMAC 改为「签所有
+  key」，但 server `manifest-route.ts` 重建对象时只 pass-through 已知字段。v1 不触发
+  （manifest 无未知字段），但 v2 一旦加 `rollout` / `schema_version` → 客户端重新算
+  hmac 缺字段 → 全员拒绝。✅ **已修**（commit `42db9cc`），server 现在 pass-through
+  所有未知字段。
+- **P1: `download.ts` stream.end() 失败被吞**：磁盘满 / AV 锁文件时 end() error 被
+  `.catch(()=>{})` 吞掉，digest 仍能算出 → 误返回 ok=true，污染 .new 文件。
+  ✅ **已修**（commit `42db9cc`），end() 失败现在 unlink + 返回 io error。
+
+其余 6 个 P2 已记入 v2 路线图（包括 lockfile PID 回收、wall-clock 回退、bin-digital-twin
+update kill-switch exit code 等）。
+
 **Round 2 中 chaos agent 验证通过的场景**：
 1. 4 个并发 updater → lock 正确阻塞，1 个 UPDATED + 3 个 lock-held
 2. 下载中途网络断 → .new 清理 + 错误上报
@@ -245,6 +263,8 @@ node ~/.riven/digital-twin/bin-digital-twin.cjs update   # 手动同步跑一次
 ## Git 历史
 
 ```
+42db9cc fix(auto-update): round-3 review fixes — manifest pass-through + download end-fail
+f26790f docs: final morning report — autonomous session wrap-up
 c4e34fb feat+polish: round-2 finishing — dashboard delta view, update CLI, sha-aware verify
 9e0cec6 fix(auto-update): round-2 review fixes — double-daemon, HMAC, kill-switch UX
 4d0a9ec docs+polish: round-1 finish — README priority callout, troubleshooting §D, HMAC test suite
