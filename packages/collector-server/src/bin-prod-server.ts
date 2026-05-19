@@ -56,19 +56,14 @@ export async function runProdServer(deps: RunProdServerDeps = {}): Promise<() =>
   // leadership routes when present.
   const host = env.HOST ?? '127.0.0.1';
   if (host !== '127.0.0.1' && host !== 'localhost' && !(env.RIVEN_AUTH_TOKEN || env.BPP_AUTH_TOKEN)) {
-    // 2026-05-19 QA-4 P0: security auditor's P0 — a non-loopback bind
-    // without RIVEN_AUTH_TOKEN exposes both leadership endpoints AND
-    // the write endpoint (POST /v1/cc-sessions) to the LAN. With no
-    // token, anyone can ingest a session as any email, corrupting
-    // every signal. The previous behaviour was to log a warning and
-    // start anyway, which a sleepy operator would miss. Refuse to
-    // start so the misconfiguration surfaces immediately.
-    throw new Error(
-      `[riven-collector] REFUSING TO START: HOST=${host} (non-loopback) ` +
-        `without RIVEN_AUTH_TOKEN. POST /v1/cc-sessions and every ` +
-        `leadership route would be reachable on the LAN without auth, ` +
-        `letting anyone spoof a teammate's email and corrupt aggregates. ` +
-        `Set RIVEN_AUTH_TOKEN=<32 random bytes> or bind HOST=127.0.0.1.`,
+    // 2026-05-19: team decision — this internal collector runs in "trusted
+    // LAN" mode and intentionally has no auth. The previous QA-4 hard refuse
+    // is now just a NOTICE log so operators see the configuration but
+    // startup proceeds.
+    log(
+      `[riven-collector] NOTICE: HOST=${host} (non-loopback) without ` +
+        `RIVEN_AUTH_TOKEN — trusted-LAN mode (no auth). Anyone on the LAN ` +
+        `can POST as any teammate email and read leadership routes.`,
     );
   }
   if ((host === '127.0.0.1' || host === 'localhost') && !(env.RIVEN_AUTH_TOKEN || env.BPP_AUTH_TOKEN)) {
