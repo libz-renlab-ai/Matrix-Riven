@@ -107,4 +107,15 @@ describe('renderActivityPage', () => {
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&lt;img');
   });
+
+  it('§5.8: sub-header carries a live last-tick timestamp with data-computed-at', () => {
+    const snap = mkSnap();
+    const html = renderActivityPage(snap);
+    expect(html).toContain('id="activity-last-tick"');
+    expect(html).toContain('data-computed-at="2026-05-18T12:00:00Z"');
+    expect(html).toContain('最近一次');
+    // Client-side ticker script lives in the page.
+    expect(html).toContain('activity-last-tick');
+    expect(html).toMatch(/setInterval\(tick/);
+  });
 });

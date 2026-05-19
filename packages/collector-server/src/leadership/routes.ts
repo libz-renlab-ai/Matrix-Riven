@@ -232,7 +232,21 @@ export function handleLeadershipRequest(
       highlights: renderHighlightsFragment(demoSnap),
       collab: renderCollabFragment(demoSnap),
     };
-    sendJson(res, 200, { ...demoSnap, _html });
+    // Round-7 P2 / autonomous: demo /api/overview previously had no ETag,
+    // so the 30 s polling loop re-downloaded the full demo snapshot every
+    // tick. Stamp an ETag based on the rendered demo payload and honour
+    // If-None-Match so the demo path matches the real path's 304 contract.
+    const demoBody = { ...demoSnap, _html };
+    const demoEtag = etagFor(demoBody);
+    const ifNoneMatch = req.headers['if-none-match'];
+    if (typeof ifNoneMatch === 'string' && ifNoneMatch === demoEtag) {
+      applySecurityHeaders(res);
+      res.statusCode = 304;
+      res.setHeader('etag', demoEtag);
+      res.end();
+      return true;
+    }
+    sendJsonWithEtag(res, 200, demoBody, demoEtag);
     return true;
   }
 

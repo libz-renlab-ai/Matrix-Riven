@@ -614,7 +614,6 @@ export const LEADERSHIP_CSS_V2 = `
   .so-id .so-name { font-size: 17px; font-weight: 600; color: var(--ink-1); letter-spacing: -0.01em; }
   .so-id .so-meta { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
   .so-close {
-    margin-left: auto;
     width: 32px; height: 32px; border-radius: 10px;
     background: transparent; border: 0;
     color: var(--ink-3); cursor: pointer;
@@ -622,6 +621,16 @@ export const LEADERSHIP_CSS_V2 = `
     transition: background .2s var(--ease);
   }
   .so-close:hover { background: var(--surface-2); color: var(--ink-1); }
+  .so-expand {
+    margin-left: auto;
+    height: 28px; padding: 0 10px; border-radius: 8px;
+    background: var(--surface-2); color: var(--ink-2);
+    text-decoration: none; font-size: 12px;
+    display: inline-flex; align-items: center; gap: 4px;
+    transition: background .2s var(--ease), color .2s var(--ease);
+  }
+  .so-expand:hover { background: var(--accent-soft); color: var(--accent-ink); }
+  .so-expand[hidden] { display: none !important; }
   .so-body { overflow-y: auto; padding: 22px 28px 32px; flex: 1; }
   .so-callout {
     background: var(--warn-soft);

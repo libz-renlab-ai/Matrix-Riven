@@ -28,9 +28,12 @@ export function renderRetro(snap: OverviewSnapshot, opts: { demo?: boolean } = {
     .filter((m) => m.stateBadge === 'active' && m.deltaVs7dAvgPct > 0.1)
     .slice(0, 5);
   const dormant = snap.projects.filter((p) => p.state === 'dormant').slice(0, 4);
-  const briefBox = snap.llmBrief && snap.llmBrief.length > 0
-    ? `<div class="rt-brief">${snap.llmBrief.slice(0, 3).map((l) => `<div>${escapeHtml(l)}</div>`).join('')}</div>`
-    : '';
+  // §5.6: /retro is a *weekly* view. Previously we rendered `snap.llmBrief`
+  // (T5 daily brief) here because the snapshot already had it — but a daily
+  // brief at the top of a weekly retrospective reads as semantic noise
+  // ("今日… 明日…" copy in a "本周回顾" page). Replace with a
+  // deterministic weekly summary line built from the same snapshot.
+  const weeklySummary = renderWeeklySummary(snap);
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -67,7 +70,7 @@ ${renderNav('retro', { rangeLabel: '本周回顾', demo: opts.demo === true })}
   <a class="rt-back" href="/overview">← 返回实时看板</a>
   <h1>本周回顾</h1>
   <div class="sub">由 ${escapeHtml(snap.range.label)} 窗口生成，覆盖 ${snap.members.length} 位成员 · ${snap.projects.length} 个项目</div>
-  ${briefBox}
+  ${weeklySummary}
 
   <section class="rt-section">
     <h2>本周交付 <span class="count">${delivered.length}</span></h2>
@@ -120,6 +123,23 @@ ${renderConsentBanner({ demo: opts.demo === true })}
 <script>${CONSENT_BANNER_SCRIPT}</script>
 </body>
 </html>`;
+}
+
+function renderWeeklySummary(snap: OverviewSnapshot): string {
+  // Deterministic weekly summary — week-shaped sentence, no daily/today copy.
+  // Counts come from the same snapshot fields the retro sections use, so the
+  // top-line summary and section counts are always in sync.
+  const delivered = (snap.highlights ?? []).filter((h) => ['commit', 'push', 'pr', 'release', 'tag'].includes(h.type)).length;
+  const concerns = snap.attention.length;
+  const standoutN = snap.members.filter((m) => m.stateBadge === 'active' && m.deltaVs7dAvgPct > 0.1).length;
+  const dormantN = snap.projects.filter((p) => p.state === 'dormant').length;
+  const parts: string[] = [];
+  parts.push(`本周累计交付 <strong>${delivered}</strong> 件`);
+  if (concerns > 0) parts.push(`待跟进 <strong>${concerns}</strong> 项`);
+  if (standoutN > 0) parts.push(`<strong>${standoutN}</strong> 位成员节奏突出`);
+  if (dormantN > 0) parts.push(`<strong>${dormantN}</strong> 个项目沉睡`);
+  const line = parts.join(' · ');
+  return `<div class="rt-brief" aria-label="weekly summary"><div>${line}。</div></div>`;
 }
 
 function verbLabel(type: HighlightEvent['type']): string {

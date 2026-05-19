@@ -11,7 +11,7 @@
  */
 
 import type { OverviewSnapshot, MemberSnapshot, ProjectSnapshot, HighlightEvent } from '../types.js';
-import { heroHeadline, attentionLead } from './_copy.js';
+import { heroHeadline, focusedHeroHeadline, attentionLead } from './_copy.js';
 import { avatarColor } from './_helpers.js';
 import { redactForLLM } from '../llm/redact.js';
 import {
@@ -106,15 +106,41 @@ export function renderHeroFragment(snap: OverviewSnapshot): string {
   // `snap.attention.length`, so drive both from the same source.
   const attentionCount = snap.attention.length;
   const highOutputCount = classifyHighOutput(snap.members);
-  const headline = noData
-    ? `<em>暂无数据</em>。<br/>collector 还没收到 transcript — 装好 Claude Code hook 后约 30 秒会出现首条会话。`
-    : heroHeadline({ attentionCount, highOutputCount });
+  const f = snap.appliedFilter;
+  const filterActive = !!(f && (f.focus || f.project || f.state || f.range !== 'today'));
+  let headline: string;
+  if (noData) {
+    // Round-7 P2 / autonomous: a hint string alone leaves a new user
+    // staring at empty cards. Give them two clickable CTAs — one to the
+    // install guide on /sources, one to demo mode so they can see what
+    // the dashboard looks like with data while they wire up the collector.
+    headline = `<em>暂无数据</em>。<br/>collector 还没收到 transcript — 装好 Claude Code hook 后约 30 秒会出现首条会话。
+    <div class="empty-cta" style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;font-style:normal;">
+      <a href="/sources" style="display:inline-block;padding:9px 16px;border-radius:8px;background:var(--accent-ink,#5a6d4a);color:var(--surface,#fff);text-decoration:none;font-weight:500;">看怎么接入 collector →</a>
+      <a href="/overview?demo=1" style="display:inline-block;padding:9px 16px;border-radius:8px;background:var(--surface-2,#f2f1ed);color:var(--ink-1,#222);text-decoration:none;border:1px solid var(--hairline,#ddd);">先看 Demo 看板 →</a>
+    </div>`;
+  } else if (filterActive && f) {
+    // §5.7: when filter active, rewrite headline so the wording describes the
+    // filter subject, not the whole team. Otherwise "今天有 3 件事" reads
+    // dissonant against a page that shows only one person.
+    headline = focusedHeroHeadline({
+      focus: f.focus ?? undefined,
+      project: f.project ?? undefined,
+      state: f.state ?? undefined,
+      stateLabel: f.state ? stateHumanLabel(f.state) : undefined,
+      rangeLabel: f.range && f.range !== 'today' ? rangeHumanLabel(f.range) : '今日',
+      attentionCount,
+    });
+  } else {
+    headline = heroHeadline({ attentionCount, highOutputCount });
+  }
   const d = new Date(snap.computedAt);
   const date = `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
   // Phase 3-A: when a filter is active, prepend a single-line summary so
-  // the hero reads as filtered without rewriting the entire headline.
-  const f = snap.appliedFilter;
-  const filterCrumb = f && (f.focus || f.project || f.state || f.range !== 'today')
+  // the hero reads as filtered. Combined with the §5.7 headline rewrite
+  // above, the hero now: (1) shows what's filtered (crumb) AND
+  // (2) the headline copy matches the filter subject.
+  const filterCrumb = filterActive && f
     ? `<div class="hero-filter-crumb" style="font-size:12px;color:var(--ink-3,#888);margin-bottom:6px;">
          🔍 当前聚焦：${[
            f.focus ? `<strong style="color:#ff9d3a;">${escapeHtml(f.focus)}</strong>` : '',

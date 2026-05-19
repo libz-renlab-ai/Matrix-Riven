@@ -142,6 +142,29 @@ export const CLIENT_REFRESH_SCRIPT = `
     soId = id;
     soEtag = null;
     if (soInterval) { clearInterval(soInterval); soInterval = null; }
+    // Round-7 P2 / autonomous: wire the drawer→full-page expand link. Members
+    // get /people/<localpart>, projects get /projects (no per-project page —
+    // surface the slideover via #project=<id> deeplink so back-button works).
+    var expandEl = document.getElementById('so-expand');
+    if (expandEl) {
+      var demoSuffix = '';
+      try {
+        if (typeof location !== 'undefined' && /(\\?|&)demo=1(&|$)/.test(location.search)) {
+          demoSuffix = '?demo=1';
+        }
+      } catch (e) { /* SSR fallback */ }
+      if (kind === 'member') {
+        expandEl.setAttribute('href', '/people/' + encodeURIComponent(id) + demoSuffix);
+        expandEl.hidden = false;
+      } else if (kind === 'project') {
+        // No per-project standalone page yet — link back to /projects with a
+        // deeplink that auto-reopens the slideover (handleSlideoverHash).
+        expandEl.setAttribute('href', '/projects' + demoSuffix + '#project=' + encodeURIComponent(id));
+        expandEl.hidden = false;
+      } else {
+        expandEl.hidden = true;
+      }
+    }
     // Optimistic loading state — clear stale content while the fetch runs.
     swap('so-callout', '<div class="so-callout"><div class="so-callout-text serif">加载中…</div></div>');
     swap('so-stats', '');

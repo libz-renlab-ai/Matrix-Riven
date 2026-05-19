@@ -55,6 +55,10 @@ export function renderSlideoverShell(): string {
       <div class="so-name" id="so-name"></div>
       <div class="so-meta" id="so-meta"></div>
     </div>
+    <a class="so-expand" id="so-expand" href="#" title="展开整页" aria-label="展开整页" hidden>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3H3v6"/><path d="M21 15v6h-6"/><path d="M21 3l-9 9"/><path d="M3 21l9-9"/></svg>
+      <span>整页</span>
+    </a>
     <button class="so-close" type="button" onclick="window.closeSO && window.closeSO()" aria-label="关闭">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
     </button>

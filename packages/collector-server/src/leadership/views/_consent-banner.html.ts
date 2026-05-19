@@ -43,6 +43,16 @@
  */
 
 export const CONSENT_BANNER_CSS = `
+.consent-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 24, 36, 0.32);
+  z-index: 9998;
+  display: none;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.consent-scrim.show { display: block; }
 .consent-banner {
   position: fixed;
   left: 0; right: 0; bottom: 0;
@@ -107,7 +117,8 @@ export const CONSENT_BANNER_CSS = `
 export function renderConsentBanner(opts: { demo: boolean }): string {
   if (opts.demo) return '';
   return `
-<div class="consent-banner" id="consent-banner" role="dialog" aria-labelledby="consent-banner-title" aria-describedby="consent-banner-copy">
+<div class="consent-scrim" id="consent-scrim" aria-hidden="true"></div>
+<div class="consent-banner" id="consent-banner" role="dialog" aria-modal="true" aria-labelledby="consent-banner-title" aria-describedby="consent-banner-copy">
   <div class="consent-banner-body">
     <div>
       <div class="consent-banner-title" id="consent-banner-title">这台 Matrix-Riven 会读哪些东西，请告知你的团队后再继续</div>
@@ -133,13 +144,28 @@ export function renderConsentBanner(opts: { demo: boolean }): string {
 export const CONSENT_BANNER_SCRIPT = `
 (function () {
   var KEY = 'riven.consent.v1';
+  function showBanner(banner, scrim) {
+    banner.classList.add('show');
+    if (scrim) scrim.classList.add('show');
+    // Round-7 P2 / autonomous: while consent is pending, keep the body
+    // from scrolling so the banner stays anchored in view. The scrim
+    // already blocks click-through via z-index, and aria-modal flags the
+    // dialog role to AT.
+    try { document.body.style.overflow = 'hidden'; } catch (e) {}
+  }
+  function dismiss(banner, scrim) {
+    banner.classList.remove('show');
+    if (scrim) scrim.classList.remove('show');
+    try { document.body.style.overflow = ''; } catch (e) {}
+  }
   function init() {
     var banner = document.getElementById('consent-banner');
+    var scrim = document.getElementById('consent-scrim');
     if (!banner) return;
     try {
       if (localStorage.getItem(KEY)) return;
     } catch (e) { /* private mode / blocked storage: show banner each visit */ }
-    banner.classList.add('show');
+    showBanner(banner, scrim);
     var btn = document.getElementById('consent-banner-ack');
     if (btn) {
       btn.addEventListener('click', function () {
@@ -149,7 +175,7 @@ export const CONSENT_BANNER_SCRIPT = `
             ua: (navigator && navigator.userAgent) ? navigator.userAgent.slice(0, 200) : '',
           }));
         } catch (e) { /* swallow — UX dismiss anyway, even if storage failed */ }
-        banner.classList.remove('show');
+        dismiss(banner, scrim);
       });
     }
   }

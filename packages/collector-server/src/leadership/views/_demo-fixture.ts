@@ -322,7 +322,14 @@ export function getDemoSnapshot(): OverviewSnapshot {
   // demo CTA flow and the real-data flow. Override `computedAt` to "now" so
   // the hero shows today's date in demo; event timestamps stay as the
   // hand-edited 7-day arc since they encode narrative, not absolute time.
-  const nowIso = new Date().toISOString();
+  //
+  // Round-7 P2 / autonomous: quantize `computedAt` to a 30-second bucket so
+  // /api/overview?demo=1 produces a stable ETag within the polling window.
+  // Without this, every poll mints a new ISO string → new ETag → 304 never
+  // hits → demo polling re-downloads ~26 KB each tick.
+  const bucketMs = 30_000;
+  const nowMs = Math.floor(Date.now() / bucketMs) * bucketMs;
+  const nowIso = new Date(nowMs).toISOString();
   return {
     schemaVersion: 1,
     range: { start: '2026-05-11T09:00:00Z', end: nowIso, label: '7d' },
