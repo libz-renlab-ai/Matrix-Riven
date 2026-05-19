@@ -121,7 +121,7 @@ export function renderConsentBanner(opts: { demo: boolean }): string {
 <div class="consent-banner" id="consent-banner" role="dialog" aria-modal="true" aria-labelledby="consent-banner-title" aria-describedby="consent-banner-copy">
   <div class="consent-banner-body">
     <div>
-      <div class="consent-banner-title" id="consent-banner-title">这台 Matrix-Riven 会读哪些东西，请告知你的团队后再继续</div>
+      <div class="consent-banner-title" id="consent-banner-title">这台 Matrix·Riven 会读哪些东西，请告知你的团队后再继续</div>
       <div class="consent-banner-copy" id="consent-banner-copy">
         这套看板从每位工程师的 Claude Code transcript 摄入数据，<strong>包括 prompt 正文、Bash 命令文本、文件路径、活动时间戳</strong>。Leadership 在 <code>/people/&lt;成员&gt;</code> 等页面能看到这些原文。
         如果你的组织没有事先告知团队这件事，请先停下来 —— 这不是一个 "默默运行" 的工具。<a href="/sources" target="_blank">查看完整数据来源说明 →</a>
@@ -183,7 +183,7 @@ export const CONSENT_BANNER_SCRIPT = `
     // 继续" — a dark-pattern single path that screen-reads as forced acceptance.
     // Add a "稍后再说" escape: dismisses for the current session only (no
     // localStorage write), so the banner reappears on next page load until
-    // the leader makes an explicit decision.
+    // the viewer makes an explicit decision.
     var later = document.getElementById('consent-banner-later');
     if (later) {
       later.addEventListener('click', function () { dismiss(banner, scrim); });

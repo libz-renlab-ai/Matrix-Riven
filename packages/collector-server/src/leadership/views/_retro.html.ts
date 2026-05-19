@@ -39,7 +39,7 @@ export function renderRetro(snap: OverviewSnapshot, opts: { demo?: boolean } = {
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>周回顾 · Matrix-Riven</title>
+<title>周回顾 · Matrix·Riven</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>${LEADERSHIP_CSS}
 ${CONSENT_BANNER_CSS}
@@ -67,7 +67,7 @@ ${CONSENT_BANNER_CSS}
 <div class="shell">
 ${renderNav('retro', { rangeLabel: '本周回顾', demo: opts.demo === true })}
 <div class="rt-page">
-  <a class="rt-back" href="/overview">← 返回实时看板</a>
+  <a class="rt-back" href="/overview">← 返回近实时看板</a>
   <h1>本周回顾</h1>
   <div class="sub">由 ${escapeHtml(snap.range.label)} 窗口生成，覆盖 ${snap.members.length} 位成员 · ${snap.projects.length} 个项目</div>
   ${weeklySummary}

@@ -99,11 +99,15 @@ describe('renderMemberDetail', () => {
     expect(html).toContain('近期会话样本');
     expect(html).toContain('今日 3 条');
     expect(html).toContain('近 7 天 17 条');
-    // Round-1 QA P0 (dogfooder + journalist): preview is gated behind an
-    // explicit click. Prompt text only appears inside <details>.
+    // Round-5 R12 P0 (journalist): preview text was leaking via the <details>
+    // summary string itself ("展开原文（N 字符预览）" had no preview, but the
+    // body did unconditionally). The disclosure summary is now neutral
+    // "请求查看原文 (#idx ...)" and the prompt body only renders inside an
+    // open <details>. Verify the gated wrapper exists and the audit-log
+    // disclaimer is present.
     expect(html).toContain('修一下抽屉');
     expect(html).toContain('md-session-disclosure');
-    expect(html).toContain('展开原文');
+    expect(html).toContain('请求查看原文');
     expect(html).toContain('audit log');
   });
 

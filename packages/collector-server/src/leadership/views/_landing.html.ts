@@ -81,7 +81,7 @@ export function renderLanding(opts: { hasAuth: boolean }): string {
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>Matrix-Riven · 领导真正能用的工程团队仪表盘</title>
+<title>Matrix·Riven · 团队工程节奏仪表盘</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>${LEADERSHIP_CSS}
 ${CONSENT_BANNER_CSS}
@@ -109,7 +109,7 @@ ${CONSENT_BANNER_CSS}
 <div class="lc-page">
   <section class="lc-hero">
     <h1>不再读一堆 <em>0 会话 · 推进新功能 · ↘ 近期已收尾</em>。<br>看团队在做什么、哪条线在卡、今天进展到哪。</h1>
-    <p class="lead">Matrix-Riven 直接读你团队的 Claude Code transcript，跑 16 个信号检测器 + 五层 LLM 叙事，每 30 秒近实时刷新一份会说人话的仪表盘——并且诚实告诉你数据多新、花了多少钱、哪条线该补人。<br><strong>透明承诺</strong>：默认聚合化数字 + LLM 改写摘要；查看 prompt 原文需 leader 主动展开，每次查阅都会落 audit log。<a href="/sources" style="border-bottom:1px solid currentColor;">查看完整数据来源 →</a></p>
+    <p class="lead">Matrix·Riven 直接读你团队的 Claude Code transcript，跑 16 个信号检测器 + 五层 LLM 叙事，每 30 秒近实时刷新一份会说人话的仪表盘——并且诚实告诉你数据多新、花了多少钱、哪条线该补人。<br><strong>透明承诺</strong>：默认聚合化数字 + LLM 改写摘要；查看 prompt 原文需 leader 主动展开（v2 起每次展开会写服务端 audit log；v1 仅做本地占位）。<a href="/sources" style="border-bottom:1px solid currentColor;">查看完整数据来源 →</a></p>
     <div class="lc-cta">${ctaPrimary}</div>
   </section>
 

@@ -31,7 +31,7 @@ export function renderInsightsPage(snap: InsightsSnapshot, opts: RenderInsightsO
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Insights · Matrix·Riven</title>
+<title>洞察 · Matrix·Riven</title>
 <style>${LEADERSHIP_CSS}
 ${FILTER_BAR_CSS}
 ${CONSENT_BANNER_CSS}

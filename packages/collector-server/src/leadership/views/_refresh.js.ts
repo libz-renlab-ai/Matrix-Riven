@@ -186,9 +186,9 @@ export const CLIENT_REFRESH_SCRIPT = `
     soInterval = setInterval(pollSO, 30000);
   };
 
-  // Round-1 QA P0 (EM): wire the three slideover action buttons. Each emits
-  // a clearly-scoped artifact (no backend), so a leader can move from
-  // "看到 blake 卡住" → some next step in one click instead of dashboard-staring.
+  // wire the three slideover action buttons; each emits a scoped artifact
+  // so the viewer can move from observation to one of three next actions
+  // in one click instead of dashboard-staring.
   function copyTextSafe(text) {
     try {
       if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
@@ -231,16 +231,22 @@ export const CLIENT_REFRESH_SCRIPT = `
     var calloutEl = document.querySelector('#so-callout .so-callout-text');
     var calloutText = (calloutEl && calloutEl.textContent) ? calloutEl.textContent.trim() : '';
     if (btn.id === 'so-act-draft') {
-      var draft = '@' + name + ' 我刚看到一条标记，想确认下：\\n\\n' + (calloutText || '最近的进度好像不太顺。') + '\\n\\n要不要明天找个 15 分钟聊一下，看看有没有能帮上忙的地方？';
+      // Round-5 R4 P0 (journalist): rewrite the draft to read as a starting
+      // point the viewer obviously edits, not an "AI-prompted manager
+      // message". Tone shifts from prescriptive ("找个 15 分钟聊一下") to
+      // exploratory ("方便时随手回一下"); also explicit "(自动草稿 · 请按
+      // 实际情况修改)" prefix so the receiver — if it leaks — sees the AI
+      // origin instead of mistaking it for considered human concern.
+      var draft = '(自动草稿 · 请按实际情况修改) Hi ' + name + '，看 dashboard 提示「' + (calloutText || '近期可能不太顺') + '」，不一定准 — 方便时随手回一下，我看要不要帮你挪点优先级。';
       copyTextSafe(draft);
-      flashToast('Slack 开场已复制到剪贴板');
+      flashToast('开场草稿已复制 · 请按实际情况修改后再发');
     } else if (btn.id === 'so-act-11') {
       var key = 'riven.next-1on1';
       var existing = [];
       try { existing = JSON.parse(localStorage.getItem(key) || '[]'); } catch (e) {}
       existing.push({ name: name, addedAt: new Date().toISOString(), note: calloutText });
       try { localStorage.setItem(key, JSON.stringify(existing.slice(-50))); } catch (e) {}
-      flashToast('已加入 ' + name + ' 的下次 1:1 议程（保存在本机）');
+      flashToast('已加入 ' + name + ' 的下次 1:1 议程（仅保存在本机）');
     } else if (btn.id === 'so-act-evidence') {
       var stats = document.getElementById('so-stats');
       if (stats) stats.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -336,7 +342,7 @@ export const CLIENT_REFRESH_SCRIPT = `
     try {
       // 2026-05-18 round-15 audit P0: propagate the demo flag.
       // 2026-05-19 QA-7 P1: propagate THE WHOLE query string. Previous
-      // version only carried "?demo=1", so a leader on
+      // version only carried "?demo=1", so a viewer on
       // /overview?demo=1&focus=alex&range=7d kept getting their filtered
       // 1-member view silently swapped back to the unfiltered 4-member
       // /api/overview?demo=1 response every 30 s. The chip stayed

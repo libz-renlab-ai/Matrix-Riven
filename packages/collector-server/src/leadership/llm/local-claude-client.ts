@@ -87,6 +87,21 @@ function runOnce(req: LocalClaudeRequest): Promise<LocalClaudeResponse> {
   const promptFile = join(tmpRoot, 'system.txt');
   writeFileSync(promptFile, req.systemPrompt, 'utf8');
 
+  // Round-2 QA P0 (security): the child process was previously spawned with
+  // shell:true and `req.model` flowed directly into the arg vector. When the
+  // model name came from an env var (LLM_TIER1_MODEL etc.), an attacker who
+  // could influence env could inject shell metacharacters and get RCE.
+  // Even with shell off, defense-in-depth: gate model against a strict
+  // allowlist of Anthropic model-id shapes before we hand it to spawn.
+  const MODEL_PATTERN = /^claude-(?:opus|sonnet|haiku)-[34][-.][0-9a-z][a-z0-9._-]{0,40}$/i;
+  if (!MODEL_PATTERN.test(req.model)) {
+    return Promise.resolve({
+      ok: false,
+      costUsd: 0,
+      durationMs: 0,
+      error: `invalid model id: ${req.model.slice(0, 40)}`,
+    });
+  }
   const args: string[] = [
     '-p',
     '--tools',

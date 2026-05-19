@@ -170,6 +170,28 @@ function validateUserParam(raw: string | undefined): string | null {
   return raw;
 }
 
+/**
+ * Round-2 QA P0 (EM N1): strict ingest-side user_id format check. POST
+ * envelopes whose user_id doesn't match are rejected with 400 BEFORE any
+ * filesystem write. Previously the only gate was safeUserId (which only
+ * sanitized), so penetration-test payloads like `xss_+alert_1___@test.com`
+ * and `svg_onload_1_@x.com` got created as actual user directories and then
+ * appeared as "team members" on real-data /people view. Allowed shapes:
+ *   - email-style:    LOCAL@DOMAIN.TLD  (simplified RFC5321)
+ *   - local-part only: starts with alnum, contains alnum/./_/-, ≤ 64 chars
+ * Both forms must START with alphanumeric — that rejects payloads opening
+ * with punctuation or special chars (`xss_+`, `<script`, `..`, etc.).
+ */
+export function isValidUserId(raw: unknown): raw is string {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 254) return false;
+  // Email shape — most common in real deployments.
+  if (raw.includes('@')) {
+    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9.-]{0,253}\.[A-Za-z]{2,24}$/.test(raw);
+  }
+  // Bare local-part / username — e.g. legacy installs without email.
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(raw);
+}
+
 function validateDateParam(raw: string | undefined): string | null {
   if (typeof raw !== 'string') return null;
   if (!DATE_RE.test(raw)) return null;
@@ -758,10 +780,15 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
       return;
     }
 
-    // M2 — token auth on the conversation-upload endpoint. When BPP_AUTH_TOKEN
+    // M2 — token auth on the conversation-upload endpoint. When RIVEN_AUTH_TOKEN
     // is set, POST /v1/cc-sessions requires a matching Bearer token. Checked
     // BEFORE the body read so a missing/wrong token 401s regardless of payload.
-    if (authToken && route === ROUTE_CC_SESSIONS) {
+    //
+    // Round-2 QA P0 (security): cc-status POST was previously unguarded even
+    // with authToken set — any anonymous caller could inject a status snapshot
+    // for any user_id, poisoning the leadership dashboard's "live status"
+    // column. Now both POST routes go through the same gate.
+    if (authToken && (route === ROUTE_CC_SESSIONS || route === ROUTE_CC_STATUS)) {
       const auth = requireBearerToken(req.headers, authToken);
       if (!auth.ok) {
         send(res, 401, { error: 'unauthorized' });
@@ -862,6 +889,18 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
           return;
         }
         const ext = isLog ? 'jsonl' : 'ogg';
+        // Round-2 QA P0 (EM N1): previously safeUserId only sanitized; any
+        // string would round-trip into a writable user dir, so the security
+        // round's penetration test payloads (`xss_+alert_1___@test.com`,
+        // `svg_onload_1_@x.com`, etc.) ended up displayed as legitimate
+        // "team members" on real-data /people view. Now we *reject* explicit
+        // user_ids that don't match a basic email-or-localpart shape BEFORE
+        // writing. Missing / null / empty user_id is still allowed and
+        // collapses to 'unknown' (legacy uploaders depend on that fallback).
+        if (typeof envelope.user_id === 'string' && envelope.user_id.length > 0 && !isValidUserId(envelope.user_id)) {
+          send(res, 400, { error: 'invalid user_id', detail: 'user_id must be an email or [A-Za-z0-9][A-Za-z0-9._-]{0,63} local-part' });
+          return;
+        }
         const userIdSafe = safeUserId(envelope.user_id);
         const date = dateStamp(envelope.captured_at, now());
         const targetDir = join(outputDir, userIdSafe, date);

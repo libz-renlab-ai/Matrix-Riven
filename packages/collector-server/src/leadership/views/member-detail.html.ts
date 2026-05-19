@@ -196,26 +196,34 @@ function renderSessions(sessions: MemberDetail['sessions'], member: MemberSnapsh
   // now hidden by default, with a "展开预览" affordance; full prompt
   // remains under "查看完整" (now labeled explicitly so leaders understand
   // this is the engineer's original wording).
-  const annotation = `<div class="md-session-note">代表会话 ${sessions.length} 条 · 今日 ${todayCount} 条 · 近 7 天 ${trend7dTotal} 条<br>原文需 leader 主动展开（每次展开会写入 audit log）。默认仅显示时间 · 项目 · token 量。</div>`;
+  const annotation = `<div class="md-session-note">代表会话 ${sessions.length} 条 · 今日 ${todayCount} 条 · 近 7 天 ${trend7dTotal} 条<br>默认仅显示时间 · 项目 · 会话规模；prompt 原文需点击「请求查看原文」（v2 起将写入服务端 audit log，v1 仅做本地占位）。</div>`;
   return `<section class="md-sessions fade-in">
     <h2 class="md-section-title">近期会话样本</h2>
     ${annotation}
     <ol class="md-session-list">
-      ${sessions.slice(0, 50).map((s) => {
-        const previewText = s.firstPromptPreview || '（无 prompt）';
+      ${sessions.slice(0, 50).map((s, idx) => {
         const full = s.firstPromptFull;
-        const hasFull = !!(full && full.length > (s.firstPromptPreview?.length ?? 0));
-        const previewLen = previewText.length;
-        // Inline disclosure: a <details> with both preview AND full inside.
-        // Default state: only metadata visible.
-        const disclosure = `<details class="md-session-disclosure">
-          <summary>展开原文（${previewLen} 字符预览${hasFull ? ' + 完整' : ''}）</summary>
+        const hasFull = !!(full && full.length > 0);
+        // Round-5 R12 P0 (journalist): the previous "展开原文（N 字符预览）"
+        // summary text itself contained no leaky bytes, but the <details>
+        // body rendered the preview unconditionally — so leader 0-click saw
+        // the first 80 chars. Tighten to "请求查看原文 (#idx · L chars)" with
+        // no leaking bytes, and require an explicit user-initiated click to
+        // surface text. Once we have a real audit endpoint this <details>
+        // gets replaced with a server-fetched expansion.
+        const previewLen = (s.firstPromptPreview ?? '').length;
+        const fullLen = full?.length ?? 0;
+        const lenLabel = hasFull ? `${fullLen} 字符` : (previewLen > 0 ? `${previewLen} 字符摘要` : '空');
+        const sizeStr = hasFull ? `· 完整原文 ${fullLen} 字符` : (previewLen > 0 ? `· 仅有 ${previewLen} 字符摘要` : '· 无 prompt');
+        const disclosure = hasFull || previewLen > 0 ? `<details class="md-session-disclosure" data-session-idx="${idx + 1}">
+          <summary>请求查看原文 (#${idx + 1} ${sizeStr})</summary>
           <div class="md-session-preview-full">
-            <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:6px;">📝 工程师原话（已 audit）：</div>
-            <pre class="md-session-prompt">${escapeHtml(previewText)}</pre>
-            ${hasFull ? `<details style="margin-top:8px;"><summary>+ 显示完整 prompt（${(full!.length)} 字符）</summary><pre class="md-session-prompt">${escapeHtml(full!)}</pre></details>` : ''}
+            <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:6px;">📝 工程师原话 · ${lenLabel}（v1 本地展示，v2 起每次展开会写服务端 audit log）：</div>
+            ${hasFull
+              ? `<pre class="md-session-prompt">${escapeHtml(full!)}</pre>`
+              : `<pre class="md-session-prompt">${escapeHtml(s.firstPromptPreview!)}</pre>`}
           </div>
-        </details>`;
+        </details>` : '<span style="color:var(--ink-3);font-size:12px;">无 prompt</span>';
         return `<li class="md-session-row">
           <span class="md-session-time">${s.capturedAt.slice(0, 16).replace('T', ' ')}</span>
           <span class="md-session-project">${escapeHtml(s.projectName)}</span>

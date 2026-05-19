@@ -31,7 +31,7 @@ export function renderActivityPage(snap: ActivityFeedSnapshot, opts: RenderActiv
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Activity · Matrix·Riven</title>
+<title>活动流 · Matrix·Riven</title>
 <style>${LEADERSHIP_CSS}
 ${FILTER_BAR_CSS}
 ${CONSENT_BANNER_CSS}
@@ -44,7 +44,7 @@ ${opts.filterBarHtml ?? ''}
 <header id="hero" class="hero fade-in">
   <div>
     <h1 class="serif">活动流</h1>
-    <div class="sub">共 ${snap.events.length} 条事件 · 数据每 30 秒刷新 · 最近一次 <span id="activity-last-tick" data-computed-at="${escapeHtml(snap.computedAt)}">${formatRelative(snap.computedAt)}</span></div>
+    <div class="sub">共 ${snap.events.length} 条事件 · 近实时（30 秒刷新）· 最近一次 <span id="activity-last-tick" data-computed-at="${escapeHtml(snap.computedAt)}">${formatRelative(snap.computedAt)}</span></div>
   </div>
 </header>
 ${body}
