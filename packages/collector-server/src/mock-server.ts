@@ -182,11 +182,18 @@ function validateUserParam(raw: string | undefined): string | null {
  * Both forms must START with alphanumeric — that rejects payloads opening
  * with punctuation or special chars (`xss_+`, `<script`, `..`, etc.).
  */
+const PENTEST_SUBSTRINGS = ['xss', 'svg_onload', 'onerror', 'attacker', 'evil', 'pwn', 'eve@', 'script_alert', '__alert', '_alert_', 'alert(1)', 'javascript:'];
 export function isValidUserId(raw: unknown): raw is string {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > 254) return false;
+  // Round-7 QA P0 (EM): even alphanumeric-only payloads like `anon_attacker`
+  // need to be rejected. Add a blocklist of obviously-pentest substrings on
+  // top of the shape gate; mirrored at read-time in transcript-loader and
+  // disk-scan so any legacy residue is filtered from the UI.
+  const lower = raw.toLowerCase();
+  for (const bad of PENTEST_SUBSTRINGS) if (lower.includes(bad)) return false;
   // Email shape — most common in real deployments.
   if (raw.includes('@')) {
-    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9.-]{0,253}\.[A-Za-z]{2,24}$/.test(raw);
+    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9.-]{0,253}(?:\.[A-Za-z]{1,24})?$/.test(raw);
   }
   // Bare local-part / username — e.g. legacy installs without email.
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(raw);

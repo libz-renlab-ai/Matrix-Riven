@@ -11,6 +11,30 @@ import type {
 import { loadIndexSync, INDEX_FILENAME, type IndexEntry } from './index.js';
 
 /**
+ * Round-7 QA P0 (EM): read-time guard against legacy pentest residue.
+ * Same shape as mock-server's isValidUserId ingest gate. Accept email
+ * (`local@domain.tld`) or bare alphanumeric local-part (`alex`, `dana_pm`).
+ * Special-cases the `unknown` fallback because legacy uploaders without
+ * user_id legitimately produce that dir.
+ *
+ * Additional blocklist of obviously-pentest substrings — for cases where
+ * the payload happens to match alphanumeric+underscore shape (e.g.
+ * `anon_attacker`, `script_alert_1___script`). Keeps the regex lax
+ * enough to accept legitimate single-char TLDs (`alex@x`) used in tests.
+ */
+const PENTEST_SUBSTRINGS = ['xss', 'svg_onload', 'onerror', 'attacker', 'evil', 'pwn', 'eve@', 'script_alert', '__alert', '_alert_', 'alert(1)', 'javascript:'];
+function isValidUserIdShape(raw: string): boolean {
+  if (raw === 'unknown') return true;
+  if (raw.length === 0 || raw.length > 254) return false;
+  const lower = raw.toLowerCase();
+  for (const bad of PENTEST_SUBSTRINGS) if (lower.includes(bad)) return false;
+  if (raw.includes('@')) {
+    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9.-]{0,253}(?:\.[A-Za-z]{1,24})?$/.test(raw);
+  }
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(raw);
+}
+
+/**
  * P-D1 follow-up — In-process parsed-session cache.
  *
  * The on-disk index (P-D1) shaved off `readdirSync` + per-file `statSync`
@@ -747,6 +771,13 @@ export function scanAllSessions(collectorDir: string, opts: ScanOptions = {}): P
   }
   const out: ParsedSession[] = [];
   for (const userDir of users) {
+    // Round-7 QA P0 (EM): historical data dirs created BEFORE the round-5
+    // isValidUserId gate may still contain penetration-test-shaped names
+    // (`xss_+alert_1___@test.com`, `script_alert_1___script`, `anon_attacker`,
+    // etc.). Filter at read time so those legacy directories never surface as
+    // "team members" on /people / /overview, even when ops hasn't run a
+    // cleanup. Same filter that POST ingest now enforces.
+    if (!isValidUserIdShape(userDir)) continue;
     const userPath = path.join(collectorDir, userDir);
     let s: ReturnType<typeof statSync> | null;
     try {

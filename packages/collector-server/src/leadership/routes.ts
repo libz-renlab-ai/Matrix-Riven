@@ -952,7 +952,18 @@ function renderRetroTab(
  * / project rows without duplicating markup.
  */
 function renderTabPage(active: ActiveTab, rangeLabel: string, innerHtml: string, filterBarHtml: string = '', opts: { demo?: boolean } = {}): string {
-  const title = active.charAt(0).toUpperCase() + active.slice(1);
+  // Round-7 QA P1 (designer): page <title> should be Chinese, matching
+  // lang="zh-CN" + the renamed other tabs. Previously titles were
+  // English-capitalised ("People · …", "Projects · …").
+  const titleMap: Record<ActiveTab, string> = {
+    overview: '实时看板',
+    people: '团队',
+    projects: '项目',
+    activity: '活动流',
+    insights: '洞察',
+    retro: '周回顾',
+  };
+  const title = titleMap[active] ?? active;
   const isDemo = opts.demo === true;
   // 2026-05-19 QA-7 P0: final acceptance review caught that /people and
   // /projects rendered with NO consent banner — renderTabPage didn't

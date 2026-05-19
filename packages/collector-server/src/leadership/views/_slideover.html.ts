@@ -180,10 +180,22 @@ function mostCommonProject(detail: MemberDetail): string | undefined {
 }
 
 function renderMemberEvolve(detail: MemberDetail): string {
-  const rows: { ts: string; text: string; latest: boolean }[] = [];
+  // Round-7 QA P0 (EM + journalist): previously rendered `p.preview` (the
+  // first ~80 chars of the prompt) directly. Even with member-detail's
+  // "v1 不渲染原文" change, the slideover was still leaking the first 80
+  // chars in plain text — accessible from any attention click. Switch to
+  // a topic class label + length so the leader sees "what kind of work
+  // and how dense", not "what the engineer literally typed". v2 audit-log
+  // gated reveal is the same path planned for /people/<id>.
+  const rows: { ts: string; topic: string; len: number; latest: boolean }[] = [];
   for (const s of detail.sessions) {
     for (const p of s.allPrompts) {
-      rows.push({ ts: formatHHMM(p.ts), text: p.preview, latest: rows.length === 0 });
+      rows.push({
+        ts: formatHHMM(p.ts),
+        topic: classifyPromptTopic(p.preview),
+        len: (p.preview ?? '').length,
+        latest: rows.length === 0,
+      });
       if (rows.length >= 6) break;
     }
     if (rows.length >= 6) break;
@@ -196,11 +208,32 @@ function renderMemberEvolve(detail: MemberDetail): string {
       (r) => `
     <div class="so-evolve-item${r.latest ? ' latest' : ''}">
       <div class="so-evolve-time mono">${escapeHtml(r.ts)}</div>
-      <div class="so-evolve-text serif">${escapeHtml(r.text)}</div>
+      <div class="so-evolve-text serif">📝 ${escapeHtml(r.topic)} · <span style="color:var(--ink-3);">${r.len} 字符</span></div>
     </div>`,
     )
     .join('');
   return `<div class="so-evolve">${items}</div>`;
+}
+
+/**
+ * Round-7 QA P0: classify a prompt preview into a coarse topic label so the
+ * slideover can show "what kind of work" without leaking the literal words.
+ * Heuristic keyword match — better than nothing, doesn't pretend to be NLP.
+ */
+function classifyPromptTopic(preview: string | undefined): string {
+  const text = (preview ?? '').toLowerCase();
+  if (!text) return '空 prompt';
+  if (/(test|spec|vitest|jest|\btdd\b)/i.test(text)) return '测试相关';
+  if (/(error|err|fail|bug|exception|stack|trace)/i.test(text)) return '排错 / 修 bug';
+  if (/(refactor|rename|cleanup|tidy|extract)/i.test(text)) return '重构';
+  if (/(doc|readme|comment|说明|文档)/i.test(text)) return '文档';
+  if (/(deploy|release|ship|publish|push|merge|pr)/i.test(text)) return '发布 / 集成';
+  if (/(type|interface|generic|tsc|narrow)/i.test(text)) return '类型 / 接口';
+  if (/(perf|optim|slow|fast|latency)/i.test(text)) return '性能';
+  if (/(ui|css|style|design|前端|界面)/i.test(text)) return 'UI / 样式';
+  if (/(数据|查|filter|sort|join|sql|query)/i.test(text)) return '数据 / 查询';
+  if (/(security|auth|token|权限|认证)/i.test(text)) return '安全 / 认证';
+  return '常规编码';
 }
 
 function renderMemberProjects(detail: MemberDetail): string {

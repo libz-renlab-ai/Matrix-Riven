@@ -196,7 +196,19 @@ function renderSessions(sessions: MemberDetail['sessions'], member: MemberSnapsh
   // now hidden by default, with a "展开预览" affordance; full prompt
   // remains under "查看完整" (now labeled explicitly so leaders understand
   // this is the engineer's original wording).
-  const annotation = `<div class="md-session-note">代表会话 ${sessions.length} 条 · 今日 ${todayCount} 条 · 近 7 天 ${trend7dTotal} 条<br>默认仅显示时间 · 项目 · 会话规模；prompt 原文需点击「请求查看原文」（v2 起将写入服务端 audit log，v1 仅做本地占位）。</div>`;
+  // Round-7 QA P0 (EM + journalist): previous implementation embedded the full
+  // prompt text in server-rendered HTML inside <details>. <details> only
+  // visually hides — `view-source` / `curl` / DOM inspector all return the
+  // raw bytes. The "audit log on expand" promise was misleading because the
+  // text was in the document the moment the page loaded.
+  //
+  // Round-7 honesty fix: stop rendering prompt text in HTML entirely. Each
+  // row shows only metadata + size class + an explicit "v2 起开放" note.
+  // No expand affordance is wired in v1; the row is informational only.
+  // When the audit-log endpoint ships (v2), this section gets replaced
+  // with an XHR-on-click flow that writes the audit entry and returns the
+  // prompt body.
+  const annotation = `<div class="md-session-note">代表会话 ${sessions.length} 条 · 今日 ${todayCount} 条 · 近 7 天 ${trend7dTotal} 条<br>v1 看板默认仅显示元数据（时间 · 项目 · token 量 · prompt 字数）；prompt 原文展示 + 服务端 audit log 在 v2 起开放（需 admin 审核 + 双因素）。</div>`;
   return `<section class="md-sessions fade-in">
     <h2 class="md-section-title">近期会话样本</h2>
     ${annotation}
@@ -204,31 +216,18 @@ function renderSessions(sessions: MemberDetail['sessions'], member: MemberSnapsh
       ${sessions.slice(0, 50).map((s, idx) => {
         const full = s.firstPromptFull;
         const hasFull = !!(full && full.length > 0);
-        // Round-5 R12 P0 (journalist): the previous "展开原文（N 字符预览）"
-        // summary text itself contained no leaky bytes, but the <details>
-        // body rendered the preview unconditionally — so leader 0-click saw
-        // the first 80 chars. Tighten to "请求查看原文 (#idx · L chars)" with
-        // no leaking bytes, and require an explicit user-initiated click to
-        // surface text. Once we have a real audit endpoint this <details>
-        // gets replaced with a server-fetched expansion.
         const previewLen = (s.firstPromptPreview ?? '').length;
         const fullLen = full?.length ?? 0;
-        const lenLabel = hasFull ? `${fullLen} 字符` : (previewLen > 0 ? `${previewLen} 字符摘要` : '空');
-        const sizeStr = hasFull ? `· 完整原文 ${fullLen} 字符` : (previewLen > 0 ? `· 仅有 ${previewLen} 字符摘要` : '· 无 prompt');
-        const disclosure = hasFull || previewLen > 0 ? `<details class="md-session-disclosure" data-session-idx="${idx + 1}">
-          <summary>请求查看原文 (#${idx + 1} ${sizeStr})</summary>
-          <div class="md-session-preview-full">
-            <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:6px;">📝 工程师原话 · ${lenLabel}（v1 本地展示，v2 起每次展开会写服务端 audit log）：</div>
-            ${hasFull
-              ? `<pre class="md-session-prompt">${escapeHtml(full!)}</pre>`
-              : `<pre class="md-session-prompt">${escapeHtml(s.firstPromptPreview!)}</pre>`}
-          </div>
-        </details>` : '<span style="color:var(--ink-3);font-size:12px;">无 prompt</span>';
+        const sizeLabel = hasFull
+          ? `${fullLen} 字符原文（服务端持有，v1 不渲染）`
+          : (previewLen > 0
+            ? `${previewLen} 字符摘要（服务端持有，v1 不渲染）`
+            : '无 prompt');
         return `<li class="md-session-row">
           <span class="md-session-time">${s.capturedAt.slice(0, 16).replace('T', ' ')}</span>
           <span class="md-session-project">${escapeHtml(s.projectName)}</span>
           <span class="md-session-tokens">${shortTokens(s.totalTokens)} tok</span>
-          <span class="md-session-preview">${disclosure}</span>
+          <span class="md-session-preview" style="color:var(--ink-3);font-size:12px;">📝 ${sizeLabel}</span>
         </li>`;
       }).join('')}
     </ol>

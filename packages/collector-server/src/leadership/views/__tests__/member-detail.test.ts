@@ -99,16 +99,13 @@ describe('renderMemberDetail', () => {
     expect(html).toContain('近期会话样本');
     expect(html).toContain('今日 3 条');
     expect(html).toContain('近 7 天 17 条');
-    // Round-5 R12 P0 (journalist): preview text was leaking via the <details>
-    // summary string itself ("展开原文（N 字符预览）" had no preview, but the
-    // body did unconditionally). The disclosure summary is now neutral
-    // "请求查看原文 (#idx ...)" and the prompt body only renders inside an
-    // open <details>. Verify the gated wrapper exists and the audit-log
-    // disclaimer is present.
-    expect(html).toContain('修一下抽屉');
-    expect(html).toContain('md-session-disclosure');
-    expect(html).toContain('请求查看原文');
-    expect(html).toContain('audit log');
+    // Round-7 QA P0 (EM): no prompt text is rendered into the document at
+    // all in v1. Each session row shows only metadata (time/project/size)
+    // with a "服务端持有，v1 不渲染" note. v2 audit-log endpoint will gate
+    // an XHR-on-click reveal.
+    expect(html).not.toContain('修一下抽屉');
+    expect(html).toContain('服务端持有，v1 不渲染');
+    expect(html).toContain('v2 起开放');
   });
 
   it('renders empty states gracefully', () => {
