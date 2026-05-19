@@ -398,8 +398,20 @@ describe('mock-server dashboard', () => {
     await server.close();
   });
 
-  it('GET / returns the HTML dashboard', async () => {
+  // P-B2: GET / now serves the leadership Overview tab. The legacy
+  // "Matrix Riven Collector" Phase-1 dashboard is reached via `?sid=<...>`
+  // (the P-A4 "查看 raw ↗" link relies on this deferral).
+  it('GET / returns the leadership Overview tab (P-B2)', async () => {
     const res = await fetch(`${server.url}/`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type') ?? '').toContain('text/html');
+    const body = await res.text();
+    expect(body).toContain('class="nav');
+    expect(body).toContain('Overview');
+  });
+
+  it('GET /?sid=XYZ still serves the Phase-1 dashboard (P-A4 raw link)', async () => {
+    const res = await fetch(`${server.url}/?sid=01ABC`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type') ?? '').toContain('text/html');
     const body = await res.text();
@@ -1010,16 +1022,15 @@ describe('mock-server — M2 member-stats', () => {
   });
 });
 
-// Task 8 — leadership-overview HTTP route. Wires the disk-scan + aggregator
-// pair (built in tasks 1-7) onto the existing mock-server at GET /api/overview.
+// Task 8 → superseded by Task 15. GET /api/overview now returns an
+// OverviewSnapshot (schemaVersion 1 + kpis/members/projects/collaboration
+// arrays) built by the leadership aggregator instead of the legacy
+// date-based disk-scan. Tests updated to match the new response shape.
 describe('GET /api/overview', () => {
   let server: MockServerHandle;
   let outputDir: string;
 
-  // 08:00Z keeps us comfortably away from any date-boundary timezone surprises
-  // when asserting the default-date branch picks today.
   const FIXED_NOW = new Date('2026-05-15T08:00:00.000Z');
-  const FIXED_DATE = '2026-05-15';
 
   beforeEach(async () => {
     outputDir = mkdtempSync(join(tmpdir(), 'riven-overview-route-'));
@@ -1036,72 +1047,57 @@ describe('GET /api/overview', () => {
     rmSync(outputDir, { recursive: true, force: true });
   });
 
-  interface OverviewBody {
-    date: string;
-    generated_at: string;
-    cost: {
-      team_total_usd: number;
-      per_user: Array<{ user_id: string; cost_usd: number }>;
-      quota_per_user: unknown[];
-      model_distribution: unknown[];
-    };
-    productivity: { per_user: Array<{ user_id: string; turn_count: number }> };
-    projects: unknown;
-    quality: unknown;
+  interface OverviewSnapshot {
+    schemaVersion: number;
+    computedAt: string;
+    range: { start: string; end: string; label: string };
+    kpis: unknown;
+    members: unknown[];
+    projects: unknown[];
+    collaboration: unknown[];
   }
 
-  it('returns 200 + valid OverviewResponse shape on empty server', async () => {
-    const res = await fetch(`${server.url}/api/overview?date=${FIXED_DATE}`);
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as OverviewBody;
-    expect(body.date).toBe(FIXED_DATE);
-    expect(typeof body.generated_at).toBe('string');
-    expect(body.cost).toBeDefined();
-    expect(body.productivity).toBeDefined();
-    expect(body.projects).toBeDefined();
-    expect(body.quality).toBeDefined();
-  });
-
-  it('400s on syntactically-invalid date= param', async () => {
-    const res = await fetch(`${server.url}/api/overview?date=not-a-date`);
-    expect(res.status).toBe(400);
-  });
-
-  it('400s on calendar-impossible date= param', async () => {
-    const res = await fetch(`${server.url}/api/overview?date=2026-13-99`);
-    expect(res.status).toBe(400);
-  });
-
-  it('defaults date= to today (UTC from injected clock) when omitted', async () => {
+  it('returns 200 + valid OverviewSnapshot shape on empty server', async () => {
     const res = await fetch(`${server.url}/api/overview`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as OverviewBody;
-    expect(body.date).toBe(FIXED_DATE);
+    const ct = res.headers.get('content-type');
+    expect(ct).toContain('application/json');
+    const body = (await res.json()) as OverviewSnapshot;
+    expect(body.schemaVersion).toBe(1);
+    expect(typeof body.computedAt).toBe('string');
+    expect(body.kpis).toBeDefined();
+    expect(Array.isArray(body.members)).toBe(true);
+    expect(Array.isArray(body.projects)).toBe(true);
+    expect(Array.isArray(body.collaboration)).toBe(true);
   });
 
-  it('aggregates real cc-status data into per_user cost + productivity', async () => {
-    const user = 'alice@x';
-    const dayDir = join(outputDir, user, FIXED_DATE);
-    mkdirSync(dayDir, { recursive: true });
-    // user_id in the snapshot row must match the directory name — aggregateCost
-    // groups by snapshot.user_id, not by directory.
-    const snap = {
-      schema_version: 1,
-      session_id: 's1',
-      user_id: user,
-      ts: '2026-05-15T10:00:00.000Z',
-      event: 'user_prompt_submit',
-      cost_usd: 7.5,
-      turn_count: 12,
-    };
-    writeFileSync(join(dayDir, 's1.cc-status.jsonl'), JSON.stringify(snap) + '\n');
-
-    const res = await fetch(`${server.url}/api/overview?date=${FIXED_DATE}`);
+  it('accepts ?range=7d query param', async () => {
+    const res = await fetch(`${server.url}/api/overview?range=7d`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as OverviewBody;
-    expect(body.cost.team_total_usd).toBeCloseTo(7.5);
-    expect(body.cost.per_user[0]).toEqual({ user_id: user, cost_usd: 7.5 });
-    expect(body.productivity.per_user[0]?.turn_count).toBe(12);
+    const body = (await res.json()) as OverviewSnapshot;
+    expect(body.range.label).toBe('7d');
+  });
+
+  it('accepts ?range=24h query param', async () => {
+    const res = await fetch(`${server.url}/api/overview?range=24h`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as OverviewSnapshot;
+    expect(body.range.label).toBe('24h');
+  });
+
+  it('defaults to 7d range when range param omitted', async () => {
+    const res = await fetch(`${server.url}/api/overview`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as OverviewSnapshot;
+    expect(body.range.label).toBe('7d');
+  });
+
+  it('returns empty members + projects arrays when no sessions exist', async () => {
+    const res = await fetch(`${server.url}/api/overview`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as OverviewSnapshot;
+    expect(body.members).toHaveLength(0);
+    expect(body.projects).toHaveLength(0);
   });
 });
 
