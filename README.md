@@ -79,8 +79,10 @@ node scripts/install-client.mjs
 
 ```bash
 pnpm -r build
-node scripts/publish-client.mjs --server <collector-host>
+node scripts/publish-client.mjs --server <user@collector-host>
 ```
+
+`<user@collector-host>` 是标准 SSH 格式（与 `ssh user@host` 同语法）。
 
 效果：scp 6 个 .cjs + 原子 manifest 替换到 server。所有客户端**下次** Claude Code 启动
 时就会拉到新版（带 0–30s 随机 jitter，避免 30 台机器同毫秒打 server）。

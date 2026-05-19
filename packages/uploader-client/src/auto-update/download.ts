@@ -76,12 +76,25 @@ export async function downloadOneFile(
     } catch {}
     return { ok: false, reason: 'io', detail: err instanceof Error ? err.message : String(err) };
   }
-  await new Promise<void>((resolve, reject) => {
+  // Round-3 review fix: an end() failure (disk full, fd closed mid-write,
+  // Windows AV scan) used to be swallowed — sha256 would still compute over
+  // already-hashed bytes and pass, leaving a TRUNCATED .new file. Now treat
+  // end() failure as an IO error and unlink the partial.
+  let endErr: NodeJS.ErrnoException | null = null;
+  await new Promise<void>((resolve) => {
     fileStream.end((err: NodeJS.ErrnoException | null) => {
-      if (err) reject(err);
-      else resolve();
+      endErr = err ?? null;
+      resolve();
     });
-  }).catch(() => {});
+  });
+  if (endErr) {
+    try { unlinkSync(newPath); } catch {}
+    return {
+      ok: false,
+      reason: 'io',
+      detail: `stream end failed: ${(endErr as NodeJS.ErrnoException).message ?? String(endErr)}`,
+    };
+  }
   const digest = hash.digest('hex');
   if (digest !== file.sha256) {
     try {
