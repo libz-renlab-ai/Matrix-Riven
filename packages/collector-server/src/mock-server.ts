@@ -180,13 +180,22 @@ function hasNonGhostTranscript(
 }
 
 /**
- * Counterpart to `hasNonGhostTranscript`: after a real transcript lands,
- * sweep every ghost-shape user dir for a paired `<sessionId>.cc-status.jsonl`
+ * Counterpart to `hasNonGhostTranscript`: after a transcript lands, sweep
+ * every ghost-shape user dir for a paired `<sessionId>.cc-status.jsonl`
  * fragment and unlink it. Pre-PR landing of `realtime-emit` identity-from-
  * config (libz-renlab-ai/Matrix-Riven#3) clients still emit cc-status under
  * the hostname fallback even when transcripts go to the real email; this
  * sweep keeps the on-disk tree from accumulating those orphans for the
  * leadership dashboard / `/api/users` listing.
+ *
+ * Peer-gated. Mirrors the precondition of the cc-status pre-check (gate #1):
+ * the sweep only fires when a NON-GHOST user already holds the transcript
+ * for `sessionId` on `date`. If the just-arrived transcript itself was
+ * posted by a sole-identity ghost (e.g. `lv@lvjiawendeMacBook-Air.local`
+ * — whose ONLY upload identity is the hostname form, no real-email peer
+ * exists), the sweep bails. Without this gate the sweep would unlink the
+ * sole-identity ghost's OWN cc-status under their own user dir — a P0
+ * data-loss bug caught in cold-read of an earlier rev of this commit.
  *
  * Best-effort. Errors are swallowed — a sweep failure must not 5xx a
  * successful transcript write.
@@ -198,6 +207,11 @@ function sweepRedundantGhostCcStatus(
   sessionId: string,
   date: string,
 ): number {
+  // Peer gate: identical semantics to gate #1's `hasNonGhostTranscript`.
+  // Only proceed when a non-ghost user holds a transcript for the same
+  // session_id on the same date — otherwise nothing is "redundant" to clean.
+  if (!hasNonGhostTranscript(outputDir, sessionId, date)) return 0;
+
   let users: string[];
   try {
     users = readdirSync(outputDir);

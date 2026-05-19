@@ -506,19 +506,25 @@ describe('mock-server — redundant-ghost sweep on POST /v1/cc-sessions', () => 
     ).toBe(true);
   });
 
-  it('leaves sole-identity ghost transcripts alone (the ghost IS the real owner)', async () => {
-    // Sole-identity ghost (e.g. lv@...local) — the cc-status under this
-    // user_id is NOT an orphan; it's the only identity that exists. Sweep
-    // must not delete it. We model that by writing a ghost cc-status, then
-    // POSTing a transcript under a DIFFERENT (sole-identity) ghost — so the
-    // session_id matches but the gate's "non-ghost transcript" precondition
-    // never fires on POST. The sweep should also run after the transcript
-    // POST, but only target dirs OTHER than the transcript's own user dir.
-    //
-    // Concrete: post transcript under `lv@lvjiawendeMacBook-Air.local`
-    // (ghost). The sweep iterates ghost dirs but the transcript is the
-    // PRIMARY data, and we never write a paired ghost cc-status orphan
-    // under a DIFFERENT ghost user for this session — so nothing to sweep.
+  it('leaves sole-identity ghost cc-status alone when the SAME ghost posts the transcript (no real-email peer exists)', async () => {
+    // Sole-identity ghost (e.g. lv@...local): both the transcript AND the
+    // cc-status legitimately live under this ghost dir — no real-email peer
+    // holds the data. Cold-read of an earlier rev of this commit caught a
+    // P0 bug: the sweep iterated every ghost dir and would unlink the
+    // sole-identity ghost's OWN cc-status when they posted their transcript.
+    // The peer-gated sweep (`hasNonGhostTranscript` first) fixes it.
+    const ghostDir = join(
+      outputDir,
+      'lv@lvjiawendeMacBook-Air.local',
+      '2026-05-09',
+    );
+    mkdirSync(ghostDir, { recursive: true });
+    const ccStatusPath = join(ghostDir, 'sole-Z.cc-status.jsonl');
+    writeFileSync(
+      ccStatusPath,
+      '{"schema_version":1,"session_id":"sole-Z","user_id":"lv@lvjiawendeMacBook-Air.local","ts":"2026-05-09T02:55:00.000Z","event":"session_start"}\n',
+    );
+
     const transcript = '{"role":"user","content":"hi"}\n';
     const compressed = gzipSync(Buffer.from(transcript));
     const res = await fetch(`${server.url}/v1/cc-sessions`, {
@@ -541,11 +547,15 @@ describe('mock-server — redundant-ghost sweep on POST /v1/cc-sessions', () => 
     };
     expect(body.ok).toBe(true);
     expect(body.ghost_cc_status_swept ?? 0).toBe(0);
+    // The transcript landed under the ghost dir (sole identity).
     expect(
       existsSync(
         join(outputDir, 'lv@lvjiawendeMacBook-Air.local', '2026-05-09', 'sole-Z.jsonl'),
       ),
     ).toBe(true);
+    // The pre-existing cc-status MUST still be there. This is the bug fix
+    // the cold-read flagged.
+    expect(existsSync(ccStatusPath)).toBe(true);
   });
 });
 
