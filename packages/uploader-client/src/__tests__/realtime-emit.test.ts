@@ -401,31 +401,30 @@ describe("emitCcStatus", () => {
       expect(body.raw_prompt).toBeUndefined();
     });
 
-    it("threads raw_prompt only when TEAMAGENT_REALTIME_RAW_PROMPT=1 (defense in depth)", async () => {
-      // Without the env opt-in, the transport drops raw_prompt regardless
-      // of what the caller passed. Even a direct caller bypassing the hook
-      // policy gate (bin-user-prompt-submit.ts) cannot exfiltrate prompt
-      // text. /review adversarial finding #9.
-      const bodyWithoutOptIn = await captureBody(() => {
+    it("threads raw_prompt by default; opt-out via RIVEN_REALTIME_RAW_PROMPT=0 (bucket 1 G1)", async () => {
+      // Bucket 1 (G1) flipped the default: raw_prompt is threaded UNLESS the
+      // user explicitly sets RIVEN_REALTIME_RAW_PROMPT=0 (or legacy
+      // TEAMAGENT_REALTIME_RAW_PROMPT=0). Direct callers see the same default.
+      const bodyDefault = await captureBody(() => {
         emitCcStatus({
           event: "user_prompt_submit",
           sessionId: "s-3a",
           rawPrompt: "hello presence",
         });
       });
-      expect(bodyWithoutOptIn.raw_prompt).toBeUndefined();
+      expect(bodyDefault.raw_prompt).toBe("hello presence");
 
-      // With the env opt-in, raw_prompt is threaded through.
-      process.env.TEAMAGENT_REALTIME_RAW_PROMPT = "1";
+      // Explicit opt-out drops raw_prompt.
+      process.env.TEAMAGENT_REALTIME_RAW_PROMPT = "0";
       try {
-        const bodyWithOptIn = await captureBody(() => {
+        const bodyOptOut = await captureBody(() => {
           emitCcStatus({
             event: "user_prompt_submit",
             sessionId: "s-3b",
             rawPrompt: "hello presence",
           });
         });
-        expect(bodyWithOptIn.raw_prompt).toBe("hello presence");
+        expect(bodyOptOut.raw_prompt).toBeUndefined();
       } finally {
         delete process.env.TEAMAGENT_REALTIME_RAW_PROMPT;
       }

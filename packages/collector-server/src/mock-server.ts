@@ -1121,27 +1121,39 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
         // M2 — per-session redaction-count sidecar. `GET /v1/member-stats`
         // sums these on demand for "敏感字段被模糊化次数" — there is no running
         // counter to drift. l1 = the member's uploader pass (carried on the
-        // envelope); l2 = this server's fallback pass. Written only when at
-        // least one field was scrubbed, so clean transcripts add no files.
+        // envelope); l2 = this server's fallback pass.
+        //
+        // Bucket 1/2 — the same sidecar is extended to carry envelope-level
+        // metadata that's not in the transcript itself: host info extras,
+        // settings_digest, claude_md, OAuth expiry, and L1 by-kind /
+        // by-location breakdowns. Written whenever ANY of these fields is
+        // present (clean transcript with no bucket 1/2 data → no sidecar,
+        // unchanged from old behavior).
         if (isLog) {
           const l1RedactionCount =
             typeof obj.l1_redaction_count === 'number' &&
             obj.l1_redaction_count >= 0
               ? obj.l1_redaction_count
               : 0;
-          if (l1RedactionCount > 0 || l2RedactionCount > 0) {
+          const meta: Record<string, unknown> = {};
+          if (l1RedactionCount > 0) meta.l1_redaction_count = l1RedactionCount;
+          if (l2RedactionCount > 0) meta.l2_redaction_count = l2RedactionCount;
+          // Bucket 1/2 envelope-level fields. Pluck whatever the client sent;
+          // dashboards treat absence as "unknown".
+          const envHost = envelope.host;
+          if (envHost && typeof envHost === 'object') meta.host = envHost;
+          if (envelope.settings_digest) meta.settings_digest = envelope.settings_digest;
+          if (envelope.claude_md) meta.claude_md = envelope.claude_md;
+          if (envelope.l1_redactions_by_kind) meta.l1_redactions_by_kind = envelope.l1_redactions_by_kind;
+          if (envelope.l1_redactions_by_location) meta.l1_redactions_by_location = envelope.l1_redactions_by_location;
+          if (envelope.oauth_expires_at) meta.oauth_expires_at = envelope.oauth_expires_at;
+          if (Object.keys(meta).length > 0) {
             const metaFile = join(targetDir, `${id}.meta.json`);
             if (isUnder(outputDir, metaFile)) {
               try {
                 atomicWriteFileSync(
                   metaFile,
-                  Buffer.from(
-                    JSON.stringify({
-                      l1_redaction_count: l1RedactionCount,
-                      l2_redaction_count: l2RedactionCount,
-                    }),
-                    'utf8',
-                  ),
+                  Buffer.from(JSON.stringify(meta), 'utf8'),
                 );
               } catch {
                 // best-effort sidecar — never 5xx a successful upload

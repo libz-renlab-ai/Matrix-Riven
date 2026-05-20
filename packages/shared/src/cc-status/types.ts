@@ -22,6 +22,12 @@ export const CC_STATUS_SCHEMA_VERSION = 1 as const;
 
 export type CcSessionHealth = 'OK' | 'OVER_200K';
 
+/** Bucket 1/2 — user decision recorded by the PreToolUse hook. */
+export type UserDecision = 'allow' | 'deny' | 'approve_session' | 'auto_allow';
+
+/** Bucket 1/2 — what triggered a Claude Code compact event. */
+export type CompactTrigger = 'auto' | 'manual';
+
 /**
  * One status snapshot. Only `schema_version`, `session_id`, `user_id`, `ts`
  * and `event` are required; every other field is best-effort and omitted when
@@ -84,15 +90,60 @@ export interface CcStatusSnapshot {
   // ---- raw prompt evidence (issue #308, grill §3) ----
   /**
    * Raw user prompt text captured at UserPromptSubmit. Privacy-sensitive:
-   * client side ONLY threads this when `RIVEN_REALTIME_RAW_PROMPT=1` (or the
-   * legacy `TEAMAGENT_REALTIME_RAW_PROMPT`) is
-   * set; default behavior leaves it `undefined` so a leaked / misconfigured
-   * receiver URL never exfiltrates prompt content. The receiver may
-   * persist this to a `raw_events` table for evidence / replay; downstream
-   * pipelines generate normalized_event summaries from it. Other event
+   * since bucket 1 the default behavior **emits** raw_prompt unless the user
+   * explicitly opts out with `RIVEN_REALTIME_RAW_PROMPT=0`. Legacy negative
+   * env vars (`TEAMAGENT_REALTIME_RAW_PROMPT=0`) also opt out. Other event
    * kinds (session_start / stop / session_end / status) leave this unset.
    */
   raw_prompt?: string;
+
+  // ---- bucket 1/2 additions — per-event fields populated by new hook bins ----
+
+  /** event=pre_tool_use — name of the tool about to fire (Bash / Edit / Write / ...). */
+  tool_name?: string;
+  /** event=pre_tool_use — sha256 of the tool_input. Raw input is NOT sent (may contain code/paths/secrets). */
+  tool_input_digest?: string;
+  /** event=pre_tool_use — what the user did with the permission prompt. */
+  user_decision?: UserDecision;
+  /** event=pre_tool_use — whether the tool fires with dangerouslyDisableSandbox. */
+  sandbox_disabled?: boolean;
+
+  /** event=pre_compact — auto-triggered or user-initiated compact. */
+  compact_trigger?: CompactTrigger;
+
+  /** event=session_end — total session wall-clock duration in ms. */
+  session_duration_ms?: number;
+  /** event=session_end / stop — the last stop_reason CC reported. */
+  stop_reason?: string;
+
+  // ---- bucket 1/2 additions — cross-event fields ----
+
+  /** Slash command name when the prompt starts with `/`. */
+  slash_command?: string;
+  /** Length of the user prompt in characters (independent of raw_prompt emit). */
+  prompt_length?: number;
+  /** True when the prompt contains a triple-backtick fence. */
+  prompt_has_code_block?: boolean;
+  /** True when this is the user's first prompt in this session. */
+  prompt_is_first_in_session?: boolean;
+  /** Count of suspicious "ignore previous instructions"-style patterns matched in the prompt. */
+  prompt_injection_signals?: number;
+
+  /** 1-min loadavg / cpu_count, [0..1+]. Sampled at hook fire time. */
+  cpu_pct?: number;
+  /** Used physical memory in MB at hook fire time. */
+  mem_used_mb?: number;
+  /** Total physical memory in MB at hook fire time. */
+  mem_total_mb?: number;
+  /** How many local Riven daemons are currently alive (proxy for concurrent CC sessions). */
+  concurrent_cc_count?: number;
+  /** ~/.claude/projects total size in MB. Sampled at SessionStart, cached for 1h. */
+  claude_dir_size_mb?: number;
+  /** Latency of the most recent Anthropic quota probe (ms). */
+  anthropic_api_latency_ms?: number;
+
+  /** Distinct hosts (no path/query) seen in WebFetch tool_use this session. */
+  web_fetch_hosts?: string[];
 }
 
 /**
