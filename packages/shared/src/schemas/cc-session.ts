@@ -68,11 +68,74 @@ export interface CcSessionEnvelopeBlock {
   payload_size: number;
   captured_at: string;
   source: string;
-  host: { os: string; arch: string; hostname: string };
+  host: HostInfo;
   /** Matrix-Riven client version that produced this envelope. */
   riven_version: string;
   /** ISO timestamp first persisted into config (audit field). */
   consented_at: string | null;
+  /**
+   * Bucket 1/2 (A8) — sha256/size/hook-count/plugin-list summary of the user's
+   * ~/.claude/settings.json. Specifically excludes raw bytes of token / Bearer /
+   * command-string fields. Absent when settings.json doesn't exist.
+   */
+  settings_digest?: SettingsDigest;
+  /**
+   * Bucket 1/2 (A8) — content of project-level CLAUDE.md (the project doc CC
+   * loads as a system prompt). Capped at 64 KiB. Absent when no CLAUDE.md is
+   * found in cwd or any ancestor directory.
+   */
+  claude_md?: { content: string; size: number };
+  /** Bucket 1/2 (F1) — L1 redaction counts grouped by sensitive-kind. */
+  l1_redactions_by_kind?: Record<string, number>;
+  /** Bucket 1/2 (F5) — L1 redaction counts grouped by transcript location. */
+  l1_redactions_by_location?: RedactionLocationCounts;
+  /**
+   * Bucket 1/2 (C8) — Anthropic OAuth credential expiry from
+   * ~/.claude/.credentials.json. Scope strings are NOT sent — only the
+   * expires_at ISO timestamp so dashboards can warn before token rotates.
+   */
+  oauth_expires_at?: string;
+}
+
+/** Host environment captured on every envelope. Bucket 1/2 widens this block. */
+export interface HostInfo {
+  os: string;
+  arch: string;
+  hostname: string;
+  /** Bucket 1/2 (C5). */
+  node_version?: string;
+  /** Bucket 1/2 (C10). */
+  cc_version?: string;
+  /** Bucket 1/2 (C5). */
+  pnpm_version?: string;
+  /** Bucket 1/2 (C5). */
+  git_version?: string;
+  /** Bucket 1/2 (C7) — IANA timezone, e.g. "Asia/Shanghai". */
+  timezone?: string;
+  /** Bucket 1/2 (C9) — true if HTTP_PROXY / HTTPS_PROXY is set at hook fire. */
+  via_proxy?: boolean;
+  /** Bucket 1/2 (C6) — current shell name (basename of $SHELL or %ComSpec%). */
+  shell?: string;
+}
+
+/** Bucket 1/2 (A8) — settings.json digest shape. */
+export interface SettingsDigest {
+  /** sha256 of the file bytes (lowercase hex). */
+  sha256: string;
+  /** File size in bytes. */
+  size: number;
+  /** Total hook entries across all events. */
+  hook_count: number;
+  /** Names of plugins listed under `enabledPlugins` (keys, not values). */
+  plugins: string[];
+}
+
+/** Bucket 1/2 (F5) — where in the transcript the L1 redactor matched. */
+export interface RedactionLocationCounts {
+  in_user_prompt: number;
+  in_assistant_response: number;
+  in_tool_use_input: number;
+  in_tool_result: number;
 }
 
 export interface CcSessionTranscriptBlock {
@@ -135,34 +198,59 @@ export interface BuildEnvelopeInput {
   };
   /** Issue #283 — optional quota snapshot to attach to the envelope. */
   quota?: CcSessionQuotaBlock;
+  /** Bucket 1/2 — environment + privacy-aware metadata attached on every envelope. */
+  extras?: EnvelopeExtras;
+}
+
+/** Bucket 1/2 — additive envelope fields. All optional; absent fields are omitted. */
+export interface EnvelopeExtras {
+  hostInfo?: Partial<HostInfo>;
+  settingsDigest?: SettingsDigest;
+  claudeMd?: { content: string; size: number };
+  l1RedactionsByKind?: Record<string, number>;
+  l1RedactionsByLocation?: RedactionLocationCounts;
+  oauthExpiresAt?: string;
 }
 
 export function buildCcSessionEnvelope(input: BuildEnvelopeInput): CcSessionEnvelope {
   const compressed = gzipSync(input.payloadBytes);
   const payloadB64 = compressed.toString('base64');
+  const x = input.extras;
+  const host: HostInfo = {
+    os: input.metadata.host.os,
+    arch: input.metadata.host.arch,
+    hostname: input.metadata.host.hostname,
+    ...(x?.hostInfo ?? {}),
+  };
+  const envelopeBlock: CcSessionEnvelopeBlock = {
+    id: input.metadata.id,
+    user_id: input.identity.user_id,
+    machine_id: input.identity.machine_id,
+    session_id: input.metadata.session_id,
+    cwd: input.metadata.cwd,
+    project_name: input.metadata.project_name,
+    transcript_path: input.metadata.transcript_path,
+    payload_size: input.metadata.payload_size,
+    captured_at: input.metadata.captured_at,
+    source: input.metadata.source,
+    host,
+    // Prefer the canonical `riven_version`; fall back to the deprecated
+    // `teamagent_version` field for in-flight queue entries written by
+    // older clients.
+    riven_version:
+      input.metadata.riven_version ??
+      input.metadata.teamagent_version ??
+      'unknown',
+    consented_at: input.identity.consented_at ?? null,
+  };
+  if (x?.settingsDigest) envelopeBlock.settings_digest = x.settingsDigest;
+  if (x?.claudeMd) envelopeBlock.claude_md = x.claudeMd;
+  if (x?.l1RedactionsByKind) envelopeBlock.l1_redactions_by_kind = x.l1RedactionsByKind;
+  if (x?.l1RedactionsByLocation) envelopeBlock.l1_redactions_by_location = x.l1RedactionsByLocation;
+  if (x?.oauthExpiresAt) envelopeBlock.oauth_expires_at = x.oauthExpiresAt;
   const env: CcSessionEnvelope = {
     schema_version: 1,
-    envelope: {
-      id: input.metadata.id,
-      user_id: input.identity.user_id,
-      machine_id: input.identity.machine_id,
-      session_id: input.metadata.session_id,
-      cwd: input.metadata.cwd,
-      project_name: input.metadata.project_name,
-      transcript_path: input.metadata.transcript_path,
-      payload_size: input.metadata.payload_size,
-      captured_at: input.metadata.captured_at,
-      source: input.metadata.source,
-      host: input.metadata.host,
-      // Prefer the canonical `riven_version`; fall back to the deprecated
-      // `teamagent_version` field for in-flight queue entries written by
-      // older clients.
-      riven_version:
-        input.metadata.riven_version ??
-        input.metadata.teamagent_version ??
-        'unknown',
-      consented_at: input.identity.consented_at ?? null,
-    },
+    envelope: envelopeBlock,
     transcript: {
       compression: 'gzip+base64',
       content: payloadB64,

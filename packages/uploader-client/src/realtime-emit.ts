@@ -27,7 +27,8 @@
  *   import { emitCcStatus } from "./realtime-emit.js";
  *   emitCcStatus({ event: "session_start", sessionId, cwd });
  */
-import { homedir, hostname } from "node:os";
+import { homedir, hostname, loadavg, cpus, freemem, totalmem } from "node:os";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import {
   CC_STATUS_SCHEMA_VERSION,
   digitalTwinPaths,
@@ -36,6 +37,7 @@ import {
   loadConfig,
   readEnvWithLegacy,
   type CcStatusSnapshot,
+  type CcSessionQuotaBlock,
   type DigitalTwinConfig,
 } from "@matrix-riven/shared";
 import {
@@ -82,15 +84,28 @@ export interface EmitInput {
   /** Optional context token count from the hook payload. */
   readonly contextTokens?: number;
   /**
-   * Optional raw user prompt text. Issue #308 grill §3 mandates "完整存 raw
-   * prompt" for leader-side evidence / replay. The caller (UserPromptSubmit
-   * hook) is responsible for gating this behind the
-   * `RIVEN_REALTIME_RAW_PROMPT=1` env opt-in — emit threads whatever it
-   * receives directly to `CcStatusSnapshot.raw_prompt`. Empty string is
-   * treated as "unset" (so an opt-in caller can still skip individual
-   * empty prompts).
+   * Optional raw user prompt text. Bucket 1/2 (G1) flipped the default: raw
+   * prompts ARE emitted unless the user explicitly opts out via
+   * `RIVEN_REALTIME_RAW_PROMPT=0` (or legacy `TEAMAGENT_REALTIME_RAW_PROMPT=0`).
+   * Empty string is still treated as "unset".
    */
   readonly rawPrompt?: string;
+  /**
+   * Bucket 1/2 — extra snapshot fields the caller wants to thread through
+   * (event-specific or cross-cutting metrics). Sanitized server-side; client
+   * just copies. Use this for `tool_name`, `user_decision`, `cpu_pct`, etc.
+   */
+  readonly extras?: Partial<CcStatusSnapshot>;
+  /**
+   * Optional path to the in-progress Claude Code transcript jsonl. CC sends
+   * this on every hook stdin payload as `transcript_path`. When present and
+   * the file is small enough to scan inside the hook budget, `buildSnapshot`
+   * extracts cumulative metrics (turn_count, tool_calls_total/failed,
+   * files_touched, context_tokens, model, session_started_at,
+   * session_health) and fills them into the snapshot. Skipped when missing
+   * or oversized.
+   */
+  readonly transcriptPath?: string;
 }
 
 const TIMEOUT_MS = 50;
@@ -139,11 +154,57 @@ let cachedMachineId: string | null = null;
 const CONFIG_URL_UNREAD = "__unread" as const;
 let cachedConfigBaseUrl: string | null | typeof CONFIG_URL_UNREAD = CONFIG_URL_UNREAD;
 
-/** Test-only — clears the in-process identity + config-url caches. */
+/**
+ * Cached digital-twin quota cache (subscription_tier + 5h/7d utilization
+ * + reset timestamps + stale flag). Read once per process so each hook
+ * fire stays cheap. Three states: '__unread' (first call attempts read),
+ * null (cache missing / unparseable), block (usable). Declared up here
+ * with the other process-scoped caches so `__resetIdentityCacheForTests`
+ * (below) can clear it without TDZ.
+ */
+const QUOTA_UNREAD = "__unread" as const;
+let cachedQuotaBlock:
+  | CcSessionQuotaBlock
+  | null
+  | typeof QUOTA_UNREAD = QUOTA_UNREAD;
+
+/** Test-only — clears the in-process identity + config-url + quota caches. */
 export function __resetIdentityCacheForTests(): void {
   cachedUserId = null;
   cachedMachineId = null;
   cachedConfigBaseUrl = CONFIG_URL_UNREAD;
+  cachedQuotaBlock = QUOTA_UNREAD;
+}
+
+/**
+ * Bucket 1/2 (C1) — cheap host metrics sampled at hook fire time. Returns a
+ * `Partial<CcStatusSnapshot>` ready to merge into `EmitInput.extras`. Each
+ * field is best-effort: probe failures are swallowed (the snapshot just
+ * omits the unknown field).
+ */
+export function sampleHostMetrics(): Partial<CcStatusSnapshot> {
+  const out: Partial<CcStatusSnapshot> = {};
+  try {
+    const load = loadavg();
+    const cpuCount = cpus().length || 1;
+    // Windows returns [0,0,0]; treat as unknown.
+    if (Array.isArray(load) && Number.isFinite(load[0]) && (load[0] as number) > 0) {
+      out.cpu_pct = Math.round(((load[0] as number) / cpuCount) * 100) / 100;
+    }
+  } catch {
+    /* loadavg unavailable */
+  }
+  try {
+    const free = freemem();
+    const total = totalmem();
+    if (Number.isFinite(total) && total > 0) {
+      out.mem_used_mb = Math.round((total - free) / (1024 * 1024));
+      out.mem_total_mb = Math.round(total / (1024 * 1024));
+    }
+  } catch {
+    /* mem unavailable */
+  }
+  return out;
 }
 
 /**
@@ -247,6 +308,180 @@ function readConfigUserId(): string | null {
   }
 }
 
+/**
+ * Maximum transcript jsonl file size we'll fully scan inside the hook
+ * critical path. CC transcripts grow append-only and can hit tens of MB on
+ * long sessions; reading 35MB blocks the SessionStart / UserPromptSubmit
+ * hook well past the 50ms budget on a slow disk. When the file exceeds
+ * this cap, `scanTranscript` bails and the snapshot ships without
+ * transcript-derived fields (better than blocking the user's CC turn).
+ */
+const TRANSCRIPT_SCAN_MAX_BYTES = 4 * 1024 * 1024;
+
+interface TranscriptStats {
+  turnCount: number;
+  toolCallsTotal: number;
+  toolCallsFailed: number;
+  filesTouched: number;
+  contextTokens?: number;
+  model?: string;
+  sessionStartedAt?: string;
+}
+
+/**
+ * Parse a CC transcript jsonl file and accumulate cumulative session
+ * metrics. Pure synchronous read — caller is expected to size-cap via
+ * `TRANSCRIPT_SCAN_MAX_BYTES` so we don't blow the hook budget.
+ *
+ * Fields and their derivation:
+ *   - turn_count           ← count of `type:'user'` lines that are NOT
+ *                            tool_result responses (= actual user turns)
+ *   - tool_calls_total     ← count of `tool_use` blocks across all
+ *                            assistant turns
+ *   - tool_calls_failed    ← count of `tool_result` blocks with
+ *                            `is_error: true`
+ *   - files_touched        ← cardinality of unique `file_path` values
+ *                            seen on Edit/Write `tool_use.input`
+ *   - context_tokens       ← LATEST assistant turn's
+ *                            input + cache_creation + cache_read tokens
+ *                            (CC's "context window load" on that turn)
+ *   - model                ← LATEST assistant turn's `message.model`
+ *   - session_started_at   ← first line's `timestamp`
+ *
+ * cost_usd is NOT derived here — CC's transcript doesn't include cost;
+ * computing it would require a per-model pricing table out of scope for
+ * the hook path.
+ *
+ * Returns null on any read / parse error or when the file is oversized.
+ */
+function scanTranscript(transcriptPath: string): TranscriptStats | null {
+  let raw: string;
+  try {
+    const st = statSync(transcriptPath);
+    if (!st.isFile()) return null;
+    if (st.size > TRANSCRIPT_SCAN_MAX_BYTES) return null;
+    raw = readFileSync(transcriptPath, "utf8");
+  } catch {
+    return null;
+  }
+  const stats: TranscriptStats = {
+    turnCount: 0,
+    toolCallsTotal: 0,
+    toolCallsFailed: 0,
+    filesTouched: 0,
+  };
+  const files = new Set<string>();
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    let row: unknown;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof row !== "object" || row === null) continue;
+    const r = row as Record<string, unknown>;
+    // session_started_at — first line with a timestamp wins
+    if (!stats.sessionStartedAt && typeof r.timestamp === "string") {
+      stats.sessionStartedAt = r.timestamp;
+    }
+    const type = typeof r.type === "string" ? r.type : "";
+    const message = r.message as Record<string, unknown> | undefined;
+    if (!message || typeof message !== "object") continue;
+    if (type === "user") {
+      // Count only actual user turns (not tool_result responses CC sends back
+      // to the model under the same `type:'user'` wrapper).
+      const content = message.content;
+      let isToolResult = false;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (
+            typeof block === "object" &&
+            block &&
+            (block as Record<string, unknown>).type === "tool_result"
+          ) {
+            isToolResult = true;
+            const b = block as Record<string, unknown>;
+            if (b.is_error === true) stats.toolCallsFailed++;
+          }
+        }
+      }
+      if (!isToolResult) stats.turnCount++;
+    } else if (type === "assistant") {
+      const m = message.model;
+      if (typeof m === "string" && m.length > 0) stats.model = m;
+      const usage = message.usage as Record<string, unknown> | undefined;
+      if (usage) {
+        const sum =
+          toFiniteInt(usage.input_tokens) +
+          toFiniteInt(usage.cache_creation_input_tokens) +
+          toFiniteInt(usage.cache_read_input_tokens);
+        if (sum > 0) stats.contextTokens = sum;
+      }
+      const content = message.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (typeof block !== "object" || !block) continue;
+          const b = block as Record<string, unknown>;
+          if (b.type !== "tool_use") continue;
+          stats.toolCallsTotal++;
+          const tool = typeof b.name === "string" ? (b.name as string) : "";
+          if (tool === "Edit" || tool === "Write") {
+            const input = b.input as Record<string, unknown> | undefined;
+            const fp = input?.file_path;
+            if (typeof fp === "string" && fp.length > 0) files.add(fp);
+          }
+        }
+      }
+    }
+  }
+  stats.filesTouched = files.size;
+  return stats;
+}
+
+function toFiniteInt(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0
+    ? Math.floor(v)
+    : 0;
+}
+
+/**
+ * Read the digital-twin quota cache (subscription_tier + 5h/7d utilization
+ * + reset timestamps + stale flag). Written by the hourly probe in
+ * `quota/probe.ts` + `quota/state.ts`. Cache is declared with the other
+ * process-scoped caches near top of file. Result cached for the rest of
+ * the process lifetime.
+ */
+function readQuotaBlock(): CcSessionQuotaBlock | null {
+  if (cachedQuotaBlock !== QUOTA_UNREAD) return cachedQuotaBlock;
+  try {
+    const paths = digitalTwinPaths(homeForConfig());
+    const cacheFile = `${paths.digitalTwinDir}/quota-cache.json`;
+    if (!existsSync(cacheFile)) {
+      cachedQuotaBlock = null;
+      return null;
+    }
+    const raw = readFileSync(cacheFile, "utf8");
+    const parsed = JSON.parse(raw) as CcSessionQuotaBlock;
+    // Minimal shape check — the probe writes the full block atomically so
+    // a half-written file would fail JSON.parse already, but a manual
+    // edit or schema drift might land a partial object. Demand the four
+    // numeric fields at minimum.
+    if (
+      typeof parsed?.five_hour_utilization === "number" &&
+      typeof parsed?.seven_day_utilization === "number"
+    ) {
+      cachedQuotaBlock = parsed;
+      return parsed;
+    }
+    cachedQuotaBlock = null;
+    return null;
+  } catch {
+    cachedQuotaBlock = null;
+    return null;
+  }
+}
+
 function buildSnapshot(input: EmitInput): CcStatusSnapshot {
   if (!cachedUserId) {
     // Identity resolution priority — must match the transcript-upload path
@@ -313,19 +548,71 @@ function buildSnapshot(input: EmitInput): CcStatusSnapshot {
     snap.context_tokens = tokens;
     snap.context_pct = Math.round((tokens / 200_000) * 100) / 100;
   }
-  // Opt-in raw prompt evidence. Defense-in-depth — the hook layer
-  // (bin-user-prompt-submit.ts) is the policy boundary, but a future direct
-  // caller of emitCcStatus would otherwise bypass the env gate. Re-check
-  // here so the transport refuses to send prompt content unless
-  // RIVEN_REALTIME_RAW_PROMPT=1 (or the legacy TEAMAGENT_REALTIME_RAW_PROMPT)
-  // is explicitly set, regardless of what the caller passed.
+  // Bucket 1/2 (G1) — raw prompt evidence is now DEFAULT-ON. Opt out by
+  // setting RIVEN_REALTIME_RAW_PROMPT=0 (or the legacy TEAMAGENT_* var).
+  // Empty-string prompts are still treated as "unset" so an opt-in caller
+  // can skip empty prompts.
   if (
     typeof input.rawPrompt === "string" &&
     input.rawPrompt.length > 0 &&
-    readEnv("RIVEN_REALTIME_RAW_PROMPT", "TEAMAGENT_REALTIME_RAW_PROMPT") === "1"
+    readEnv("RIVEN_REALTIME_RAW_PROMPT", "TEAMAGENT_REALTIME_RAW_PROMPT") !== "0"
   ) {
     snap.raw_prompt = input.rawPrompt;
   }
+
+  // Transcript-derived cumulative metrics. CC emits `transcript_path` on
+  // every hook stdin payload; when present + the file fits inside the
+  // critical-path scan budget, fold per-session cumulative stats into the
+  // snapshot. Caller-provided model / contextTokens (from CC stdin if it
+  // exposes them on a future hook revision) win over scan-derived values.
+  if (input.transcriptPath) {
+    const scan = scanTranscript(input.transcriptPath);
+    if (scan) {
+      if (scan.turnCount > 0) snap.turn_count = scan.turnCount;
+      if (scan.toolCallsTotal > 0) snap.tool_calls_total = scan.toolCallsTotal;
+      if (scan.toolCallsFailed > 0) snap.tool_calls_failed = scan.toolCallsFailed;
+      if (scan.filesTouched > 0) snap.files_touched = scan.filesTouched;
+      if (scan.sessionStartedAt) snap.session_started_at = scan.sessionStartedAt;
+      if (scan.model && !snap.model) snap.model = scan.model;
+      if (scan.contextTokens !== undefined && snap.context_tokens === undefined) {
+        snap.context_tokens = scan.contextTokens;
+        const pct = Math.round((scan.contextTokens / 200_000) * 100) / 100;
+        snap.context_pct = pct;
+        // session_health threshold mirrors CcSessionHealth contract in
+        // shared/cc-status/types.ts — 200k = 100% load → "OVER_200K" once
+        // the latest assistant turn exceeds it (CC's own statusline uses
+        // the same threshold).
+        snap.session_health = pct > 1.0 ? "OVER_200K" : "OK";
+      }
+    }
+  }
+
+  // Quota cache from the hourly probe (subscription_tier + 5h/7d
+  // utilization + reset timestamps + stale flag). Probe writes the cache
+  // file atomically from `quota/state.ts:writeQuotaCache`; here we just
+  // fold its fields into the snapshot if the file exists. Absent cache
+  // (probe never succeeded — e.g. no Max subscription, no OAuth token)
+  // leaves these fields unset, same as before.
+  const quota = readQuotaBlock();
+  if (quota) {
+    snap.subscription_tier = quota.subscription_tier;
+    snap.five_hour_utilization = quota.five_hour_utilization;
+    snap.seven_day_utilization = quota.seven_day_utilization;
+    if (typeof quota.five_hour_reset_at === "number") {
+      snap.five_hour_reset_at = quota.five_hour_reset_at;
+    }
+    if (typeof quota.seven_day_reset_at === "number") {
+      snap.seven_day_reset_at = quota.seven_day_reset_at;
+    }
+    snap.quota_stale = quota.stale;
+  }
+
+  // Bucket 1/2 — copy through caller-supplied extras (host metrics, tool_name,
+  // user_decision, cpu_pct, etc). Runs LAST so explicit caller-supplied values
+  // beat transcript-scan-derived ones. Server-side `sanitizeCcStatusSnapshot`
+  // is the actual whitelist; this assign just lets the hook bins thread
+  // event-specific fields without each bin building a snapshot from scratch.
+  if (input.extras) Object.assign(snap, input.extras);
   return snap;
 }
 

@@ -149,3 +149,121 @@ export function redactSensitiveText(text: string): string {
   });
   return redacted;
 }
+
+/**
+ * Bucket 1/2 (F1 + F5) — scan a Claude Code transcript (JSONL) for sensitive
+ * text and report aggregate stats: total count, count by kind, count by
+ * location-in-transcript. The redactor still runs the line-level
+ * `detectSensitiveText` per content fragment; this helper just walks the
+ * transcript structure so the caller knows where each finding came from.
+ *
+ * Locations (see RedactionLocationCounts):
+ *   - in_user_prompt:        plain user text turns (string content or text blocks)
+ *   - in_assistant_response: assistant text blocks
+ *   - in_tool_use_input:     assistant tool_use's `input` (serialized + scanned)
+ *   - in_tool_result:        user tool_result blocks
+ *
+ * Lines that fail to parse as JSON are skipped silently — matches the
+ * robustness contract of {@link parseTranscriptLines}.
+ */
+export interface TranscriptRedactionStats {
+  count: number;
+  by_kind: Record<SensitiveFindingKind, number>;
+  by_location: {
+    in_user_prompt: number;
+    in_assistant_response: number;
+    in_tool_use_input: number;
+    in_tool_result: number;
+  };
+}
+
+/** Bucket the location counts for a slice of text we have already attributed. */
+function attributeLocation(
+  text: string,
+  stats: TranscriptRedactionStats,
+  location: keyof TranscriptRedactionStats['by_location'],
+): void {
+  if (typeof text !== 'string' || text.length === 0) return;
+  const findings = detectSensitiveText(text);
+  stats.by_location[location] += findings.length;
+}
+
+export function scanTranscriptForStats(jsonl: string): TranscriptRedactionStats {
+  // Flat pass — authoritative `count` + `by_kind`. Matches the pre-bucket-1/2
+  // `detectSensitiveText(jsonl).length` semantics so a transcript that doesn't
+  // follow the canonical {type,message,content} shape still gets the right
+  // total count (location buckets may then under-sum — the difference is
+  // "findings in unrecognized line shapes").
+  const flat = detectSensitiveText(jsonl);
+  const stats: TranscriptRedactionStats = {
+    count: flat.length,
+    by_kind: {
+      email: 0, secret: 0, uuid: 0, 'private-ip': 0, 'internal-host': 0,
+      'private-path': 0, 'aws-key': 0, jwt: 0, phone: 0, 'chinese-id': 0,
+      'credit-card': 0,
+    },
+    by_location: { in_user_prompt: 0, in_assistant_response: 0, in_tool_use_input: 0, in_tool_result: 0 },
+  };
+  for (const f of flat) {
+    stats.by_kind[f.kind] = (stats.by_kind[f.kind] ?? 0) + 1;
+  }
+  // Structural pass — attribute findings to transcript locations. Best-effort.
+  for (const rawLine of jsonl.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line[0] !== '{') continue;
+    let obj: Record<string, unknown>;
+    try {
+      obj = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const message = obj.message as Record<string, unknown> | undefined;
+    const role = (message?.role as string | undefined) ?? (obj.type as string | undefined);
+    const content = message?.content;
+    if (role === 'user' || obj.type === 'user') {
+      if (typeof content === 'string') {
+        attributeLocation(content, stats, 'in_user_prompt');
+      } else if (Array.isArray(content)) {
+        for (const block of content) {
+          if (typeof block !== 'object' || block === null) continue;
+          const b = block as Record<string, unknown>;
+          if (b.type === 'text' && typeof b.text === 'string') {
+            attributeLocation(b.text, stats, 'in_user_prompt');
+          } else if (b.type === 'tool_result') {
+            // tool_result.content can be string or array of {type:'text',text}
+            const tc = b.content;
+            if (typeof tc === 'string') {
+              attributeLocation(tc, stats, 'in_tool_result');
+            } else if (Array.isArray(tc)) {
+              for (const tb of tc) {
+                if (typeof tb !== 'object' || tb === null) continue;
+                const tbObj = tb as Record<string, unknown>;
+                if (typeof tbObj.text === 'string') attributeLocation(tbObj.text, stats, 'in_tool_result');
+              }
+            }
+          }
+        }
+      }
+    } else if (role === 'assistant' || obj.type === 'assistant') {
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (typeof block !== 'object' || block === null) continue;
+          const b = block as Record<string, unknown>;
+          if (b.type === 'text' && typeof b.text === 'string') {
+            attributeLocation(b.text, stats, 'in_assistant_response');
+          } else if (b.type === 'tool_use') {
+            // Serialize tool input as JSON for scanning. The Stop tap pipeline
+            // already gzips the whole transcript, so we don't keep the
+            // serialized string around.
+            try {
+              attributeLocation(JSON.stringify(b.input ?? {}), stats, 'in_tool_use_input');
+            } catch { /* circular / unserializable input — skip */ }
+          }
+        }
+      } else if (typeof content === 'string') {
+        attributeLocation(content, stats, 'in_assistant_response');
+      }
+    }
+  }
+  return stats;
+}

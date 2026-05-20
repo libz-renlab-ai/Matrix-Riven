@@ -14,6 +14,7 @@ import { emitCcStatus } from '../realtime-emit.js';
 
 vi.mock('../realtime-emit.js', () => ({
   emitCcStatus: vi.fn(),
+  sampleHostMetrics: vi.fn(() => ({})),
 }));
 
 const ENV_KEYS = ['TEAMAGENT_DISABLED'] as const;
@@ -43,11 +44,13 @@ describe('bin-session-start main()', () => {
     await main(stdinReader);
 
     expect(emitCcStatus).toHaveBeenCalledTimes(1);
-    expect(emitCcStatus).toHaveBeenCalledWith({
-      event: 'session_start',
-      sessionId: 'ses-abc',
-      cwd: '/home/user/proj',
-    });
+    expect(emitCcStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'session_start',
+        sessionId: 'ses-abc',
+        cwd: '/home/user/proj',
+      }),
+    );
   });
 
   it('TEAMAGENT_DISABLED=1 → emitCcStatus 不被调用', async () => {
