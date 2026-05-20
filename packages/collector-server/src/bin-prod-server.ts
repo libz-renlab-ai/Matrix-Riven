@@ -11,7 +11,10 @@
  * Env vars (legacy `TEAMAGENT_*` / `BPP_*` names accepted with a deprecation
  * warning — see compat.ts):
  *   PORT                       (default 8933)
- *   HOST                       (default 0.0.0.0)
+ *   HOST                       (default 127.0.0.1 — loopback only.
+ *                               Set HOST=0.0.0.0 explicitly to expose on LAN,
+ *                               and pair with RIVEN_AUTH_TOKEN since
+ *                               leadership endpoints surface team data.)
  *   RIVEN_COLLECTOR_DIR        (default $HOME/riven-collector;
  *                               legacy: TEAMAGENT_COLLECTOR_DIR / ~/teamagent-collector)
  *   RIVEN_AUTH_TOKEN           (optional — when set, POST /v1/cc-sessions
@@ -47,7 +50,40 @@ export async function runProdServer(deps: RunProdServerDeps = {}): Promise<() =>
     );
   }
   const port = portParsed;
-  const host = env.HOST ?? '0.0.0.0';
+  // Default to loopback so the leadership dashboard isn't exposed on the LAN
+  // by accident. To run on the network, the operator must set HOST=0.0.0.0
+  // explicitly — and should also set RIVEN_AUTH_TOKEN, which gates the
+  // leadership routes when present.
+  const host = env.HOST ?? '127.0.0.1';
+  if (host !== '127.0.0.1' && host !== 'localhost' && !(env.RIVEN_AUTH_TOKEN || env.BPP_AUTH_TOKEN)) {
+    // 2026-05-19 QA-4 P0: security auditor's P0 — a non-loopback bind
+    // without RIVEN_AUTH_TOKEN exposes both leadership endpoints AND
+    // the write endpoint (POST /v1/cc-sessions) to the LAN. With no
+    // token, anyone can ingest a session as any email, corrupting
+    // every signal. The previous behaviour was to log a warning and
+    // start anyway, which a sleepy operator would miss. Refuse to
+    // start so the misconfiguration surfaces immediately.
+    throw new Error(
+      `[riven-collector] REFUSING TO START: HOST=${host} (non-loopback) ` +
+        `without RIVEN_AUTH_TOKEN. POST /v1/cc-sessions and every ` +
+        `leadership route would be reachable on the LAN without auth, ` +
+        `letting anyone spoof a teammate's email and corrupt aggregates. ` +
+        `Set RIVEN_AUTH_TOKEN=<32 random bytes> or bind HOST=127.0.0.1.`,
+    );
+  }
+  if ((host === '127.0.0.1' || host === 'localhost') && !(env.RIVEN_AUTH_TOKEN || env.BPP_AUTH_TOKEN)) {
+    // Loopback + no token: any local process can spoof. Acceptable
+    // for single-user laptops, dangerous on shared/multi-tenant hosts.
+    // Log a bootscreen NOTICE (not a warning — this is the documented
+    // single-user mode) so the operator sees it and decides.
+    log(
+      '[riven-collector] NOTICE: HOST=127.0.0.1 without RIVEN_AUTH_TOKEN. ' +
+        'Any local process on this host can POST sessions under any ' +
+        'teammate email. Safe for single-user laptops; on shared hosts ' +
+        'set RIVEN_AUTH_TOKEN=<32 random bytes> and configure the ' +
+        'upload daemon to send it.',
+    );
+  }
   // Resolve outputDir from env, with TeamBrain → Matrix-Riven legacy fallback.
   // If the env vars are unset, also fall back to the legacy default
   // (~/teamagent-collector) when that directory exists on disk — so a host
@@ -79,20 +115,113 @@ export async function runProdServer(deps: RunProdServerDeps = {}): Promise<() =>
       ? { keyPath: httpsKeyPath, certPath: httpsCertPath }
       : undefined;
 
+  // Comma-separated list of "main" project names. Used by the slacking
+  // detector (signals/slacking.ts) to flag members whose recent work is
+  // off the company's primary repos. Empty/unset = signal stays dormant.
+  const mainProjects = (env.RIVEN_MAIN_PROJECTS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   const handle = await startMockServer({
     port,
     host,
     outputDir,
     authToken,
     tls,
+    mainProjects,
   });
   log(`[riven-collector] listening on ${handle.url}`);
   log(`[riven-collector] outputDir = ${handle.outputDir}`);
-  if (authToken) log(`[riven-collector] token auth ENABLED on POST /v1/cc-sessions`);
+  if (mainProjects.length > 0) {
+    log(`[riven-collector] main projects: ${mainProjects.join(', ')}`);
+  }
+  if (authToken) log(`[riven-collector] token auth ENABLED (POST /v1/cc-sessions + all leadership routes)`);
   if (tls) log(`[riven-collector] TLS ENABLED (key=${tls.keyPath})`);
+
+  // 2026-05-19 QA-7 pre-emptive: /sources promises a transcript retention
+  // window (default 30 days, overridable via RIVEN_TRANSCRIPT_RETENTION_DAYS).
+  // Without an enforcement path that's a documentation lie. Run a one-shot
+  // sweep at startup that deletes transcript files older than the configured
+  // cutoff. Cheap on a small team (O(users × days)); we don't need a
+  // recurring cron because every restart re-sweeps and the collector dir
+  // doesn't grow fast enough to overflow between restarts.
+  const transcriptRetentionDays = Number(env.RIVEN_TRANSCRIPT_RETENTION_DAYS ?? '30');
+  let retentionTimer: ReturnType<typeof setInterval> | undefined;
+  if (Number.isFinite(transcriptRetentionDays) && transcriptRetentionDays > 0) {
+    const runSweep = (): void => {
+      try {
+        const removed = sweepRetention(handle.outputDir, transcriptRetentionDays);
+        if (removed > 0) {
+          log(`[riven-collector] retention sweep removed ${removed} files older than ${transcriptRetentionDays}d`);
+        }
+      } catch (err) {
+        log(`[riven-collector] retention sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+    runSweep();
+    // 2026-05-19 QA-7 P0: final acceptance review flagged that the
+    // startup-only sweep contradicted /sources copy implying continuous
+    // enforcement. Now also re-sweep every 24h so a long-running server
+    // keeps the retention promise as transcripts age in place.
+    retentionTimer = setInterval(runSweep, 24 * 3600 * 1000);
+    // Allow the process to exit even with the timer pending — unref so
+    // SIGTERM doesn't have to wait.
+    retentionTimer.unref?.();
+  }
+
   deps.onReady?.({ url: handle.url, outputDir: handle.outputDir });
 
-  return handle.close;
+  // Compose the close handler: clear the retention timer (if any) then
+  // run the underlying server-close. Avoids leaking the interval in test
+  // teardown.
+  const close = async (): Promise<void> => {
+    if (retentionTimer !== undefined) {
+      clearInterval(retentionTimer);
+      retentionTimer = undefined;
+    }
+    await handle.close();
+  };
+  return close;
+}
+
+/**
+ * One-shot retention sweep — delete transcript files (.jsonl / .ogg) whose
+ * mtime is older than `days` days. Walks `outputDir/<user>/<YYYY-MM-DD>/`
+ * leaves. Errors during individual deletes are swallowed (best-effort);
+ * total error throws if the top-level dir is unreadable so the operator
+ * sees the misconfiguration. Returns the number of files removed.
+ */
+function sweepRetention(rootDir: string, days: number): number {
+  if (!existsSync(rootDir)) return 0;
+  const cutoffMs = Date.now() - days * 24 * 3600 * 1000;
+  let removed = 0;
+  const { readdirSync: rd, statSync: st, rmSync } = require('node:fs') as typeof import('node:fs');
+  for (const userDir of rd(rootDir, { withFileTypes: true })) {
+    if (!userDir.isDirectory()) continue;
+    const userPath = `${rootDir}/${userDir.name}`;
+    let userEntries: import('node:fs').Dirent[];
+    try { userEntries = rd(userPath, { withFileTypes: true }); } catch { continue; }
+    for (const dateDir of userEntries) {
+      if (!dateDir.isDirectory()) continue;
+      const datePath = `${userPath}/${dateDir.name}`;
+      let dateEntries: import('node:fs').Dirent[];
+      try { dateEntries = rd(datePath, { withFileTypes: true }); } catch { continue; }
+      for (const f of dateEntries) {
+        if (!f.isFile()) continue;
+        if (!f.name.endsWith('.jsonl') && !f.name.endsWith('.ogg')) continue;
+        try {
+          const filePath = `${datePath}/${f.name}`;
+          const s = st(filePath);
+          if (s.mtimeMs < cutoffMs) {
+            rmSync(filePath);
+            removed += 1;
+          }
+        } catch { /* best-effort */ }
+      }
+    }
+  }
+  return removed;
 }
 
 const argv1 = process.argv[1] ?? '';

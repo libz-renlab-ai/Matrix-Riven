@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { renderNav } from '../_nav.html.js';
 
 describe('renderNav (P-B2)', () => {
-  it.each(['Overview', 'People', 'Projects', 'Activity', 'Insights'])(
+  it.each(['Overview', 'People', 'Projects', 'Retro', 'Activity', 'Insights'])(
     'contains tab %s',
     (label) => {
       expect(renderNav('overview')).toContain(label);
@@ -20,9 +20,9 @@ describe('renderNav (P-B2)', () => {
     expect(html).toContain('class="live-dot"');
   });
 
-  it('emits 5 anchors, one per tab', () => {
+  it('emits 6 anchors, one per tab', () => {
     const html = renderNav('overview');
-    expect((html.match(/<a class="tab/g) ?? []).length).toBe(5);
+    expect((html.match(/<a class="tab/g) ?? []).length).toBe(6);
   });
 
   it('default rangeLabel is "7 日窗口"', () => {

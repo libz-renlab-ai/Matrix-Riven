@@ -47,15 +47,51 @@ import { buildOverview } from './overview/aggregator.js';
 // Task 15 — Leadership API + HTML routes (replaces legacy /api/overview in the
 // dispatch order so the new aggregator + cache wins over the old disk-scan path).
 import { TtlCache } from './leadership/cache.js';
-import { handleLeadershipRequest } from './leadership/routes.js';
+import { handleLeadershipRequest, type LeadershipRouteDeps } from './leadership/routes.js';
 // P-D1 — on-disk session index. Built async at startup when missing, appended
 // after each successful POST so scanAllSessions has a fast cold-start path.
 import { appendIndex, rebuildAllIndexes } from './leadership/index.js';
+// L-11 — LLM narrative layer boot wiring. `LLM_ENABLED=false` (default) keeps
+// the dashboard byte-identical to pre-L-8: no cache file is created, no worker
+// is started, and `llmCache` stays undefined so the aggregator skips its
+// enrichment pass.
+import { readLlmConfig } from './leadership/llm/config.js';
+import { LlmCache } from './leadership/llm/cache.js';
+import {
+  startWorker,
+  type WorkerHandle,
+} from './leadership/llm/worker.js';
+import { collectWorkerInputs } from './leadership/llm/inputs.js';
 
 /** Cap raw POST body to bound memory + reject obvious DoS payloads. */
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
 /** Cap gzip output to defeat zip-bomb DoS (jsonl rarely compresses >30x). */
 export const MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Detect synthetic transcripts produced by `bin-digital-twin inject-mock`.
+ *
+ * The CLI's `inject-mock` subcommand writes a fixed two-line transcript with
+ * `"inject-mock probe"` (user) + `"inject-mock ack"` (assistant) as evidence
+ * payload — used as a local upload-pipeline smoke test. The `RIVEN_UPLOADER_DRYRUN=1`
+ * env keeps these from hitting a server when used correctly, but historical
+ * INSTALL.md guidance had readers run the uploader without it, leaking ~376 byte
+ * synthetic sessions into prod `<user>/<date>/` dirs.
+ *
+ * INSTALL.md guidance is already fixed (bb4ca35), but server-side rejection is
+ * defense in depth: any caller (old client, custom script, AI agent reading old
+ * docs) cannot pollute the collector regardless of CLI-side gates.
+ *
+ * Returns true when both marker phrases appear in the decoded transcript text.
+ * A real session would only contain these strings if the user manually typed
+ * them; the false-positive rate is acceptable for a debug payload identifier.
+ */
+export function isInjectMockTranscript(transcriptText: string): boolean {
+  return (
+    transcriptText.includes('"inject-mock probe"') &&
+    transcriptText.includes('"inject-mock ack"')
+  );
+}
 
 export interface MockServerOptions {
   /** Port to bind. Use 0 to pick an ephemeral port. */
@@ -79,6 +115,12 @@ export interface MockServerOptions {
    * Empty/undefined = auth disabled (dev/test default).
    */
   authToken?: string;
+  /**
+   * Comma-list of project names treated as "main" for slacking detection.
+   * Forwarded to `LeadershipRouteDeps.mainProjects`. Empty/undefined leaves
+   * the slacking signal dormant (no false positives in a fresh deploy).
+   */
+  mainProjects?: string[];
 }
 
 export interface MockServerHandle {
@@ -97,6 +139,17 @@ const ID_RE = /^[A-Za-z0-9._-]+$/;
 
 function send(res: ServerResponse, status: number, body?: unknown): void {
   res.statusCode = status;
+  // 2026-05-19 QA-6 P2: every response — including outer-dispatcher 404 /
+  // 405 fall-throughs — gets the same defensive headers as the leadership
+  // routes. Previously HEAD / or POST /<unknown> returned the body or
+  // status code without nosniff / X-Frame / CSP, contradicting /landing's
+  // "all-routes carry security headers" copy.
+  if (!res.headersSent) {
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('x-frame-options', 'DENY');
+    res.setHeader('referrer-policy', 'no-referrer');
+    res.setHeader('cache-control', 'no-store');
+  }
   if (body !== undefined) {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(body));
@@ -602,16 +655,46 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
   // Task 15 — shared TTL cache for all leadership endpoints (30s TTL keeps the
   // dashboard snappy under polling while bounding disk-scan frequency).
   const leadershipCache = new TtlCache<unknown>(30_000);
-  const leadershipDeps = {
+
+  // L-11 — LLM narrative layer. Read config from env; when disabled (default)
+  // `llmCache` stays undefined and no worker is started — the aggregator's
+  // `attachLlmFields` short-circuits on the missing cache so behaviour is
+  // byte-identical to pre-L-8. When enabled, we load the on-disk cache before
+  // the server binds (load is cheap — a single readFile) so the first
+  // /api/overview request can read whatever cached lines the previous process
+  // wrote. The worker itself starts AFTER `server.listen` resolves so its
+  // first tick can never race the listen callback.
+  const llmCfg = readLlmConfig(process.env);
+  let llmCache: LlmCache | undefined;
+  let llmWorker: WorkerHandle | undefined;
+  if (llmCfg.enabled) {
+    llmCache = new LlmCache(join(llmCfg.cacheDir, 'v1.jsonl'));
+    await llmCache.load();
+  }
+
+  const leadershipDeps: LeadershipRouteDeps = {
     collectorDir: outputDir,
     cache: leadershipCache,
     now,
+    llmCache,
+    // Forward the same Bearer token to the leadership dispatcher so when the
+    // operator sets `RIVEN_AUTH_TOKEN`, the dashboard endpoints require auth
+    // too — not just `POST /v1/cc-sessions`. Empty string disables (LAN
+    // demos, localhost tests).
+    authToken: authToken || undefined,
+    // Forward main-project list so the slacking signal can fire.
+    mainProjects: opts.mainProjects,
   };
 
   const requestHandler = (req: IncomingMessage, res: ServerResponse): void => {
     // Task 15 — Leadership API + HTML routes take precedence over the legacy
-    // GET handler so the new aggregator wins over /api/overview etc.
-    if (req.method === 'GET' && handleLeadershipRequest(req, res, leadershipDeps)) {
+    // handlers so the new aggregator wins over /api/overview etc.
+    //
+    // Pass non-GET requests too: the leadership dispatcher recognises its
+    // own paths and emits 405 (not_method_allowed) for POST/PUT/DELETE.
+    // Without that, `POST /api/overview` would fall through to the cc-
+    // session POST router and 404, which is REST-incorrect and confusing.
+    if (handleLeadershipRequest(req, res, leadershipDeps)) {
       return;
     }
     if (req.method === 'GET') {
@@ -743,6 +826,33 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
         if (!isUnder(outputDir, targetFile)) {
           send(res, 400, { error: 'invalid path' });
           return;
+        }
+
+        // Reject synthetic `inject-mock` transcripts before anything lands on
+        // disk. The CLI's `inject-mock` subcommand is meant for a local
+        // upload-pipeline smoke test guarded by `RIVEN_UPLOADER_DRYRUN=1`; any
+        // payload reaching this point with both marker strings is a real POST
+        // that would pollute the collector (see `isInjectMockTranscript`
+        // doc-comment for history + rationale).
+        //
+        // Defense-in-depth on top of the INSTALL.md fix (commit bb4ca35): old
+        // clients, hand-crafted POSTs, and AI agents following stale docs all
+        // hit this gate. Returns 200 with `dropped: 'inject-mock'` rather than
+        // 4xx so clients with retry-on-error logic do not loop on this case.
+        if (isLog) {
+          const decodedText = decoded.toString('utf8');
+          if (isInjectMockTranscript(decodedText)) {
+            send(res, 200, {
+              ok: true,
+              dropped: 'inject-mock',
+              user_id: userIdSafe,
+              date,
+              detail:
+                'synthetic transcript not accepted on this endpoint; ' +
+                'use RIVEN_UPLOADER_DRYRUN=1 for local smoke tests',
+            });
+            return;
+          }
         }
 
         // M2 — server-side L2 scan ("第二层敏感信息扫描（兜底）"). The member's
@@ -885,10 +995,28 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
 
         send(res, 200, { ok: true, id, user_id: userIdSafe, date });
       } catch (err) {
-        send(res, 500, {
-          error: 'decode or write failed',
-          detail: err instanceof Error ? err.message : String(err),
-        });
+        // 2026-05-19 QA-5 ops P2: distinguish "client sent bad bytes"
+        // (400) from "we couldn't write to disk" (500). Zlib raises
+        // Z_DATA_ERROR for non-gzip and corrupt streams; a malformed
+        // base64 string yields a length-mismatched Buffer that gunzip
+        // also rejects with Z_DATA_ERROR or similar. Either is a 400.
+        // Reserve 500 for unexpected fs / OOM faults so an ops dashboard
+        // can alert correctly on 5xx counts.
+        const msg = err instanceof Error ? err.message : String(err);
+        const zErr = (err as { code?: string })?.code ?? '';
+        const isDecodeError =
+          zErr === 'Z_DATA_ERROR' ||
+          zErr === 'Z_BUF_ERROR' ||
+          zErr === 'Z_STREAM_ERROR' ||
+          /incorrect header check|invalid stored block lengths|invalid distance|invalid literal\/lengths|gzip|deflate/i.test(msg);
+        if (isDecodeError) {
+          send(res, 400, { error: 'invalid_transcript_encoding', route });
+        } else {
+          send(res, 500, {
+            error: 'decode or write failed',
+            detail: msg,
+          });
+        }
       }
     });
     req.on('error', () => {
@@ -936,12 +1064,37 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
           /* non-fatal — scanAllSessions degrades to readdirSync */
         });
       });
+
+      // L-11 — start the LLM narrative worker AFTER `listen` resolves so its
+      // first tick can never race the listen callback. `collectInputs` is
+      // wired to the real input collector — each tick loads sessions from
+      // `outputDir`, builds the overview snapshot via the aggregator, and
+      // maps T1..T5 inputs using the SAME builders the aggregator's
+      // cache-only render path uses (so worker writes and aggregator reads
+      // hit the same cache keys).
+      if (llmCfg.enabled && llmCache !== undefined) {
+        const cache = llmCache;
+        llmWorker = startWorker({
+          cache,
+          cfg: llmCfg,
+          collectInputs: () => collectWorkerInputs({ collectorDir: outputDir, now }),
+          log: (msg: string) => console.log(`[llm-worker] ${msg}`),
+        });
+      }
+
       resolve({
         url: `${opts.tls ? 'https' : 'http'}://${host}:${addr.port}`,
         port: addr.port,
         outputDir,
         close: () =>
           new Promise<void>((r, rej) => {
+            // L-11 — stop the LLM worker BEFORE closing the HTTP server so
+            // its interval timer can't fire one more tick while teardown is
+            // in flight. `stop()` is synchronous + idempotent.
+            if (llmWorker) {
+              llmWorker.stop();
+              llmWorker = undefined;
+            }
             server.close((err) => (err ? rej(err) : r()));
             // Force-destroy any in-flight connections so a slowloris client
             // can't keep the process alive past graceful close.

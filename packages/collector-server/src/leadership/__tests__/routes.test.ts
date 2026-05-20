@@ -146,6 +146,19 @@ async function getJson(path: string): Promise<{ status: number; body: unknown; c
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
+describe('GET /api/llm/status', () => {
+  it('returns {enabled:false} when llmCache is undefined', async () => {
+    const { status, body } = await getJson('/api/llm/status');
+    expect(status).toBe(200);
+    expect(body).toEqual({ enabled: false });
+  });
+
+  it('rejects non-GET with 405', async () => {
+    const res = await fetch(`${baseUrl}/api/llm/status`, { method: 'POST' });
+    expect(res.status).toBe(405);
+  });
+});
+
 describe('GET /api/overview', () => {
   it('returns 200 with JSON content-type', async () => {
     const { status, contentType } = await getJson('/api/overview');
@@ -270,7 +283,7 @@ describe('HTML routes', () => {
 // ── P-B2: 5 leadership tab routes + `/` deferral ──────────────────────────────
 
 describe('5 leadership tab routes (P-B2)', () => {
-  it.each(['/overview', '/people', '/projects', '/activity', '/insights'])(
+  it.each(['/overview', '/people', '/projects', '/retro', '/activity', '/insights'])(
     'GET %s returns 200 HTML containing the nav',
     async (path) => {
       const res = await fetch(`${baseUrl}${path}`);
@@ -327,19 +340,52 @@ describe('5 leadership tab routes (P-B2)', () => {
     expect(html).not.toContain('see-all-row');
   });
 
-  it('GET /activity is a stub page', async () => {
+  it('GET /retro marks the Retro tab as active and renders the real retro view', async () => {
+    // 2026-05-18 round-3 audit P1: /retro was an orphan (no nav entry,
+    // wrong active tab). Regression-guard the wiring here.
+    const res = await fetch(`${baseUrl}/retro`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toMatch(/class="tab active"[^>]*>[^<]*Retro/);
+    expect(html).not.toContain('尚未实现');
+    expect(html).toContain('本周回顾');
+  });
+
+  it('POST /retro returns 405 not 404', async () => {
+    const res = await fetch(`${baseUrl}/retro`, { method: 'POST' });
+    expect(res.status).toBe(405);
+  });
+
+  it.each(['/landing', '/sources', '/activity', '/insights'])(
+    'POST %s returns 405 with security headers (round-5 P1)',
+    async (path) => {
+      // 2026-05-18 round-5 audit: these four routes used to fall through to
+      // the outer dispatcher's 404 (no security headers) on non-GET — which
+      // contradicted /landing's "全路由响应都带 nosniff + X-Frame-Options"
+      // copy. Now any unsupported method lands at 405 with full headers.
+      const res = await fetch(`${baseUrl}${path}`, { method: 'POST' });
+      expect(res.status).toBe(405);
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(res.headers.get('x-frame-options')).toBe('DENY');
+      expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+    },
+  );
+
+  it('GET /activity is now a real page (Phase 3-B)', async () => {
     const res = await fetch(`${baseUrl}/activity`);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('尚未实现');
+    expect(html).not.toContain('尚未实现');
+    expect(html).toContain('活动流');
     expect(html).toMatch(/class="tab active"[^>]*>[^<]*Activity/);
   });
 
-  it('GET /insights is a stub page', async () => {
+  it('GET /insights is now a real page (Phase 3-D)', async () => {
     const res = await fetch(`${baseUrl}/insights`);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('尚未实现');
+    expect(html).not.toContain('尚未实现');
+    expect(html).toContain('团队健康总评分');
     expect(html).toMatch(/class="tab active"[^>]*>[^<]*Insights/);
   });
 
@@ -356,11 +402,17 @@ describe('5 leadership tab routes (P-B2)', () => {
   it('GET /projects/:name is intercepted by the P-B6 redirect (not the stub tab)', async () => {
     // Regression: the literal /projects route must not shadow the
     // /projects/<name> regex below it — even though the regex now redirects.
+    // 2026-05-19 QA-4 P1: redirect target now preserves query and embeds
+    // the project id as a #project=<id> fragment so the projects page
+    // can auto-open the slideover. Match either the legacy bare target
+    // (no slideover deeplink, before the fix) or the new fragment form.
     const res = await fetch(`${baseUrl}/projects/${encodeURIComponent(PROJECT_A)}`, {
       redirect: 'manual',
     });
     expect([301, 302]).toContain(res.status);
-    expect(res.headers.get('location')).toBe('/projects');
+    const location = res.headers.get('location') ?? '';
+    expect(location.startsWith('/projects')).toBe(true);
+    expect(location).toContain(`#project=${encodeURIComponent(PROJECT_A)}`);
   });
 });
 
@@ -395,22 +447,30 @@ describe('detail API _html fragments (P-B6)', () => {
     expect(html!.callout).toContain(PROJECT_A);
   });
 
-  it('GET /members/<id> is retired — redirects (or 410s) away from a full page', async () => {
+  it('GET /members/<id> is retired — redirects to /people/<id> (Phase 3-C resurrects detail page)', async () => {
+    // 2026-05-19 QA-6 P2: redirect now preserves query and adds a
+    // #member=<id> fragment for slideover deeplink symmetry. The location
+    // header MUST start with /people/<id> and contain the deeplink, and
+    // MAY also carry the original query string.
     const res = await fetch(`${baseUrl}/members/alice2026`, { redirect: 'manual' });
-    expect([301, 302, 404, 410]).toContain(res.status);
-    // No HTML body — we should NOT be serving the Phase-1 detail page.
-    if (res.status === 301 || res.status === 302) {
-      expect(res.headers.get('location')).toBe('/people');
-    }
+    expect([301, 302]).toContain(res.status);
+    const location = res.headers.get('location') ?? '';
+    expect(location.startsWith('/people/alice2026')).toBe(true);
+    expect(location).toContain('#member=alice2026');
   });
 
   it('GET /projects/<name> is retired — redirects (or 410s) away from a full page', async () => {
+    // 2026-05-19 QA-4 P1: redirect now lands on /projects with a
+    // #project=<name> fragment so the slideover auto-opens. Location
+    // must start with /projects and embed the deeplink fragment.
     const res = await fetch(`${baseUrl}/projects/${encodeURIComponent(PROJECT_A)}`, {
       redirect: 'manual',
     });
     expect([301, 302, 404, 410]).toContain(res.status);
     if (res.status === 301 || res.status === 302) {
-      expect(res.headers.get('location')).toBe('/projects');
+      const location = res.headers.get('location') ?? '';
+      expect(location.startsWith('/projects')).toBe(true);
+      expect(location).toContain(`#project=${encodeURIComponent(PROJECT_A)}`);
     }
   });
 });
@@ -529,5 +589,189 @@ describe('Detail endpoints ETag + 304 (P-C3)', () => {
     const body = await second.text();
     expect(body).toBe('');
     expect(second.headers.get('etag')).toBe(etag);
+  });
+});
+
+// ── round-8 audit P0: /api/members/:id and /api/projects/:name honor ?demo=1 ──
+
+describe('demo slideover (round-8 P0)', () => {
+  it('GET /api/members/alex?demo=1 returns demo detail with _html fragments', async () => {
+    const res = await fetch(`${baseUrl}/api/members/alex?demo=1`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.email).toBe('alex@example.com');
+    expect(body.detail).toBeTruthy();
+    const html = body._html as Record<string, unknown>;
+    expect(typeof html.callout).toBe('string');
+    expect(typeof html.stats).toBe('string');
+    expect(typeof html.evolve).toBe('string');
+    expect(typeof html.projects).toBe('string');
+  });
+
+  it('GET /api/members/<full-email>?demo=1 also resolves (round-14 P0)', async () => {
+    // The overview HTML used to emit the full email in the onclick handler,
+    // landing here as a 4-char "alex@example.com" id. We strip the `@…` at
+    // the boundary so both the new local-part-only client and any stale
+    // bookmark / hand-crafted curl call still find the member.
+    const res = await fetch(
+      `${baseUrl}/api/members/${encodeURIComponent('alex@example.com')}?demo=1`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.email).toBe('alex@example.com');
+  });
+
+  it('GET /api/members/unknown?demo=1 returns 404', async () => {
+    const res = await fetch(`${baseUrl}/api/members/nope?demo=1`);
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /api/projects/matrix-riven?demo=1 returns demo detail with _html fragments', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/matrix-riven?demo=1`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.name).toBe('matrix-riven');
+    expect(body.detail).toBeTruthy();
+    const html = body._html as Record<string, unknown>;
+    expect(typeof html.callout).toBe('string');
+  });
+
+  it('GET /api/projects/unknown?demo=1 returns 404', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/nope?demo=1`);
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /people?demo=1 renders the 4-member demo grid (round-15 P0)', async () => {
+    // Was rendering empty real-data shell because /people ignored ?demo=1.
+    const res = await fetch(`${baseUrl}/people?demo=1`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('class="member-tile"');
+    // Each of the four demo members should appear by displayName.
+    for (const name of ['alex', 'blake', 'casey', 'dana']) {
+      expect(html.toLowerCase()).toContain(name);
+    }
+    expect(html).not.toContain('这个窗口内没有成员活动');
+  });
+
+  it('GET /projects?demo=1 renders the 3-project demo list (round-15 P0)', async () => {
+    const res = await fetch(`${baseUrl}/projects?demo=1`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('class="proj-row"');
+    for (const name of ['matrix-riven', 'team-graph', 'devops-pipelines']) {
+      expect(html).toContain(name);
+    }
+    expect(html).not.toContain('这个窗口内没有项目活动');
+  });
+
+  it('GET /api/overview?demo=1 includes _html fragments (round-16 P0)', async () => {
+    // Without _html the pollOverview 30 s tick can't swap fragments —
+    // live polling silently dead on every demo page.
+    const res = await fetch(`${baseUrl}/api/overview?demo=1`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    const html = body._html as Record<string, string>;
+    expect(html).toBeTruthy();
+    for (const slot of ['hero', 'kpis', 'attention', 'members', 'projects', 'highlights', 'collab']) {
+      expect(typeof html[slot]).toBe('string');
+      expect(html[slot]!.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('GET /retro?demo=1 renders the demo retro (round-16 P0)', async () => {
+    // Used to ignore ?demo=1 and render the empty real retro.
+    const res = await fetch(`${baseUrl}/retro?demo=1`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    // Demo fixture has highlights (commits/pushes/PRs/releases), so the
+    // "本周交付" section must not be the empty fallback.
+    expect(html).not.toContain('本窗口尚无 commit / PR / release');
+    // Demo attention has the blake+devops items so "需要看一眼" populated.
+    expect(html).toContain('att-row');
+  });
+});
+
+// ── L-13/launch: end-to-end LLM-on smoke ─────────────────────────────────────
+
+describe('LLM-on e2e (L-13)', () => {
+  // Sibling test server with `llmCache` plumbed through. Verifies that the
+  // route handlers actually pass deps.llmCache to the aggregator so an
+  // `/api/llm/status` consumer (the ops endpoint) sees the cache, not
+  // {enabled:false}. Cache layer correctness is covered exhaustively in
+  // aggregator-llm.test.ts; this is purely the HTTP wiring assertion.
+  let llmServer: Server;
+  let llmBaseUrl: string;
+  let llmCacheRef: import('../llm/cache.js').LlmCache;
+
+  beforeAll(async () => {
+    const { LlmCache } = await import('../llm/cache.js');
+    const cacheDir = join(tmpdir(), `riven-llm-routes-${randomUUID()}`);
+    mkdirSync(cacheDir, { recursive: true });
+    const cache = new LlmCache(join(cacheDir, 'v1.jsonl'));
+    await cache.load();
+    // Seed three entries across tiers so /api/llm/status returns a real
+    // breakdown rather than all-zeros.
+    await cache.put('t1:0123456789abcdef', JSON.stringify({ digest: 'seeded t1' }), 0.001);
+    await cache.put('t3:fedcba9876543210', JSON.stringify({ weekly: 'seeded t3' }), 0.002);
+    await cache.put('t5:abcd1234ef567890', JSON.stringify({ briefLines: ['ok', 'ok', 'ok'] }), 0.003);
+    llmCacheRef = cache;
+
+    const llmCollectorDir = join(tmpdir(), `riven-llm-collector-${randomUUID()}`);
+    mkdirSync(llmCollectorDir, { recursive: true });
+    const deps: LeadershipRouteDeps = {
+      collectorDir: llmCollectorDir,
+      cache: new TtlCache<unknown>(60_000),
+      now: () => FIXED_NOW,
+      llmCache: cache,
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      llmServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+        const handled = handleLeadershipRequest(req, res, deps);
+        if (!handled) {
+          res.statusCode = 404;
+          res.end('not handled');
+        }
+      });
+      llmServer.once('error', reject);
+      llmServer.listen(0, '127.0.0.1', () => {
+        const addr = llmServer.address();
+        if (!addr || typeof addr === 'string') {
+          reject(new Error('llm test server failed to bind'));
+          return;
+        }
+        llmBaseUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) =>
+      llmServer.close((err) => (err ? reject(err) : resolve())),
+    );
+  });
+
+  it('GET /api/llm/status reports enabled:true with per-tier counts', async () => {
+    const res = await fetch(`${llmBaseUrl}/api/llm/status`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.enabled).toBe(true);
+    const cache = body.cache as Record<string, unknown>;
+    expect(cache.entries).toBe(3);
+    const byTier = cache.byTier as Record<string, number>;
+    expect(byTier.t1).toBe(1);
+    expect(byTier.t3).toBe(1);
+    expect(byTier.t5).toBe(1);
+  });
+
+  it('seeded llmCache survives a /api/overview call (deps wired through)', async () => {
+    // The fixture has zero sessions so the snapshot is empty, but the
+    // route must not crash and must keep the cache alive for the status
+    // endpoint to read post-request.
+    const res = await fetch(`${llmBaseUrl}/api/overview`);
+    expect(res.status).toBe(200);
+    expect(llmCacheRef.keys().length).toBe(3);
   });
 });

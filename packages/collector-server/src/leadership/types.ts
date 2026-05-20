@@ -98,6 +98,10 @@ export interface MemberSnapshot {
   iterationDensity?: number;
   /** Mean prompt length over the range (used for stuck line2). */
   meanPromptLen?: number;
+  /** Optional because LLM is opt-in / may cache-miss; consumed by views/_overview-fragments.ts + views/_slideover.html.ts. */
+  /** Two-line LLM-authored weekly digest (sentences joined by '\n'). Optional;
+   * absent when LLM disabled or cache miss. */
+  llmWeekly?: string;
   // Detail-page-only fields below; aggregator includes them for /api/members/:id
   detail?: MemberDetail;
 }
@@ -171,6 +175,9 @@ export interface ProjectSnapshot {
    * line in that case.
    */
   lastTouch?: { filePath: string; by: string; ts: string };
+  /** Optional because LLM is opt-in / may cache-miss; consumed by views/_overview-fragments.ts project narrative + views/_slideover.html.ts. */
+  /** Two-line LLM-authored weekly project digest. Optional. */
+  llmWeekly?: string;
   detail?: ProjectDetail;
 }
 
@@ -185,6 +192,13 @@ export interface ProjectDetail {
   recentFiles: { path: string; touches: number }[];
   /** 0–1 — fraction of edited files touched by ≥ 2 contributors. */
   collabDensity: number;
+  /**
+   * Recent filtered user prompts across all sessions touching this project,
+   * newest first. System-injected prompts (slash commands, skill auto-loads,
+   * <system-reminder>, etc.) are excluded — these are real questions people
+   * asked about the project. Capped server-side; UI renders ~6.
+   */
+  recentPrompts: { ts: string; by: string; preview: string }[];
 }
 
 export interface Milestone {
@@ -222,6 +236,10 @@ export interface AttentionItem {
   line2: string;                // descriptive sentence; may contain inline <span class="mono">
   time: string;                 // 'HH:MM' or arrow glyph
   severity: number;             // 0-10 for sort desc
+  /** Optional because LLM is opt-in / may cache-miss; consumed by views/_overview-fragments.ts attention list to replace the generic line2 template. */
+  /** One-line LLM rewrite that replaces the generic `line2` template when
+   * present. Optional. */
+  llmRewrite?: string;
 }
 
 export interface OverviewSnapshot {
@@ -246,6 +264,18 @@ export interface OverviewSnapshot {
    * live data. Absent when data is fresh (≤ 1 day old).
    */
   staleness?: { ageDays: number; lastActivityAt: string };
+  /** Optional because T5 is opt-in / may cache-miss; consumed by views/_overview-fragments.ts to render a briefBox between hero and KPIs. */
+  /** Three-line leader daily brief (T5). Rendered as a briefBox between the
+   * hero greeting and the KPI row. Optional. */
+  llmBrief?: string[];
+  /**
+   * Phase 3-A. Filter that was applied to derive the KPIs / attention /
+   * highlights / collaboration on this snapshot. `members` and `projects`
+   * remain the full team set — the view reads this filter to dim non-
+   * matching entries (per spec §3.2 #4). Absent when no filter was applied
+   * (preserves pre-3A wire schema for unfiltered traffic).
+   */
+  appliedFilter?: FocusFilter;
 }
 
 /**
@@ -260,16 +290,179 @@ export interface HighlightEvent {
   by: string;       // local-part of the author email
   project: string;
   detail: string;   // short description; aggregator-controlled, safe HTML when escaped
+  /** Optional because T1 is opt-in / may cache-miss; consumed by views/_overview-fragments.ts highlight list to replace the raw command in `detail` when rendered. */
+  /** One-line LLM rewrite of this event for display. Replaces the raw `detail`
+   * field in renders when present. Optional. */
+  llmDigest?: string;
 }
 
 // =====================================================================
 // Range / query types
 // =====================================================================
 
-export type RangeLabel = 'today' | '24h' | '7d' | '30d' | 'custom';
+export type RangeLabel = 'today' | 'yesterday' | '24h' | '7d' | '30d' | 'custom';
 
 export interface DateRange {
   start: Date;
   end: Date;
   label: RangeLabel | string;
+}
+
+// =====================================================================
+// Phase 3-A · Focus filter
+// =====================================================================
+
+/**
+ * Pinned at brainstorm `551-1779116287`. Filter applied at the aggregator
+ * before signal computation, so all downstream signal computers stay
+ * filter-agnostic. URL query is the source of truth (no localStorage);
+ * each chip is single-select; `state` requires a two-stage filter pass
+ * inside the aggregator (compute member states on focus+project+range
+ * filtered sessions, then drop members whose state ≠ filter.state, then
+ * drop their sessions from downstream signal inputs).
+ *
+ * MemberStateBadge values that `state` can take match `MemberStateBadge`
+ * defined earlier in this file: 'active' | 'quiet' | 'stuck' |
+ * 'needs_help' | 'low_activity'.
+ */
+export interface FocusFilter {
+  /** Member email local-part (e.g. "blake"). Matched against userId's local-part. */
+  focus?: string;
+  /** Project name (cwd-derived or git-remote). Exact match, case-insensitive. */
+  project?: string;
+  /** Time range. `custom` reads `from` and `to`. */
+  range: RangeLabel;
+  /** When range='custom', UTC day boundaries (inclusive). */
+  from?: Date;
+  to?: Date;
+  /** Member state badge filter. Two-stage pass — see comment above. */
+  state?: MemberStateBadge;
+}
+
+/**
+ * Default filter when no query params are present. `range: 'today'`
+ * preserves the dashboard's pre-3A behaviour byte-for-byte so adding
+ * the filter is a zero-regression change at the empty-filter call site.
+ */
+export const DEFAULT_FOCUS_FILTER: FocusFilter = { range: 'today' };
+
+/** Helper — true when filter equals the default (no active dimensions). */
+export function isDefaultFocusFilter(f: FocusFilter): boolean {
+  return !f.focus && !f.project && !f.state && f.range === 'today' && !f.from && !f.to;
+}
+
+// =====================================================================
+// Phase 3-B · Activity flow
+// =====================================================================
+
+/** All event types surfaced on the Activity tab. Strings match icons in views. */
+export type ActivityEventType =
+  | 'session'    // AI session captured
+  | 'commit'     // git commit milestone (extracted from bash)
+  | 'push'       // git push
+  | 'pr_open'
+  | 'pr_merged'
+  | 'release'
+  | 'tag';
+
+export interface ActivityEvent {
+  ts: string;                        // ISO timestamp
+  type: ActivityEventType;
+  by: string;                        // member email (full or local-part — view normalises)
+  project: string;                   // project name
+  summary: string;                   // one-line summary (prompt preview / commit msg / etc.)
+  detail?: {
+    sessionId?: string;
+    tokens?: number;
+    durationMs?: number;
+    promptFull?: string;
+    commitSha?: string;
+    githubUrl?: string;
+  };
+}
+
+export interface ActivityFeedSnapshot {
+  schemaVersion: 1;
+  range: { start: string; end: string; label: string };
+  events: ActivityEvent[];           // time-descending
+  hasMore: boolean;
+  nextCursor?: string;               // ISO timestamp; pass as ?before=
+  computedAt: string;
+  appliedFilter?: FocusFilter;
+}
+
+// =====================================================================
+// Phase 3-D · Insights
+// =====================================================================
+
+export interface InsightsHealthScore {
+  value: number;                       // 0..100
+  deltaVsLastWeek: number;
+  breakdown: {
+    stuckRate: number;                 // 0..100 sub-score
+    rhythm: number;
+    output: number;
+    risk: number;
+  };
+  history30d: number[];                // 30 entries, oldest first
+}
+
+export interface InsightsAnomaly {
+  member: string;                      // local-part
+  signal: string;                      // e.g. "weekly_tokens"
+  direction: 'up' | 'down';
+  magnitudeRatio: number;              // e.g. 2.3 = 2.3x team baseline
+  narrative?: string;                  // LLM-filled when available
+}
+
+export interface InsightsRecommendation {
+  id: string;
+  severity: 'info' | 'warn' | 'critical';
+  headline: string;
+  body: string;
+  triggers: string[];
+}
+
+export interface InsightsTimeWeek {
+  weekStart: string;                   // ISO date
+  tokens: number;
+  sessions: number;
+  commits: number;
+}
+
+export interface InsightsPersonRow {
+  email: string;
+  displayName: string;
+  metrics: {
+    tokens: number;
+    sessions: number;
+    costUsd: number;
+    projectsTouched: number;
+    riskyActions: number;
+  };
+}
+
+export interface InsightsProjectRow {
+  name: string;
+  metrics: {
+    contributors: number;
+    sessions: number;
+    healthScore: number;
+    etaDays: number | null;
+  };
+}
+
+export interface InsightsSnapshot {
+  schemaVersion: 1;
+  computedAt: string;
+  range: { start: string; end: string; label: string };
+  healthScore: InsightsHealthScore;
+  recommendations: InsightsRecommendation[];
+  anomalies: InsightsAnomaly[];
+  axes: {
+    time: { weeks: InsightsTimeWeek[]; narrative?: string };
+    people: { rows: InsightsPersonRow[]; narrative?: string };
+    projects: { rows: InsightsProjectRow[]; narrative?: string };
+  };
+  appliedFilter?: FocusFilter;
 }

@@ -120,6 +120,48 @@ describe('buildMemberDetail', () => {
     });
     expect(result).toBeNull();
   });
+
+  it('caps allPrompts at 12 entries and bounds full ≤ 801 chars', () => {
+    // 2026-05-18 launch audit P0: one member endpoint was shipping 1.1 MB
+    // because every user message landed in allPrompts[].full unbounded. The
+    // cap is 12 entries × ≤800 chars + ellipsis. Regression-guard it here.
+    const fatStart = new Date(NOW.getTime() - 1 * 60 * 60 * 1000);
+    const fatSession: ParsedSession = {
+      envelope: {
+        id: 'env-fat',
+        userId: 'alice@example.com',
+        machineId: 'machine-1',
+        sessionId: 'sess-fat',
+        cwd: '/home/alice/projects/project-alpha',
+        projectName: 'project-alpha',
+        capturedAt: fatStart.toISOString(),
+        rivenVersion: '1.0.0',
+        consentedAt: null,
+      },
+      l1RedactionCount: 0,
+      messages: Array.from({ length: 50 }, (_, i) => makeMsg('m' + i + ' ' + 'y'.repeat(2000))),
+      durationMs: 60_000,
+      startTs: fatStart,
+      endTs: new Date(fatStart.getTime() + 60_000),
+      model: 'claude-sonnet-4-6',
+      tokens: { input: 1000, output: 500, cacheRead: 0, cacheCreation: 0 },
+    };
+    const result = buildMemberDetail({
+      email: 'alice@example.com',
+      sessions: [...FIXTURE, fatSession],
+      range: RANGE,
+      now: NOW,
+      collectorDir: '',
+    });
+    expect(result).not.toBeNull();
+    const fat = result!.detail.sessions.find((s) => s.sessionId === 'sess-fat');
+    expect(fat).toBeDefined();
+    expect(fat!.allPrompts.length).toBeLessThanOrEqual(12);
+    for (const p of fat!.allPrompts) {
+      expect(p.full.length).toBeLessThanOrEqual(801); // 800 + '…'
+      expect(p.preview.length).toBeLessThanOrEqual(200);
+    }
+  });
 });
 
 describe('buildProjectDetail', () => {

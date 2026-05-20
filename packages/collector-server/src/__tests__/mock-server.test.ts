@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import {
   startMockServer,
+  isInjectMockTranscript,
   type MockServerHandle,
 } from '../mock-server.js';
 import { safeUserId, dateStamp } from '@matrix-riven/shared';
@@ -213,6 +214,118 @@ describe('mock-server', () => {
     expect(res.status).toBe(413);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe('payload too large');
+  });
+
+  it('drops inject-mock synthetic transcripts (200 + dropped marker, no file written)', async () => {
+    // Mirror the exact payload `bin-digital-twin inject-mock` produces.
+    const transcript =
+      '{"type":"user","message":{"role":"user","content":"inject-mock probe"},"sessionId":"01KMOCKABCDEFGHIJKLMNOPQRS","cwd":"D:\\\\hrdai\\\\Matrix-Riven","timestamp":"2026-05-15T07:24:41.806Z"}\n' +
+      '{"type":"assistant","message":{"role":"assistant","content":"inject-mock ack"},"sessionId":"01KMOCKABCDEFGHIJKLMNOPQRS","cwd":"D:\\\\hrdai\\\\Matrix-Riven","timestamp":"2026-05-15T07:24:41.808Z"}\n';
+    const compressed = gzipSync(Buffer.from(transcript));
+    const payload = {
+      schema_version: '1.0',
+      envelope: {
+        session_id: '01KMOCKABCDEFGHIJKLMNOPQRS',
+        user_id: 'hrdai@qq.com',
+        captured_at: '2026-05-15T07:24:41.000Z',
+      },
+      transcript: { content: compressed.toString('base64') },
+    };
+    const res = await fetch(`${server.url}/v1/cc-sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      dropped?: string;
+      user_id: string;
+      date: string;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.dropped).toBe('inject-mock');
+    expect(body.user_id).toBe('hrdai@qq.com');
+
+    // No file should land on disk for the user's date dir.
+    const userDir = join(outputDir, 'hrdai@qq.com');
+    if (existsSync(userDir)) {
+      // dateStamp may or may not have created the dir depending on internals,
+      // but if it exists, it must be empty of mock session artifacts.
+      const dates = readdirSync(userDir);
+      for (const d of dates) {
+        const files = readdirSync(join(userDir, d));
+        expect(files).not.toContain('01KMOCKABCDEFGHIJKLMNOPQRS.jsonl');
+        expect(files).not.toContain('01KMOCKABCDEFGHIJKLMNOPQRS.meta.json');
+      }
+    }
+  });
+
+  it('accepts real transcripts that happen to include only one marker string', async () => {
+    // A real session that quotes one of the marker phrases (e.g. user asking
+    // "what does inject-mock probe do?") must NOT be rejected — both markers
+    // must appear for the gate to fire.
+    const transcript =
+      '{"type":"user","message":{"role":"user","content":"what does inject-mock probe do?"},"sessionId":"real-1","timestamp":"2026-05-15T10:00:00.000Z"}\n';
+    const compressed = gzipSync(Buffer.from(transcript));
+    const payload = {
+      schema_version: '1.0',
+      envelope: {
+        session_id: 'real-session-1',
+        user_id: 'real@user.com',
+        captured_at: '2026-05-09T03:00:00.000Z',
+      },
+      transcript: { content: compressed.toString('base64') },
+    };
+    const res = await fetch(`${server.url}/v1/cc-sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      dropped?: string;
+      id: string;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.dropped).toBeUndefined();
+    expect(body.id).toBe('real-session-1');
+
+    const file = join(outputDir, 'real@user.com', '2026-05-09', 'real-session-1.jsonl');
+    expect(existsSync(file)).toBe(true);
+  });
+});
+
+describe('isInjectMockTranscript', () => {
+  it('returns true when both marker strings present', () => {
+    const t =
+      '{"content":"inject-mock probe"}\n{"content":"inject-mock ack"}\n';
+    expect(isInjectMockTranscript(t)).toBe(true);
+  });
+
+  it('returns false when only probe marker present (real session quoting it)', () => {
+    expect(
+      isInjectMockTranscript('{"content":"what does inject-mock probe mean?"}'),
+    ).toBe(false);
+  });
+
+  it('returns false when only ack marker present', () => {
+    expect(
+      isInjectMockTranscript('{"content":"the ack reply was inject-mock ack"}'),
+    ).toBe(false);
+  });
+
+  it('returns false on unrelated transcript', () => {
+    expect(
+      isInjectMockTranscript(
+        '{"content":"hello world"}\n{"content":"goodbye"}',
+      ),
+    ).toBe(false);
+  });
+
+  it('returns false on empty string', () => {
+    expect(isInjectMockTranscript('')).toBe(false);
   });
 });
 

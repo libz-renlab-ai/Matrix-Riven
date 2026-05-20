@@ -157,6 +157,69 @@ describe("emitCcStatus", () => {
     expect(fetchSpy.mock.calls[0]![0]).toBe("http://127.0.0.1:9787/v1/cc-status");
   });
 
+  it("identity-from-config: cc-status user_id matches digital-twin.json identity.user_id (no git config / hostname fallback)", async () => {
+    // Regression for the ghost-user bug: when `git config user.email` returns
+    // empty (non-git cwd / unset local+global), realtime-emit used to fall
+    // back to `${username}@${hostname()}` while bin-uploader still wrote
+    // transcripts under the configured identity. Result: same physical CC
+    // session split into TWO user_id buckets on the collector.
+    //
+    // Fix: read `identity.user_id` from digital-twin.json FIRST, fall back to
+    // getUserId() only when config is missing / has no identity.
+    writeDigitalTwinConfig({
+      enabled: true,
+      endpoint: "http://127.0.0.1:9787",
+      token: "team-shared",
+    });
+    process.env.TEAMAGENT_REALTIME_URL = "http://127.0.0.1:9787";
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    emitCcStatus({
+      event: "session_start",
+      sessionId: "s-identity-config",
+      cwd: "/tmp/non-git-dir",
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    // writeDigitalTwinConfig() writes identity.user_id = 'test@example.com'.
+    // That MUST be the user_id on the snapshot — NOT a `${username}@${hostname}`
+    // fallback derived from the runtime user.
+    expect(body.user_id).toBe("test@example.com");
+    expect(body.user_id).not.toMatch(/@.+\.local$/);
+  });
+
+  it("identity-from-config: empty identity.user_id falls through to getUserId() chain", async () => {
+    // Edge case: config exists but identity.user_id is an empty string —
+    // treat as "no usable identity" and let the existing getUserId() chain
+    // (git config / hostname) take over.
+    const cfgDir = path.join(sandboxHome, ".teamagent");
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cfgDir, "digital-twin.json"),
+      JSON.stringify({
+        schema_version: "1",
+        identity: { user_id: "", machine_id: "test-host" },
+        uploader: { enabled: true, endpoint: "http://127.0.0.1:9787", token: null },
+        consented_at: new Date().toISOString(),
+      }),
+    );
+    __resetIdentityCacheForTests();
+    process.env.TEAMAGENT_REALTIME_URL = "http://127.0.0.1:9787";
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    emitCcStatus({ event: "session_start", sessionId: "s-empty-id" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    // Falls through to getUserId() — could be a real git email OR the
+    // hostname fallback; either way it is NOT the literal empty string.
+    expect(typeof body.user_id).toBe("string");
+    expect(body.user_id.length).toBeGreaterThan(0);
+    expect(body.user_id).not.toBe("");
+  });
+
   it("fires one POST to /v1/cc-status when the URL is set", async () => {
     process.env.TEAMAGENT_REALTIME_URL = "http://127.0.0.1:9787";
     const fetchSpy = vi.fn().mockResolvedValue(

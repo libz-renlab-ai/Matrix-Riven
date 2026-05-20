@@ -12,3 +12,16 @@ packages/*/.teamagent/
 .env
 .env.local
 .superpowers/
+
+# Smoke + QA evidence artifacts (manual curl dumps from launch-readiness rounds)
+tmp_*.html
+tmp_*.json
+.tmp_*.html
+.tmp_*.json
+.qa-*.html
+.qa-*.body.html
+.em-*.html
+.smoke-*.json
+.smoke-cache/
+.deploy/
+0jingtongMatrix-Riven.claudeworktreesenumerated-roaming-engelbart.*.html

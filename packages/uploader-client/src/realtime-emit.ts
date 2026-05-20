@@ -256,18 +256,61 @@ function readConfigBaseUrl(): string | null {
   }
 }
 
+/**
+ * Read `identity.user_id` from the digital-twin config (the value the user
+ * established at `bin-digital-twin login`). This is the SAME source the
+ * transcript-upload path (`bin-uploader.ts`) reads, so cc-status snapshots
+ * and transcripts land under the same `user_id` on the collector instead of
+ * splitting (the bug that produced ghost `neurobot@NeuroBot` directories
+ * alongside the real `hrdai@qq.com` data).
+ *
+ * Returns null when the config is missing, unparseable, has no identity
+ * block, or has an empty `user_id` string — caller falls back to
+ * `getUserId()` (git config / hostname) in that order.
+ */
+function readConfigUserId(): string | null {
+  try {
+    const paths = digitalTwinPaths(homeForConfig());
+    const cfg: DigitalTwinConfig | null = loadConfig(paths.configFile);
+    if (!cfg) return null;
+    const id = cfg.identity?.user_id;
+    if (typeof id !== "string" || id.length === 0) return null;
+    return id;
+  } catch {
+    return null;
+  }
+}
+
 function buildSnapshot(input: EmitInput): CcStatusSnapshot {
   if (!cachedUserId) {
-    try {
-      // Hard 200ms cap on the git shell-out. A stuck git config (NFS HOME,
-      // corporate proxy resolving git LFS, etc.) would otherwise block the
-      // SessionStart critical path on the FIRST emit. Cache hits after that.
-      const resolved = getUserId({ timeoutMs: 200 });
-      cachedUserId = resolved && resolved.length > 0
-        ? resolved
-        : `unknown@${hostname()}`;
-    } catch {
-      cachedUserId = `unknown@${hostname()}`;
+    // Identity resolution priority — must match the transcript-upload path
+    // (`bin-uploader.ts`) so a single CC session lands every artifact under
+    // the same `user_id` on the collector:
+    //   1. `digital-twin.json identity.user_id`  ← canonical, set at `login`
+    //   2. `git config user.email`               ← fallback for unconfigured installs
+    //   3. `${username}@${hostname()}`           ← last-resort fallback (no git, no email)
+    //
+    // Before this priority was introduced, realtime hooks only consulted
+    // steps 2-3 and ignored the config file entirely. A user whose `git config
+    // user.email` came back empty (non-git cwd, unset local + global) would
+    // see the same physical session split into two `user_id`s: transcripts
+    // under their real id (from config) and cc-status snapshots under the
+    // hostname fallback. The collector then surfaced a phantom user.
+    const fromConfig = readConfigUserId();
+    if (fromConfig) {
+      cachedUserId = fromConfig;
+    } else {
+      try {
+        // Hard 200ms cap on the git shell-out. A stuck git config (NFS HOME,
+        // corporate proxy resolving git LFS, etc.) would otherwise block the
+        // SessionStart critical path on the FIRST emit. Cache hits after that.
+        const resolved = getUserId({ timeoutMs: 200 });
+        cachedUserId = resolved && resolved.length > 0
+          ? resolved
+          : `unknown@${hostname()}`;
+      } catch {
+        cachedUserId = `unknown@${hostname()}`;
+      }
     }
   }
   if (!cachedMachineId) {

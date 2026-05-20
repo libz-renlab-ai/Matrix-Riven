@@ -73,7 +73,17 @@ export const CLIENT_REFRESH_SCRIPT = `
   async function pollSO() {
     if (!soKind || !soId) return;
     var base = soKind === 'member' ? '/api/members/' : '/api/projects/';
-    var url = base + encodeURIComponent(soId);
+    // 2026-05-18 round-14 audit P0: when the overview is in demo mode
+    // (?demo=1), the slideover fetch must carry the flag too — otherwise
+    // /api/members/:id falls through to the real-data path and 404s on
+    // the fake email local-parts. Propagate from location.search.
+    var qs = '';
+    try {
+      if (typeof location !== 'undefined' && /(\\?|&)demo=1(&|$)/.test(location.search)) {
+        qs = '?demo=1';
+      }
+    } catch (e) { /* SSR / non-browser fallback — qs stays empty */ }
+    var url = base + encodeURIComponent(soId) + qs;
     var headers = { accept: 'application/json' };
     if (soEtag) headers['if-none-match'] = soEtag;
     try {
@@ -160,6 +170,31 @@ export const CLIENT_REFRESH_SCRIPT = `
     soEtag = null;
   };
 
+  // 2026-05-19 QA-4 P1: deeplink from /projects/<id> redirect. The
+  // server now 302's /projects/<id> → /projects#project=<id>; we read
+  // the fragment on load and auto-open the slideover so the chevron's
+  // promised "drill-down" actually lands. Same hook accepts
+  // #member=<id> for symmetry with /members/<id> → /people/<id>.
+  function handleSlideoverHash() {
+    var hash = String(window.location.hash || '').replace(/^#/, '');
+    if (!hash) return;
+    var parts = hash.split('=');
+    if (parts.length !== 2) return;
+    var kind = parts[0] === 'project' ? 'project'
+             : parts[0] === 'member'  ? 'member'
+             : null;
+    if (!kind) return;
+    var id = decodeURIComponent(parts[1]);
+    if (!/^[A-Za-z0-9._@\/-]{1,128}$/.test(id)) return;
+    window.openSO(kind, id);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', handleSlideoverHash);
+  } else {
+    handleSlideoverHash();
+  }
+  window.addEventListener('hashchange', handleSlideoverHash);
+
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') window.closeSO();
   });
@@ -209,8 +244,22 @@ export const CLIENT_REFRESH_SCRIPT = `
 
   async function pollOverview() {
     try {
+      // 2026-05-18 round-15 audit P0: propagate the demo flag.
+      // 2026-05-19 QA-7 P1: propagate THE WHOLE query string. Previous
+      // version only carried "?demo=1", so a leader on
+      // /overview?demo=1&focus=alex&range=7d kept getting their filtered
+      // 1-member view silently swapped back to the unfiltered 4-member
+      // /api/overview?demo=1 response every 30 s. The chip stayed
+      // orange while the data underneath flipped. Now we forward
+      // location.search verbatim (drop hash; the API doesnt care).
+      var ovQs = '';
+      try {
+        if (typeof location !== 'undefined' && location.search) {
+          ovQs = location.search;
+        }
+      } catch (e) { /* SSR / non-browser fallback */ }
       var headers = overviewEtag ? { 'if-none-match': overviewEtag } : {};
-      var resp = await fetch('/api/overview', { headers: headers });
+      var resp = await fetch('/api/overview' + ovQs, { headers: headers });
       if (resp.status === 304) {
         flashLiveDot();
         return;

@@ -22,12 +22,21 @@ import {
 } from './_overview-fragments.js';
 import { renderSlideoverShell } from './_slideover.html.js';
 import { CLIENT_REFRESH_SCRIPT } from './_refresh.js.js';
+import { FILTER_BAR_CSS, FILTER_BAR_SCRIPT } from './_filter-bar.client.js';
+import { CONSENT_BANNER_CSS, CONSENT_BANNER_SCRIPT, renderConsentBanner } from './_consent-banner.html.js';
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-export function renderOverview(snapshot: OverviewSnapshot): string {
+export interface RenderOverviewExtras {
+  /** Phase 3-A. Pre-rendered filter bar HTML to inject below the nav. */
+  filterBarHtml?: string;
+  /** QA-5 legal P0. Suppress consent banner in demo mode. */
+  demo?: boolean;
+}
+
+export function renderOverview(snapshot: OverviewSnapshot, extras: RenderOverviewExtras = {}): string {
   const { members, projects, range } = snapshot;
 
   const membersSection = members.length === 0
@@ -44,12 +53,16 @@ export function renderOverview(snapshot: OverviewSnapshot): string {
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Leadership · Matrix-Riven</title>
-<style>${LEADERSHIP_CSS}</style>
+<style>${LEADERSHIP_CSS}
+${FILTER_BAR_CSS}
+${CONSENT_BANNER_CSS}</style>
 </head>
 <body>
 <div class="shell">
-${renderNav('overview', { rangeLabel: navRangeLabel })}
+${renderNav('overview', { rangeLabel: navRangeLabel, demo: extras.demo === true })}
+${extras.filterBarHtml ?? ''}
 ${snapshot.staleness ? renderStaleBanner(snapshot.staleness) : ''}
 ${renderHeroFragment(snapshot)}
 ${renderKpisFragment(snapshot)}
@@ -60,7 +73,10 @@ ${renderHighlightsFragment(snapshot)}
 ${renderCollabFragment(snapshot)}
 </div>
 ${renderSlideoverShell()}
+${renderConsentBanner({ demo: extras.demo === true })}
 <script>${CLIENT_REFRESH_SCRIPT}</script>
+<script>${FILTER_BAR_SCRIPT}</script>
+<script>${CONSENT_BANNER_SCRIPT}</script>
 </body>
 </html>`;
 }
