@@ -13,6 +13,8 @@ import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import {
   startMockServer,
+  isInjectMockTranscript,
+  isGhostUserId,
   type MockServerHandle,
 } from '../mock-server.js';
 import { safeUserId, dateStamp } from '@matrix-riven/shared';
@@ -93,7 +95,12 @@ describe('mock-server', () => {
     expect(existsSync(join(outputDir, 'unknown', FROZEN_DATE, 'no-user.jsonl'))).toBe(true);
   });
 
-  it('sanitizes path-unsafe characters in user_id', async () => {
+  it('rejects path-traversal user_id with 400', async () => {
+    // Round-2 QA P0 (security N1): previously this payload was silently
+    // sanitized — `'../../etc/passwd\\evil'` got collapsed to a legit-looking
+    // folder. Penetration-test residue then appeared as a real team member.
+    // Now any provided user_id that doesn't match the email/local-part
+    // allowlist is rejected with 400 before any write.
     const transcript = '{"x":1}\n';
     const compressed = gzipSync(Buffer.from(transcript));
     const payload = {
@@ -110,12 +117,9 @@ describe('mock-server', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { user_id: string };
-    expect(body.user_id).not.toContain('/');
-    expect(body.user_id).not.toContain('\\');
-    expect(body.user_id).not.toContain('..');
-    expect(existsSync(join(outputDir, body.user_id, '2026-05-09', 'sx.jsonl'))).toBe(true);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toBe('invalid user_id');
   });
 
   it('rejects non-POST/GET with 405', async () => {
@@ -214,6 +218,347 @@ describe('mock-server', () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe('payload too large');
   });
+
+  it('drops inject-mock synthetic transcripts (200 + dropped marker, no file written)', async () => {
+    // Mirror the exact payload `bin-digital-twin inject-mock` produces.
+    const transcript =
+      '{"type":"user","message":{"role":"user","content":"inject-mock probe"},"sessionId":"01KMOCKABCDEFGHIJKLMNOPQRS","cwd":"D:\\\\hrdai\\\\Matrix-Riven","timestamp":"2026-05-15T07:24:41.806Z"}\n' +
+      '{"type":"assistant","message":{"role":"assistant","content":"inject-mock ack"},"sessionId":"01KMOCKABCDEFGHIJKLMNOPQRS","cwd":"D:\\\\hrdai\\\\Matrix-Riven","timestamp":"2026-05-15T07:24:41.808Z"}\n';
+    const compressed = gzipSync(Buffer.from(transcript));
+    const payload = {
+      schema_version: '1.0',
+      envelope: {
+        session_id: '01KMOCKABCDEFGHIJKLMNOPQRS',
+        user_id: 'hrdai@qq.com',
+        captured_at: '2026-05-15T07:24:41.000Z',
+      },
+      transcript: { content: compressed.toString('base64') },
+    };
+    const res = await fetch(`${server.url}/v1/cc-sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      dropped?: string;
+      user_id: string;
+      date: string;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.dropped).toBe('inject-mock');
+    expect(body.user_id).toBe('hrdai@qq.com');
+
+    // No file should land on disk for the user's date dir.
+    const userDir = join(outputDir, 'hrdai@qq.com');
+    if (existsSync(userDir)) {
+      // dateStamp may or may not have created the dir depending on internals,
+      // but if it exists, it must be empty of mock session artifacts.
+      const dates = readdirSync(userDir);
+      for (const d of dates) {
+        const files = readdirSync(join(userDir, d));
+        expect(files).not.toContain('01KMOCKABCDEFGHIJKLMNOPQRS.jsonl');
+        expect(files).not.toContain('01KMOCKABCDEFGHIJKLMNOPQRS.meta.json');
+      }
+    }
+  });
+
+  it('accepts real transcripts that happen to include only one marker string', async () => {
+    // A real session that quotes one of the marker phrases (e.g. user asking
+    // "what does inject-mock probe do?") must NOT be rejected — both markers
+    // must appear for the gate to fire.
+    const transcript =
+      '{"type":"user","message":{"role":"user","content":"what does inject-mock probe do?"},"sessionId":"real-1","timestamp":"2026-05-15T10:00:00.000Z"}\n';
+    const compressed = gzipSync(Buffer.from(transcript));
+    const payload = {
+      schema_version: '1.0',
+      envelope: {
+        session_id: 'real-session-1',
+        user_id: 'real@user.com',
+        captured_at: '2026-05-09T03:00:00.000Z',
+      },
+      transcript: { content: compressed.toString('base64') },
+    };
+    const res = await fetch(`${server.url}/v1/cc-sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      dropped?: string;
+      id: string;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.dropped).toBeUndefined();
+    expect(body.id).toBe('real-session-1');
+
+    const file = join(outputDir, 'real@user.com', '2026-05-09', 'real-session-1.jsonl');
+    expect(existsSync(file)).toBe(true);
+  });
+});
+
+describe('isInjectMockTranscript', () => {
+  it('returns true when both marker strings present', () => {
+    const t =
+      '{"content":"inject-mock probe"}\n{"content":"inject-mock ack"}\n';
+    expect(isInjectMockTranscript(t)).toBe(true);
+  });
+
+  it('returns false when only probe marker present (real session quoting it)', () => {
+    expect(
+      isInjectMockTranscript('{"content":"what does inject-mock probe mean?"}'),
+    ).toBe(false);
+  });
+
+  it('returns false when only ack marker present', () => {
+    expect(
+      isInjectMockTranscript('{"content":"the ack reply was inject-mock ack"}'),
+    ).toBe(false);
+  });
+
+  it('returns false on unrelated transcript', () => {
+    expect(
+      isInjectMockTranscript(
+        '{"content":"hello world"}\n{"content":"goodbye"}',
+      ),
+    ).toBe(false);
+  });
+
+  it('returns false on empty string', () => {
+    expect(isInjectMockTranscript('')).toBe(false);
+  });
+});
+
+describe('isGhostUserId', () => {
+  it('returns false for real email TLDs', () => {
+    expect(isGhostUserId('hrdai@qq.com')).toBe(false);
+    expect(isGhostUserId('charleyplztrybest@outlook.com')).toBe(false);
+    expect(isGhostUserId('liboze2026@163.com')).toBe(false);
+    expect(isGhostUserId('chenjr@nb-ai.com')).toBe(false);
+    expect(isGhostUserId('witkowskiloeser@gmail.com')).toBe(false);
+    expect(isGhostUserId('horton2048@users.noreply.github.com')).toBe(false);
+  });
+
+  it('returns true for bare hostname fallback', () => {
+    expect(isGhostUserId('19723@hut')).toBe(true);
+    expect(isGhostUserId('asus@yilinFormula1')).toBe(true);
+    expect(isGhostUserId('neurobot@NeuroBot')).toBe(true);
+  });
+
+  it('returns true for .local mDNS hostname suffix', () => {
+    expect(isGhostUserId('blink@BlinkdeMacBook-Air.local')).toBe(true);
+    expect(isGhostUserId('lv@lvjiawendeMacBook-Air.local')).toBe(true);
+    expect(isGhostUserId('zhangziyi@zhangziyideMacBook-Air-2.local')).toBe(true);
+    expect(isGhostUserId('alexpeng@pengchengdeMacBook-Air.local')).toBe(true);
+  });
+
+  it('handles edge cases', () => {
+    expect(isGhostUserId('')).toBe(false);
+    expect(isGhostUserId('no-at-sign')).toBe(false);
+    expect(isGhostUserId('@host')).toBe(false); // empty local part
+  });
+
+  it('leans conservative on unknown TLDs (dot present, not in allowlist → real)', () => {
+    expect(isGhostUserId('person@company.example')).toBe(false);
+  });
+});
+
+describe('mock-server — redundant-ghost rejection on POST /v1/cc-status', () => {
+  let server: MockServerHandle;
+  let outputDir: string;
+
+  beforeEach(async () => {
+    outputDir = mkdtempSync(join(tmpdir(), 'dt-mock-ghost-'));
+    server = await startMockServer({ port: 0, outputDir, now: () => FROZEN });
+  });
+
+  afterEach(async () => {
+    await server.close();
+  });
+
+  it('drops cc-status from ghost user_id when same session_id has a non-ghost transcript', async () => {
+    // 1. Real-email user posts the transcript first (via direct disk write —
+    //    skips the POST so we isolate the cc-status gate logic).
+    const realDir = join(outputDir, 'hrdai@qq.com', FROZEN_DATE);
+    mkdirSync(realDir, { recursive: true });
+    writeFileSync(join(realDir, 'session-X.jsonl'), '{"role":"user"}\n');
+
+    // 2. Ghost user_id POSTs a cc-status snapshot for the SAME session_id.
+    const res = await fetch(`${server.url}/v1/cc-status`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema_version: 1,
+        session_id: 'session-X',
+        user_id: 'neurobot@NeuroBot',
+        ts: '2026-05-09T03:14:00.000Z',
+        event: 'user_prompt_submit',
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      dropped?: string;
+      user_id: string;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.dropped).toBe('redundant-ghost');
+    expect(body.user_id).toBe('neurobot@NeuroBot');
+
+    // 3. Ghost user dir MUST NOT exist on disk.
+    expect(existsSync(join(outputDir, 'neurobot@NeuroBot'))).toBe(false);
+  });
+
+  it('accepts ghost cc-status when NO non-ghost peer holds the session_id (sole-identity ghost)', async () => {
+    const res = await fetch(`${server.url}/v1/cc-status`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema_version: 1,
+        session_id: 'lonely-session',
+        user_id: 'blink@BlinkdeMacBook-Air.local',
+        ts: '2026-05-09T03:14:00.000Z',
+        event: 'session_start',
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; dropped?: string };
+    expect(body.ok).toBe(true);
+    expect(body.dropped).toBeUndefined();
+  });
+
+  it('accepts real-email cc-status regardless of any same-session peer (gate is ghost-only)', async () => {
+    // A real-email user's cc-status MUST always be accepted, even if some
+    // other path looks "redundant" — the gate is shape-gated, never fires
+    // on a real-email caller.
+    const res = await fetch(`${server.url}/v1/cc-status`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema_version: 1,
+        session_id: 'real-session',
+        user_id: 'hrdai@qq.com',
+        ts: '2026-05-09T03:14:00.000Z',
+        event: 'session_start',
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; dropped?: string };
+    expect(body.ok).toBe(true);
+    expect(body.dropped).toBeUndefined();
+  });
+});
+
+describe('mock-server — redundant-ghost sweep on POST /v1/cc-sessions', () => {
+  let server: MockServerHandle;
+  let outputDir: string;
+
+  beforeEach(async () => {
+    outputDir = mkdtempSync(join(tmpdir(), 'dt-mock-sweep-'));
+    server = await startMockServer({ port: 0, outputDir, now: () => FROZEN });
+  });
+
+  afterEach(async () => {
+    await server.close();
+  });
+
+  it('removes pre-existing ghost cc-status orphans for the same session_id on the same date', async () => {
+    // Plant a ghost cc-status fragment on disk before the transcript arrives.
+    // Mirrors the real-world ordering: realtime hook fires first under ghost,
+    // Stop hook fires later under real email.
+    const ghostDir = join(outputDir, 'neurobot@NeuroBot', '2026-05-09');
+    mkdirSync(ghostDir, { recursive: true });
+    writeFileSync(
+      join(ghostDir, 'sess-Y.cc-status.jsonl'),
+      '{"schema_version":1,"session_id":"sess-Y","user_id":"neurobot@NeuroBot","ts":"...","event":"session_start"}\n',
+    );
+
+    // Real-email transcript POST for sess-Y.
+    const transcript = '{"role":"user","content":"hello"}\n';
+    const compressed = gzipSync(Buffer.from(transcript));
+    const res = await fetch(`${server.url}/v1/cc-sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema_version: '1.0',
+        envelope: {
+          session_id: 'sess-Y',
+          user_id: 'hrdai@qq.com',
+          captured_at: '2026-05-09T03:00:00.000Z',
+        },
+        transcript: { content: compressed.toString('base64') },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      id: string;
+      ghost_cc_status_swept?: number;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.ghost_cc_status_swept).toBe(1);
+
+    // Ghost orphan gone, real transcript present.
+    expect(existsSync(join(ghostDir, 'sess-Y.cc-status.jsonl'))).toBe(false);
+    expect(
+      existsSync(join(outputDir, 'hrdai@qq.com', '2026-05-09', 'sess-Y.jsonl')),
+    ).toBe(true);
+  });
+
+  it('leaves sole-identity ghost cc-status alone when the SAME ghost posts the transcript (no real-email peer exists)', async () => {
+    // Sole-identity ghost (e.g. lv@...local): both the transcript AND the
+    // cc-status legitimately live under this ghost dir — no real-email peer
+    // holds the data. Cold-read of an earlier rev of this commit caught a
+    // P0 bug: the sweep iterated every ghost dir and would unlink the
+    // sole-identity ghost's OWN cc-status when they posted their transcript.
+    // The peer-gated sweep (`hasNonGhostTranscript` first) fixes it.
+    const ghostDir = join(
+      outputDir,
+      'lv@lvjiawendeMacBook-Air.local',
+      '2026-05-09',
+    );
+    mkdirSync(ghostDir, { recursive: true });
+    const ccStatusPath = join(ghostDir, 'sole-Z.cc-status.jsonl');
+    writeFileSync(
+      ccStatusPath,
+      '{"schema_version":1,"session_id":"sole-Z","user_id":"lv@lvjiawendeMacBook-Air.local","ts":"2026-05-09T02:55:00.000Z","event":"session_start"}\n',
+    );
+
+    const transcript = '{"role":"user","content":"hi"}\n';
+    const compressed = gzipSync(Buffer.from(transcript));
+    const res = await fetch(`${server.url}/v1/cc-sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema_version: '1.0',
+        envelope: {
+          session_id: 'sole-Z',
+          user_id: 'lv@lvjiawendeMacBook-Air.local',
+          captured_at: '2026-05-09T03:00:00.000Z',
+        },
+        transcript: { content: compressed.toString('base64') },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      ghost_cc_status_swept?: number;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.ghost_cc_status_swept ?? 0).toBe(0);
+    // The transcript landed under the ghost dir (sole identity).
+    expect(
+      existsSync(
+        join(outputDir, 'lv@lvjiawendeMacBook-Air.local', '2026-05-09', 'sole-Z.jsonl'),
+      ),
+    ).toBe(true);
+    // The pre-existing cc-status MUST still be there. This is the bug fix
+    // the cold-read flagged.
+    expect(existsSync(ccStatusPath)).toBe(true);
+  });
 });
 
 describe('safeUserId', () => {
@@ -285,8 +630,20 @@ describe('mock-server dashboard', () => {
     await server.close();
   });
 
-  it('GET / returns the HTML dashboard', async () => {
+  // P-B2: GET / now serves the leadership Overview tab. The legacy
+  // "Matrix Riven Collector" Phase-1 dashboard is reached via `?sid=<...>`
+  // (the P-A4 "查看 raw ↗" link relies on this deferral).
+  it('GET / returns the leadership Overview tab (P-B2)', async () => {
     const res = await fetch(`${server.url}/`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type') ?? '').toContain('text/html');
+    const body = await res.text();
+    expect(body).toContain('class="nav');
+    expect(body).toContain('Overview');
+  });
+
+  it('GET /?sid=XYZ still serves the Phase-1 dashboard (P-A4 raw link)', async () => {
+    const res = await fetch(`${server.url}/?sid=01ABC`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type') ?? '').toContain('text/html');
     const body = await res.text();
@@ -897,16 +1254,15 @@ describe('mock-server — M2 member-stats', () => {
   });
 });
 
-// Task 8 — leadership-overview HTTP route. Wires the disk-scan + aggregator
-// pair (built in tasks 1-7) onto the existing mock-server at GET /api/overview.
+// Task 8 → superseded by Task 15. GET /api/overview now returns an
+// OverviewSnapshot (schemaVersion 1 + kpis/members/projects/collaboration
+// arrays) built by the leadership aggregator instead of the legacy
+// date-based disk-scan. Tests updated to match the new response shape.
 describe('GET /api/overview', () => {
   let server: MockServerHandle;
   let outputDir: string;
 
-  // 08:00Z keeps us comfortably away from any date-boundary timezone surprises
-  // when asserting the default-date branch picks today.
   const FIXED_NOW = new Date('2026-05-15T08:00:00.000Z');
-  const FIXED_DATE = '2026-05-15';
 
   beforeEach(async () => {
     outputDir = mkdtempSync(join(tmpdir(), 'riven-overview-route-'));
@@ -923,72 +1279,57 @@ describe('GET /api/overview', () => {
     rmSync(outputDir, { recursive: true, force: true });
   });
 
-  interface OverviewBody {
-    date: string;
-    generated_at: string;
-    cost: {
-      team_total_usd: number;
-      per_user: Array<{ user_id: string; cost_usd: number }>;
-      quota_per_user: unknown[];
-      model_distribution: unknown[];
-    };
-    productivity: { per_user: Array<{ user_id: string; turn_count: number }> };
-    projects: unknown;
-    quality: unknown;
+  interface OverviewSnapshot {
+    schemaVersion: number;
+    computedAt: string;
+    range: { start: string; end: string; label: string };
+    kpis: unknown;
+    members: unknown[];
+    projects: unknown[];
+    collaboration: unknown[];
   }
 
-  it('returns 200 + valid OverviewResponse shape on empty server', async () => {
-    const res = await fetch(`${server.url}/api/overview?date=${FIXED_DATE}`);
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as OverviewBody;
-    expect(body.date).toBe(FIXED_DATE);
-    expect(typeof body.generated_at).toBe('string');
-    expect(body.cost).toBeDefined();
-    expect(body.productivity).toBeDefined();
-    expect(body.projects).toBeDefined();
-    expect(body.quality).toBeDefined();
-  });
-
-  it('400s on syntactically-invalid date= param', async () => {
-    const res = await fetch(`${server.url}/api/overview?date=not-a-date`);
-    expect(res.status).toBe(400);
-  });
-
-  it('400s on calendar-impossible date= param', async () => {
-    const res = await fetch(`${server.url}/api/overview?date=2026-13-99`);
-    expect(res.status).toBe(400);
-  });
-
-  it('defaults date= to today (UTC from injected clock) when omitted', async () => {
+  it('returns 200 + valid OverviewSnapshot shape on empty server', async () => {
     const res = await fetch(`${server.url}/api/overview`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as OverviewBody;
-    expect(body.date).toBe(FIXED_DATE);
+    const ct = res.headers.get('content-type');
+    expect(ct).toContain('application/json');
+    const body = (await res.json()) as OverviewSnapshot;
+    expect(body.schemaVersion).toBe(1);
+    expect(typeof body.computedAt).toBe('string');
+    expect(body.kpis).toBeDefined();
+    expect(Array.isArray(body.members)).toBe(true);
+    expect(Array.isArray(body.projects)).toBe(true);
+    expect(Array.isArray(body.collaboration)).toBe(true);
   });
 
-  it('aggregates real cc-status data into per_user cost + productivity', async () => {
-    const user = 'alice@x';
-    const dayDir = join(outputDir, user, FIXED_DATE);
-    mkdirSync(dayDir, { recursive: true });
-    // user_id in the snapshot row must match the directory name — aggregateCost
-    // groups by snapshot.user_id, not by directory.
-    const snap = {
-      schema_version: 1,
-      session_id: 's1',
-      user_id: user,
-      ts: '2026-05-15T10:00:00.000Z',
-      event: 'user_prompt_submit',
-      cost_usd: 7.5,
-      turn_count: 12,
-    };
-    writeFileSync(join(dayDir, 's1.cc-status.jsonl'), JSON.stringify(snap) + '\n');
-
-    const res = await fetch(`${server.url}/api/overview?date=${FIXED_DATE}`);
+  it('accepts ?range=7d query param', async () => {
+    const res = await fetch(`${server.url}/api/overview?range=7d`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as OverviewBody;
-    expect(body.cost.team_total_usd).toBeCloseTo(7.5);
-    expect(body.cost.per_user[0]).toEqual({ user_id: user, cost_usd: 7.5 });
-    expect(body.productivity.per_user[0]?.turn_count).toBe(12);
+    const body = (await res.json()) as OverviewSnapshot;
+    expect(body.range.label).toBe('7d');
+  });
+
+  it('accepts ?range=24h query param', async () => {
+    const res = await fetch(`${server.url}/api/overview?range=24h`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as OverviewSnapshot;
+    expect(body.range.label).toBe('24h');
+  });
+
+  it('defaults to 7d range when range param omitted', async () => {
+    const res = await fetch(`${server.url}/api/overview`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as OverviewSnapshot;
+    expect(body.range.label).toBe('7d');
+  });
+
+  it('returns empty members + projects arrays when no sessions exist', async () => {
+    const res = await fetch(`${server.url}/api/overview`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as OverviewSnapshot;
+    expect(body.members).toHaveLength(0);
+    expect(body.projects).toHaveLength(0);
   });
 });
 

@@ -12,7 +12,8 @@
  *   429 / 5xx → transient, retry with exponential backoff
  *   other 4xx → permanent client error → dead-letter
  */
-import { detectSensitiveText, redactSensitiveText, buildCcSessionEnvelope, type CcSessionEnvelope, type CcSessionMetadata, buildRecordingEnvelope, type RecordingEnvelope, type RecordingMetadata } from '@matrix-riven/shared';
+import { redactSensitiveText, scanTranscriptForStats, buildCcSessionEnvelope, type CcSessionEnvelope, type CcSessionMetadata, buildRecordingEnvelope, type RecordingEnvelope, type RecordingMetadata, type EnvelopeExtras } from '@matrix-riven/shared';
+import { computeEnvelopeExtras } from './envelope-extras.js';
 
 export type UploadOutcome =
   | { kind: 'success'; status: number }
@@ -37,6 +38,8 @@ export interface UploadInput {
   endpoint: string;
   token: string;
   identity: UploadIdentity;
+  /** Bucket 1/2 — pre-computed envelope extras (host/digest/CLAUDE.md/redaction stats). */
+  envelopeExtras?: EnvelopeExtras;
 }
 
 export type FetchLike = (
@@ -74,6 +77,7 @@ const defaultBuildEnvelope = (input: UploadInput): UploadEntryEnvelope => {
     payloadBytes: input.payloadBytes,
     identity: input.identity,
     quota: input.metadata.quota,
+    ...(input.envelopeExtras ? { extras: input.envelopeExtras } : {}),
   });
 };
 
@@ -98,17 +102,29 @@ export async function uploadEntry(
   // in the uploader daemon — a detached process, NOT the Stop-hook path — so
   // the collector's <=5ms latency budget is untouched. Recordings carry binary
   // audio that is not text-redactable, so they pass through unchanged.
+  //
+  // Bucket 1/2 (F1 + F5): we now also compute by-kind + by-location stats and
+  // (A8 + C5-C10) read settings.json / CLAUDE.md / OAuth + sample host info —
+  // all in this single daemon-side pass so the Stop-hook critical path stays
+  // untouched.
   let effectiveInput = input;
   let l1RedactionCount = 0;
   if (input.metadata.kind === 'cc-session') {
     const raw = input.payloadBytes.toString('utf8');
-    l1RedactionCount = detectSensitiveText(raw).length;
-    if (l1RedactionCount > 0) {
-      effectiveInput = {
-        ...input,
-        payloadBytes: Buffer.from(redactSensitiveText(raw), 'utf8'),
-      };
-    }
+    const stats = scanTranscriptForStats(raw);
+    l1RedactionCount = stats.count;
+    const extras = computeEnvelopeExtras({
+      cwd: input.metadata.cwd,
+      redactionsByKind: stats.count > 0 ? stats.by_kind : undefined,
+      redactionsByLocation: stats.count > 0 ? stats.by_location : undefined,
+    });
+    const redactedPayload =
+      stats.count > 0 ? Buffer.from(redactSensitiveText(raw), 'utf8') : input.payloadBytes;
+    effectiveInput = {
+      ...input,
+      payloadBytes: redactedPayload,
+      envelopeExtras: extras,
+    };
   }
 
   const envelope = buildFn(effectiveInput);
@@ -127,6 +143,11 @@ export async function uploadEntry(
         'content-type': 'application/json',
         authorization: `Bearer ${input.token}`,
         'idempotency-key': input.metadata.id,
+        // CSRF / DNS-rebind hardening (Round-1 QA P2 security). Custom
+        // header forces a CORS preflight from any browser-origin attacker;
+        // server-side, presence of this header marks the request as
+        // coming from a riven client, not a generic browser fetch.
+        'x-riven-client': 'uploader',
       },
       body: JSON.stringify(envelope),
     });

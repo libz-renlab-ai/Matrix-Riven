@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectSensitiveText, redactSensitiveText } from "../redactor.js";
+import { detectSensitiveText, redactSensitiveText, scanTranscriptForStats } from "../redactor.js";
 
 describe("PII redactor", () => {
   it("detects team-sharing sensitive identifiers", () => {
@@ -112,5 +112,60 @@ describe("PII redactor", () => {
     const text = "reference 4532015112830367 in the logs";
     expect(detectSensitiveText(text).some((f) => f.kind === "credit-card")).toBe(false);
     expect(redactSensitiveText(text)).toContain("4532015112830367");
+  });
+
+  // ── Bucket 1/2 — scanTranscriptForStats (F1 by-kind + F5 by-location) ─────
+  describe("scanTranscriptForStats (bucket 1/2)", () => {
+    it("counts findings grouped by kind across the transcript", () => {
+      const jsonl = [
+        '{"type":"user","message":{"role":"user","content":"contact alice@example.com about it"}}',
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"use sk-ant-api03-LEAKED0123456789 carefully"}]}}',
+      ].join("\n");
+      const stats = scanTranscriptForStats(jsonl);
+      expect(stats.count).toBeGreaterThanOrEqual(2);
+      expect(stats.by_kind.email).toBeGreaterThanOrEqual(1);
+      expect(stats.by_kind.secret).toBeGreaterThanOrEqual(1);
+    });
+
+    it("attributes redaction location to user_prompt vs assistant_response", () => {
+      const jsonl = [
+        '{"type":"user","message":{"role":"user","content":"my email is alice@example.com"}}',
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"got it bob@example.com"}]}}',
+      ].join("\n");
+      const stats = scanTranscriptForStats(jsonl);
+      expect(stats.by_location.in_user_prompt).toBe(1);
+      expect(stats.by_location.in_assistant_response).toBe(1);
+    });
+
+    it("attributes tool_use input + tool_result content correctly", () => {
+      const jsonl = [
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"echo carol@example.com"}}]}}',
+        '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"output: dave@example.com"}]}}',
+      ].join("\n");
+      const stats = scanTranscriptForStats(jsonl);
+      expect(stats.by_location.in_tool_use_input).toBeGreaterThanOrEqual(1);
+      expect(stats.by_location.in_tool_result).toBeGreaterThanOrEqual(1);
+    });
+
+    it("returns zero-everywhere for a clean transcript", () => {
+      const jsonl = [
+        '{"type":"user","message":{"role":"user","content":"hello world"}}',
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}',
+      ].join("\n");
+      const stats = scanTranscriptForStats(jsonl);
+      expect(stats.count).toBe(0);
+      expect(Object.values(stats.by_kind).every((v) => v === 0)).toBe(true);
+      expect(Object.values(stats.by_location).every((v) => v === 0)).toBe(true);
+    });
+
+    it("count remains authoritative even when line shape is unrecognized", () => {
+      // Flat top-level role+content (pre-bucket-1/2 test fixture shape). Our
+      // structural walker doesn't recognize this layout — but the flat pass
+      // still finds the secret, so `count` and `by_kind` stay accurate.
+      const jsonl = '{"role":"user","content":"key sk-ant-api03-LEAKED0123456789"}';
+      const stats = scanTranscriptForStats(jsonl);
+      expect(stats.count).toBeGreaterThanOrEqual(1);
+      expect(stats.by_kind.secret).toBeGreaterThanOrEqual(1);
+    });
   });
 });

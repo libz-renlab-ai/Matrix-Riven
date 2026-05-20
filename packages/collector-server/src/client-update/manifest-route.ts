@@ -77,7 +77,7 @@ export function validateManifest(raw: unknown): ClientManifest | null {
   } else {
     delete result.hmac_sha256;
   }
-  return result as ClientManifest & { hmac_sha256?: string };
+  return result as unknown as ClientManifest & { hmac_sha256?: string };
 }
 
 export function readManifestFromDir(dir: string): ClientManifest | { status: 404 } | { status: 503; detail: string } {

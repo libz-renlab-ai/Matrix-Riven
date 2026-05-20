@@ -48,11 +48,19 @@ const DIST_DIR = join(REPO_ROOT, 'packages', 'uploader-client', 'dist');
 const RIVEN_TAG_PREFIX = 'riven-';
 const LEGACY_TAG_PREFIX = 'teamagent-';
 
-/** Three Claude Code hook events we wire up, in registration order. */
+/** Six Claude Code hook events we wire up, in registration order.
+ *  The 3 originals (Stop / SessionStart / UserPromptSubmit) cover the core
+ *  transcript-upload + real-time status path. The 3 bucket-1/2 additions
+ *  (PreToolUse / PreCompact / SessionEnd) extend telemetry breadth — see
+ *  docs/superpowers/specs/ for what each event collects.
+ */
 const HOOKS = /** @type {const} */ ([
   { event: 'Stop', bin: 'bin-digital-twin-tap.cjs', tag: 'riven-digital-twin-tap' },
   { event: 'SessionStart', bin: 'bin-session-start.cjs', tag: 'riven-session-start' },
   { event: 'UserPromptSubmit', bin: 'bin-user-prompt-submit.cjs', tag: 'riven-user-prompt-submit' },
+  { event: 'PreToolUse', bin: 'bin-pre-tool-use.cjs', tag: 'riven-pre-tool-use' },
+  { event: 'PreCompact', bin: 'bin-pre-compact.cjs', tag: 'riven-pre-compact' },
+  { event: 'SessionEnd', bin: 'bin-session-end.cjs', tag: 'riven-session-end' },
 ]);
 
 // Resolve $HOME the same way every other riven binary does: prefer the
@@ -73,19 +81,38 @@ function fatal(line) {
 }
 
 function parseArgs(argv) {
-  const out = { dryRun: false, uninstall: false, help: false };
-  for (const a of argv) {
+  const out = { dryRun: false, uninstall: false, help: false, projectLevel: null };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
     if (a === '--dry-run') out.dryRun = true;
     else if (a === '--uninstall') out.uninstall = true;
     else if (a === '--help' || a === '-h') out.help = true;
-    else fatal(`unknown flag: ${a}`);
+    else if (a === '--project-level') {
+      // Optional path argument; defaults to REPO_ROOT (the repo this script
+      // ships in). The hooks land in `<path>/.claude/settings.json` instead of
+      // `~/.claude/settings.json` — used by hosts where a third-party
+      // user-level "viral install" overwrites our entries.
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) {
+        out.projectLevel = resolve(next);
+        i++;
+      } else {
+        out.projectLevel = REPO_ROOT;
+      }
+    } else fatal(`unknown flag: ${a}`);
   }
   return out;
 }
 
 function printHelp() {
-  process.stdout.write(`Usage: node scripts/install-client.mjs [--dry-run | --uninstall]\n`);
-  process.stdout.write(`  Stage 6 CJS bins into ~/.riven/digital-twin/ and register Claude Code hooks.\n`);
+  process.stdout.write(`Usage: node scripts/install-client.mjs [flags]\n`);
+  process.stdout.write(`  Stage CJS bins into ~/.riven/digital-twin/ and register Claude Code hooks.\n`);
+  process.stdout.write(`  Flags:\n`);
+  process.stdout.write(`    --dry-run                Print the plan, do not touch the filesystem.\n`);
+  process.stdout.write(`    --uninstall              Remove hook entries + staged bins.\n`);
+  process.stdout.write(`    --project-level [path]   Write hooks to <path>/.claude/settings.json\n`);
+  process.stdout.write(`                             (defaults to this repo). Use this when a\n`);
+  process.stdout.write(`                             third-party tool overwrites ~/.claude/settings.json.\n`);
   process.stdout.write(`  See INSTALL.md for the full agent-driven flow.\n`);
 }
 
@@ -224,7 +251,7 @@ function preflightDist() {
   if (!existsSync(join(DIST_DIR, 'bin-auto-updater.cjs'))) {
     fatal(`missing ${join(DIST_DIR, 'bin-auto-updater.cjs')} — rerun \`pnpm -r build\``);
   }
-  log(`OK: all 6 bins present in ${DIST_DIR}`);
+  log(`OK: all ${HOOKS.length + 3} bins present in ${DIST_DIR}`);
 }
 
 function stageBins(home, dryRun) {
@@ -272,8 +299,10 @@ function unstageBins(home, dryRun) {
   log(`removed ${removed} staged bins from ${stageDir}`);
 }
 
-function mergeHooks(home, stageDir, dryRun) {
-  const settingsPath = join(home, '.claude', 'settings.json');
+function mergeHooks(home, stageDir, dryRun, projectLevelDir) {
+  const settingsPath = projectLevelDir
+    ? join(projectLevelDir, '.claude', 'settings.json')
+    : join(home, '.claude', 'settings.json');
   const settings = readJsonOrEmpty(settingsPath);
   // Back up unconditionally — small file, easy diff after.
   if (!dryRun && existsSync(settingsPath)) {
@@ -300,8 +329,10 @@ function mergeHooks(home, stageDir, dryRun) {
   }
 }
 
-function removeHooks(home, dryRun) {
-  const settingsPath = join(home, '.claude', 'settings.json');
+function removeHooks(home, dryRun, projectLevelDir) {
+  const settingsPath = projectLevelDir
+    ? join(projectLevelDir, '.claude', 'settings.json')
+    : join(home, '.claude', 'settings.json');
   if (!existsSync(settingsPath)) {
     log(`no ${settingsPath} — nothing to uninstall`);
     return;
@@ -355,10 +386,13 @@ if (args.help) {
   process.exit(0);
 }
 const home = resolveHome();
-log(`platform=${platform()} home=${home} dry-run=${args.dryRun} uninstall=${args.uninstall}`);
+log(
+  `platform=${platform()} home=${home} dry-run=${args.dryRun} uninstall=${args.uninstall}` +
+    (args.projectLevel ? ` project-level=${args.projectLevel}` : ''),
+);
 
 if (args.uninstall) {
-  removeHooks(home, args.dryRun);
+  removeHooks(home, args.dryRun, args.projectLevel);
   unstageBins(home, args.dryRun);
   log(`done. Restart Claude Code for the hook removal to take effect.`);
   log(`(local data at ~/.riven/digital-twin/ left intact; rm -rf if you want a clean wipe)`);
@@ -367,7 +401,7 @@ if (args.uninstall) {
 
 preflightDist();
 const stageDir = stageBins(home, args.dryRun);
-mergeHooks(home, stageDir, args.dryRun);
+mergeHooks(home, stageDir, args.dryRun, args.projectLevel);
 if (!args.dryRun) {
   dryRunProbe(stageDir);
 }

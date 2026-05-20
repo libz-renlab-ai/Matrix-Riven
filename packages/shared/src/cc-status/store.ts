@@ -73,8 +73,19 @@ const STRING_FIELD_CAP: Record<string, number> = {
   // longer is truncated and persisted; downstream normalized_event extractors
   // see "<truncated>" rather than failing.
   raw_prompt: 65_536,
+  // Bucket 1/2 per-event additions.
+  tool_name: 128,
+  tool_input_digest: 128,
+  user_decision: 32,
+  compact_trigger: 32,
+  stop_reason: 128,
+  slash_command: 128,
 };
 const DEFAULT_STRING_CAP = 256;
+/** Cap individual elements + length of array fields. */
+const ARRAY_FIELD_CAP: Record<string, { elementCap: number; lengthCap: number }> = {
+  web_fetch_hosts: { elementCap: 256, lengthCap: 256 },
+};
 
 /** The exact set of keys persisted — anything else in an incoming body is dropped. */
 const SNAPSHOT_KEYS: ReadonlyArray<keyof CcStatusSnapshot> = [
@@ -109,6 +120,26 @@ const SNAPSHOT_KEYS: ReadonlyArray<keyof CcStatusSnapshot> = [
   'raw_prompt',
   // auto-update (2026-05-19) — client manifest version, "unknown" for legacy.
   'client_version',
+  // Bucket 1/2 additions.
+  'tool_name',
+  'tool_input_digest',
+  'user_decision',
+  'sandbox_disabled',
+  'compact_trigger',
+  'session_duration_ms',
+  'stop_reason',
+  'slash_command',
+  'prompt_length',
+  'prompt_has_code_block',
+  'prompt_is_first_in_session',
+  'prompt_injection_signals',
+  'cpu_pct',
+  'mem_used_mb',
+  'mem_total_mb',
+  'concurrent_cc_count',
+  'claude_dir_size_mb',
+  'anthropic_api_latency_ms',
+  'web_fetch_hosts',
 ];
 
 const NUMERIC_KEYS = new Set<string>([
@@ -125,6 +156,16 @@ const NUMERIC_KEYS = new Set<string>([
   'tool_calls_total',
   'tool_calls_failed',
   'files_touched',
+  // Bucket 1/2 numerics.
+  'session_duration_ms',
+  'prompt_length',
+  'prompt_injection_signals',
+  'cpu_pct',
+  'mem_used_mb',
+  'mem_total_mb',
+  'concurrent_cc_count',
+  'claude_dir_size_mb',
+  'anthropic_api_latency_ms',
 ]);
 const STRING_KEYS = new Set<string>([
   'session_id',
@@ -142,8 +183,22 @@ const STRING_KEYS = new Set<string>([
   'raw_prompt',
   // auto-update — client manifest version string (e.g. "0.3.1+abc1234")
   'client_version',
+  // Bucket 1/2 strings.
+  'tool_name',
+  'tool_input_digest',
+  'user_decision',
+  'compact_trigger',
+  'stop_reason',
+  'slash_command',
 ]);
-const BOOL_KEYS = new Set<string>(['quota_stale']);
+const BOOL_KEYS = new Set<string>([
+  'quota_stale',
+  // Bucket 1/2 booleans.
+  'sandbox_disabled',
+  'prompt_has_code_block',
+  'prompt_is_first_in_session',
+]);
+const ARRAY_KEYS = new Set<string>(['web_fetch_hosts']);
 
 /** @deprecated alias of {@link safeUserId} from `cc-status/path-safety.ts`. Kept for the public re-export. */
 export const safeStatusUserId = safeUserId;
@@ -210,6 +265,16 @@ export function sanitizeCcStatusSnapshot(v: unknown): CcStatusSnapshot | null {
       if (typeof val === 'string' && val.length > 0) out[key] = capString(key, val);
     } else if (BOOL_KEYS.has(key)) {
       if (typeof val === 'boolean') out[key] = val;
+    } else if (ARRAY_KEYS.has(key)) {
+      if (!Array.isArray(val)) continue;
+      const cap = ARRAY_FIELD_CAP[key] ?? { elementCap: DEFAULT_STRING_CAP, lengthCap: 64 };
+      const cleaned: string[] = [];
+      for (const item of val) {
+        if (typeof item !== 'string' || item.length === 0) continue;
+        cleaned.push(item.length > cap.elementCap ? item.slice(0, cap.elementCap) : item);
+        if (cleaned.length >= cap.lengthCap) break;
+      }
+      if (cleaned.length > 0) out[key] = cleaned;
     } else if (key === 'session_health') {
       if (val === 'OK' || val === 'OVER_200K') out[key] = val;
     }

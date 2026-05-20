@@ -54,11 +54,196 @@ import {
   resolveClientLatestDir,
   resolveErrorsJsonlPath,
 } from './client-update/index.js';
+// Task 15 — Leadership API + HTML routes (replaces legacy /api/overview in the
+// dispatch order so the new aggregator + cache wins over the old disk-scan path).
+import { TtlCache } from './leadership/cache.js';
+import { handleLeadershipRequest, type LeadershipRouteDeps } from './leadership/routes.js';
+// P-D1 — on-disk session index. Built async at startup when missing, appended
+// after each successful POST so scanAllSessions has a fast cold-start path.
+import { appendIndex, rebuildAllIndexes } from './leadership/index.js';
+// L-11 — LLM narrative layer boot wiring. `LLM_ENABLED=false` (default) keeps
+// the dashboard byte-identical to pre-L-8: no cache file is created, no worker
+// is started, and `llmCache` stays undefined so the aggregator skips its
+// enrichment pass.
+import { readLlmConfig } from './leadership/llm/config.js';
+import { LlmCache } from './leadership/llm/cache.js';
+import {
+  startWorker,
+  type WorkerHandle,
+} from './leadership/llm/worker.js';
+import { collectWorkerInputs } from './leadership/llm/inputs.js';
 
 /** Cap raw POST body to bound memory + reject obvious DoS payloads. */
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
 /** Cap gzip output to defeat zip-bomb DoS (jsonl rarely compresses >30x). */
 export const MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Detect synthetic transcripts produced by `bin-digital-twin inject-mock`.
+ *
+ * The CLI's `inject-mock` subcommand writes a fixed two-line transcript with
+ * `"inject-mock probe"` (user) + `"inject-mock ack"` (assistant) as evidence
+ * payload — used as a local upload-pipeline smoke test. The `RIVEN_UPLOADER_DRYRUN=1`
+ * env keeps these from hitting a server when used correctly, but historical
+ * INSTALL.md guidance had readers run the uploader without it, leaking ~376 byte
+ * synthetic sessions into prod `<user>/<date>/` dirs.
+ *
+ * INSTALL.md guidance is already fixed (bb4ca35), but server-side rejection is
+ * defense in depth: any caller (old client, custom script, AI agent reading old
+ * docs) cannot pollute the collector regardless of CLI-side gates.
+ *
+ * Returns true when both marker phrases appear in the decoded transcript text.
+ * A real session would only contain these strings if the user manually typed
+ * them; the false-positive rate is acceptable for a debug payload identifier.
+ */
+export function isInjectMockTranscript(transcriptText: string): boolean {
+  return (
+    transcriptText.includes('"inject-mock probe"') &&
+    transcriptText.includes('"inject-mock ack"')
+  );
+}
+
+/**
+ * Email TLDs we treat as "real" — Matrix-Riven's `getUserId()` produces these
+ * out of `git config user.email`. Anything outside this allowlist is treated
+ * as a hostname-fallback "ghost" identifier.
+ *
+ * Keep small + explicit. False-positive cost (rejecting a real user) is
+ * higher than false-negative cost (failing to filter a ghost).
+ */
+const REAL_EMAIL_TLDS = [
+  '.com', '.cn', '.io', '.org', '.net', '.dev', '.ai', '.co',
+  '.app', '.me', '.us', '.uk', '.eu', '.gov', '.edu',
+];
+
+/**
+ * Detect Matrix-Riven's `${unix_user}@${hostname}` identity fallback.
+ *
+ * `getUserId()` (packages/shared/src/identity.ts) calls
+ * `git config user.email` and falls back to `${userInfo().username}@${hostname()}`
+ * when git is absent, `user.email` is unset, or the shell-out times out.
+ * That fallback produces user_ids the collector treats as full members
+ * (own `<user>/<date>/` tree), even though they're typically the SAME
+ * physical person whose Stop hook tags transcripts with their real email
+ * via `cfg.identity.user_id` from `~/.riven/digital-twin.json`.
+ *
+ *   isGhostUserId('hrdai@qq.com')                              → false
+ *   isGhostUserId('horton2048@users.noreply.github.com')       → false (`.com`)
+ *   isGhostUserId('19723@hut')                                 → true  (bare host)
+ *   isGhostUserId('blink@BlinkdeMacBook-Air.local')            → true  (`.local`)
+ *   isGhostUserId('neurobot@NeuroBot')                         → true
+ *
+ * Shape test only. A "sole-identity ghost" (someone whose only upload identity
+ * IS this form) still matches — the redundant-vs-sole distinction is made by
+ * the call site cross-referencing against existing non-ghost transcripts.
+ */
+export function isGhostUserId(userId: string): boolean {
+  const at = userId.lastIndexOf('@');
+  if (at <= 0) return false; // empty local part or no '@' → not classified
+  const host = userId.slice(at + 1);
+  if (host.length === 0) return false;
+  if (host.endsWith('.local')) return true;
+  const lower = host.toLowerCase();
+  for (const tld of REAL_EMAIL_TLDS) {
+    if (lower.endsWith(tld)) return false;
+  }
+  // Plain bare hostname (no `.`) — classic `${user}@${hostname}` fallback.
+  if (!host.includes('.')) return true;
+  // Dot present but unknown TLD → conservative: treat as real.
+  return false;
+}
+
+/**
+ * Return true when some non-ghost user_id already has a transcript for
+ * `sessionId` on `date` under `outputDir`. Used to detect "redundant ghost"
+ * cc-status uploads: a cc-status snapshot arrives tagged with a ghost
+ * user_id, but the real-email user on the same machine has already POSTed
+ * (or will POST, race window only) the full transcript for the same session.
+ *
+ * Scoped to a single date subdir for cost — Matrix-Riven session_ids are
+ * UUIDv4 / ULID, unique per CC instance, so cross-day collisions are
+ * effectively impossible. `date` is derived from the snapshot's `ts` field
+ * by the caller.
+ */
+function hasNonGhostTranscript(
+  outputDir: string,
+  sessionId: string,
+  date: string,
+): boolean {
+  let users: string[];
+  try {
+    users = readdirSync(outputDir);
+  } catch {
+    return false;
+  }
+  for (const u of users) {
+    if (isGhostUserId(u)) continue;
+    const candidate = join(outputDir, u, date, `${sessionId}.jsonl`);
+    // Defense-in-depth: confirm the resolved path still sits under outputDir
+    // before we trust the `readdirSync` entry. Symlinks / traversal-laden
+    // user_ids that survived `safeUserId` shouldn't reach this code, but
+    // the existsSync below would happily follow a symlink out.
+    if (!isUnder(outputDir, candidate)) continue;
+    if (existsSync(candidate)) return true;
+  }
+  return false;
+}
+
+/**
+ * Counterpart to `hasNonGhostTranscript`: after a transcript lands, sweep
+ * every ghost-shape user dir for a paired `<sessionId>.cc-status.jsonl`
+ * fragment and unlink it. Pre-PR landing of `realtime-emit` identity-from-
+ * config (libz-renlab-ai/Matrix-Riven#3) clients still emit cc-status under
+ * the hostname fallback even when transcripts go to the real email; this
+ * sweep keeps the on-disk tree from accumulating those orphans for the
+ * leadership dashboard / `/api/users` listing.
+ *
+ * Peer-gated. Mirrors the precondition of the cc-status pre-check (gate #1):
+ * the sweep only fires when a NON-GHOST user already holds the transcript
+ * for `sessionId` on `date`. If the just-arrived transcript itself was
+ * posted by a sole-identity ghost (e.g. `lv@lvjiawendeMacBook-Air.local`
+ * — whose ONLY upload identity is the hostname form, no real-email peer
+ * exists), the sweep bails. Without this gate the sweep would unlink the
+ * sole-identity ghost's OWN cc-status under their own user dir — a P0
+ * data-loss bug caught in cold-read of an earlier rev of this commit.
+ *
+ * Best-effort. Errors are swallowed — a sweep failure must not 5xx a
+ * successful transcript write.
+ *
+ * Returns the number of files removed (for the response payload + logging).
+ */
+function sweepRedundantGhostCcStatus(
+  outputDir: string,
+  sessionId: string,
+  date: string,
+): number {
+  // Peer gate: identical semantics to gate #1's `hasNonGhostTranscript`.
+  // Only proceed when a non-ghost user holds a transcript for the same
+  // session_id on the same date — otherwise nothing is "redundant" to clean.
+  if (!hasNonGhostTranscript(outputDir, sessionId, date)) return 0;
+
+  let users: string[];
+  try {
+    users = readdirSync(outputDir);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const u of users) {
+    if (!isGhostUserId(u)) continue;
+    const candidate = join(outputDir, u, date, `${sessionId}.cc-status.jsonl`);
+    if (!isUnder(outputDir, candidate)) continue;
+    try {
+      if (existsSync(candidate)) {
+        unlinkSync(candidate);
+        removed++;
+      }
+    } catch {
+      // best-effort — next sweep will retry
+    }
+  }
+  return removed;
+}
 
 export interface MockServerOptions {
   /** Port to bind. Use 0 to pick an ephemeral port. */
@@ -82,6 +267,12 @@ export interface MockServerOptions {
    * Empty/undefined = auth disabled (dev/test default).
    */
   authToken?: string;
+  /**
+   * Comma-list of project names treated as "main" for slacking detection.
+   * Forwarded to `LeadershipRouteDeps.mainProjects`. Empty/undefined leaves
+   * the slacking signal dormant (no false positives in a fresh deploy).
+   */
+  mainProjects?: string[];
 }
 
 export interface MockServerHandle {
@@ -102,6 +293,17 @@ const ID_RE = /^[A-Za-z0-9._-]+$/;
 
 function send(res: ServerResponse, status: number, body?: unknown): void {
   res.statusCode = status;
+  // 2026-05-19 QA-6 P2: every response — including outer-dispatcher 404 /
+  // 405 fall-throughs — gets the same defensive headers as the leadership
+  // routes. Previously HEAD / or POST /<unknown> returned the body or
+  // status code without nosniff / X-Frame / CSP, contradicting /landing's
+  // "all-routes carry security headers" copy.
+  if (!res.headersSent) {
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('x-frame-options', 'DENY');
+    res.setHeader('referrer-policy', 'no-referrer');
+    res.setHeader('cache-control', 'no-store');
+  }
   if (body !== undefined) {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(body));
@@ -120,6 +322,35 @@ function validateUserParam(raw: string | undefined): string | null {
   if (raw.includes('/') || raw.includes('\\') || raw.includes('..')) return null;
   if (safeUserId(raw) !== raw) return null;
   return raw;
+}
+
+/**
+ * Round-2 QA P0 (EM N1): strict ingest-side user_id format check. POST
+ * envelopes whose user_id doesn't match are rejected with 400 BEFORE any
+ * filesystem write. Previously the only gate was safeUserId (which only
+ * sanitized), so penetration-test payloads like `xss_+alert_1___@test.com`
+ * and `svg_onload_1_@x.com` got created as actual user directories and then
+ * appeared as "team members" on real-data /people view. Allowed shapes:
+ *   - email-style:    LOCAL@DOMAIN.TLD  (simplified RFC5321)
+ *   - local-part only: starts with alnum, contains alnum/./_/-, ≤ 64 chars
+ * Both forms must START with alphanumeric — that rejects payloads opening
+ * with punctuation or special chars (`xss_+`, `<script`, `..`, etc.).
+ */
+const PENTEST_SUBSTRINGS = ['xss', 'svg_onload', 'onerror', 'attacker', 'evil', 'pwn', 'eve@', 'script_alert', '__alert', '_alert_', 'alert(1)', 'javascript:'];
+export function isValidUserId(raw: unknown): raw is string {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 254) return false;
+  // Round-7 QA P0 (EM): even alphanumeric-only payloads like `anon_attacker`
+  // need to be rejected. Add a blocklist of obviously-pentest substrings on
+  // top of the shape gate; mirrored at read-time in transcript-loader and
+  // disk-scan so any legacy residue is filtered from the UI.
+  const lower = raw.toLowerCase();
+  for (const bad of PENTEST_SUBSTRINGS) if (lower.includes(bad)) return false;
+  // Email shape — most common in real deployments.
+  if (raw.includes('@')) {
+    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9.-]{0,253}(?:\.[A-Za-z]{1,24})?$/.test(raw);
+  }
+  // Bare local-part / username — e.g. legacy installs without email.
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(raw);
 }
 
 function validateDateParam(raw: string | undefined): string | null {
@@ -334,6 +565,16 @@ function handleGet(
   const path = url.split('?')[0] ?? '';
 
   if (path === '/' || path === '/index.html') {
+    // Round-1 QA P0 (security): legacy Phase-1 dashboard at `/` was served
+    // without ANY security headers (no CSP, no X-Frame-Options, no nosniff,
+    // no Referrer-Policy), contradicting the /landing claim of "全路由响应都
+    // 带 nosniff + X-Frame-Options". Apply the same baseline as the
+    // leadership routes.
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('x-frame-options', 'DENY');
+    res.setHeader('referrer-policy', 'no-referrer');
+    res.setHeader('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'");
+    res.setHeader('cache-control', 'no-store');
     res.statusCode = 200;
     res.setHeader('content-type', 'text/html; charset=utf-8');
     res.end(DASHBOARD_HTML);
@@ -628,8 +869,69 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
     readEnvWithLegacy(process.env, 'RIVEN_AUTH_TOKEN', 'BPP_AUTH_TOKEN') ??
     '';
 
+  // Task 15 — shared TTL cache for all leadership endpoints (30s TTL keeps the
+  // dashboard snappy under polling while bounding disk-scan frequency).
+  const leadershipCache = new TtlCache<unknown>(30_000);
+
+  // L-11 — LLM narrative layer. Read config from env; when disabled (default)
+  // `llmCache` stays undefined and no worker is started — the aggregator's
+  // `attachLlmFields` short-circuits on the missing cache so behaviour is
+  // byte-identical to pre-L-8. When enabled, we load the on-disk cache before
+  // the server binds (load is cheap — a single readFile) so the first
+  // /api/overview request can read whatever cached lines the previous process
+  // wrote. The worker itself starts AFTER `server.listen` resolves so its
+  // first tick can never race the listen callback.
+  const llmCfg = readLlmConfig(process.env);
+  let llmCache: LlmCache | undefined;
+  let llmWorker: WorkerHandle | undefined;
+  if (llmCfg.enabled) {
+    llmCache = new LlmCache(join(llmCfg.cacheDir, 'v1.jsonl'));
+    await llmCache.load();
+  }
+
+  const leadershipDeps: LeadershipRouteDeps = {
+    collectorDir: outputDir,
+    cache: leadershipCache,
+    now,
+    llmCache,
+    // Forward the same Bearer token to the leadership dispatcher so when the
+    // operator sets `RIVEN_AUTH_TOKEN`, the dashboard endpoints require auth
+    // too — not just `POST /v1/cc-sessions`. Empty string disables (LAN
+    // demos, localhost tests).
+    authToken: authToken || undefined,
+    // Forward main-project list so the slacking signal can fire.
+    mainProjects: opts.mainProjects,
+  };
+
   const requestHandler = (req: IncomingMessage, res: ServerResponse): void => {
+    // Task 15 — Leadership API + HTML routes take precedence over the legacy
+    // handlers so the new aggregator wins over /api/overview etc.
+    //
+    // Pass non-GET requests too: the leadership dispatcher recognises its
+    // own paths and emits 405 (not_method_allowed) for POST/PUT/DELETE.
+    // Without that, `POST /api/overview` would fall through to the cc-
+    // session POST router and 404, which is REST-incorrect and confusing.
+    if (handleLeadershipRequest(req, res, leadershipDeps)) {
+      return;
+    }
     if (req.method === 'GET') {
+      // Round-1 QA P0 (security): legacy GET surface (/api/file, /api/users,
+      // /api/dates, /api/sessions, /api/quota, /api/cc-status/*, /v1/member-
+      // stats) returns raw transcript content + user PII. Until each route is
+      // individually re-evaluated, gate the whole surface on `authToken` when
+      // it's configured. The Phase-1 dashboard at `/` is still served (it
+      // needs ?sid= which is a separate ACL).
+      const legacyPath = (req.url ?? '').split('?')[0] ?? '';
+      const legacyNeedsAuth =
+        legacyPath.startsWith('/api/') ||
+        legacyPath === '/v1/member-stats';
+      if (authToken && legacyNeedsAuth) {
+        const auth = requireBearerToken(req.headers, authToken);
+        if (!auth.ok) {
+          send(res, 401, { error: 'unauthorized' });
+          return;
+        }
+      }
       handleGet(req, res, outputDir, now);
       return;
     }
@@ -647,10 +949,32 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
       return;
     }
 
-    // M2 — token auth on the conversation-upload endpoint. When BPP_AUTH_TOKEN
+    // Round-1 QA P2 (security): CSRF / DNS-rebinding hardening. Reject POST
+    // requests carrying browser-origin signals — uploader clients send a
+    // bespoke `X-Riven-Client: uploader` header (or the legacy `User-Agent:
+    // matrix-riven-uploader`), so any POST that looks like a browser
+    // (Origin / Referer set, no riven client marker) is refused. This blocks
+    // a DNS-rebound site at 127.0.0.1 from submitting forged sessions.
+    const xClient = String(req.headers['x-riven-client'] ?? '');
+    const ua = String(req.headers['user-agent'] ?? '');
+    const looksLikeRivenClient =
+      xClient === 'uploader' || /matrix-riven-uploader/i.test(ua);
+    const origin = String(req.headers['origin'] ?? '');
+    const referer = String(req.headers['referer'] ?? '');
+    if (!looksLikeRivenClient && (origin.length > 0 || referer.length > 0)) {
+      send(res, 403, { error: 'csrf_blocked' });
+      return;
+    }
+
+    // M2 — token auth on the conversation-upload endpoint. When RIVEN_AUTH_TOKEN
     // is set, POST /v1/cc-sessions requires a matching Bearer token. Checked
     // BEFORE the body read so a missing/wrong token 401s regardless of payload.
-    if (authToken && route === ROUTE_CC_SESSIONS) {
+    //
+    // Round-2 QA P0 (security): cc-status POST was previously unguarded even
+    // with authToken set — any anonymous caller could inject a status snapshot
+    // for any user_id, poisoning the leadership dashboard's "live status"
+    // column. Now both POST routes go through the same gate.
+    if (authToken && (route === ROUTE_CC_SESSIONS || route === ROUTE_CC_STATUS)) {
       const auth = requireBearerToken(req.headers, authToken);
       if (!auth.ok) {
         send(res, 401, { error: 'unauthorized' });
@@ -711,6 +1035,47 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
       // body 400s (unlike the optional quota sidecar on /v1/cc-sessions, the
       // snapshot IS the payload here).
       if (route === ROUTE_CC_STATUS) {
+        // Round-3 QA P1 (security): /v1/cc-sessions gates user_id via
+        // isValidUserId; this sibling path didn't. In no-token mode the
+        // same pentest payload (`xss_+alert_1___@test.com` etc.) could
+        // still pollute the dashboard via /v1/cc-status. Apply the same
+        // gate here BEFORE handing to appendCcStatusSnapshot.
+        const snapObj = json as Record<string, unknown> | null;
+        const ccUser = snapObj?.user_id;
+        if (typeof ccUser === 'string' && ccUser.length > 0 && !isValidUserId(ccUser)) {
+          send(res, 400, { error: 'invalid user_id', detail: 'user_id must be an email or [A-Za-z0-9][A-Za-z0-9._-]{0,63} local-part' });
+          return;
+        }
+        // Redundant-ghost gate: reject cc-status snapshots that arrive tagged
+        // with a hostname-fallback user_id when the same session_id already
+        // has a real transcript under a non-ghost user_id. The realtime hook
+        // bin pre-PR #3 emits under the `${user}@${host}` form even when the
+        // transcript-upload Stop hook reads identity from
+        // `~/.riven/digital-twin.json` — same physical CC session, two
+        // different user_ids on disk. Reject the ghost snapshot fragment
+        // here rather than write+sweep later.
+        //
+        // Return 200 (not 4xx) so any client retry-on-error path doesn't
+        // hammer the gate.
+        const snapUid = typeof ccUser === 'string' ? ccUser : '';
+        const snapSid = typeof snapObj?.session_id === 'string' ? snapObj.session_id : '';
+        const snapTs = typeof snapObj?.ts === 'string' ? snapObj.ts : '';
+        if (snapUid && snapSid && isGhostUserId(snapUid)) {
+          const snapDate = dateStamp(snapTs, now());
+          if (hasNonGhostTranscript(outputDir, snapSid, snapDate)) {
+            send(res, 200, {
+              ok: true,
+              dropped: 'redundant-ghost',
+              user_id: snapUid,
+              session_id: snapSid,
+              date: snapDate,
+              detail:
+                'cc-status under hostname-fallback user_id; real transcript ' +
+                'already present under a non-ghost user for this session_id',
+            });
+            return;
+          }
+        }
         const r = appendCcStatusSnapshot(outputDir, json, now());
         if (!r.ok) {
           if (r.reason === 'path') {
@@ -770,6 +1135,18 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
           return;
         }
         const ext = isLog ? 'jsonl' : 'ogg';
+        // Round-2 QA P0 (EM N1): previously safeUserId only sanitized; any
+        // string would round-trip into a writable user dir, so the security
+        // round's penetration test payloads (`xss_+alert_1___@test.com`,
+        // `svg_onload_1_@x.com`, etc.) ended up displayed as legitimate
+        // "team members" on real-data /people view. Now we *reject* explicit
+        // user_ids that don't match a basic email-or-localpart shape BEFORE
+        // writing. Missing / null / empty user_id is still allowed and
+        // collapses to 'unknown' (legacy uploaders depend on that fallback).
+        if (typeof envelope.user_id === 'string' && envelope.user_id.length > 0 && !isValidUserId(envelope.user_id)) {
+          send(res, 400, { error: 'invalid user_id', detail: 'user_id must be an email or [A-Za-z0-9][A-Za-z0-9._-]{0,63} local-part' });
+          return;
+        }
         const userIdSafe = safeUserId(envelope.user_id);
         const date = dateStamp(envelope.captured_at, now());
         const targetDir = join(outputDir, userIdSafe, date);
@@ -778,6 +1155,33 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
         if (!isUnder(outputDir, targetFile)) {
           send(res, 400, { error: 'invalid path' });
           return;
+        }
+
+        // Reject synthetic `inject-mock` transcripts before anything lands on
+        // disk. The CLI's `inject-mock` subcommand is meant for a local
+        // upload-pipeline smoke test guarded by `RIVEN_UPLOADER_DRYRUN=1`; any
+        // payload reaching this point with both marker strings is a real POST
+        // that would pollute the collector (see `isInjectMockTranscript`
+        // doc-comment for history + rationale).
+        //
+        // Defense-in-depth on top of the INSTALL.md fix (commit bb4ca35): old
+        // clients, hand-crafted POSTs, and AI agents following stale docs all
+        // hit this gate. Returns 200 with `dropped: 'inject-mock'` rather than
+        // 4xx so clients with retry-on-error logic do not loop on this case.
+        if (isLog) {
+          const decodedText = decoded.toString('utf8');
+          if (isInjectMockTranscript(decodedText)) {
+            send(res, 200, {
+              ok: true,
+              dropped: 'inject-mock',
+              user_id: userIdSafe,
+              date,
+              detail:
+                'synthetic transcript not accepted on this endpoint; ' +
+                'use RIVEN_UPLOADER_DRYRUN=1 for local smoke tests',
+            });
+            return;
+          }
         }
 
         // M2 — server-side L2 scan ("第二层敏感信息扫描（兜底）"). The member's
@@ -803,6 +1207,53 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
         mkdirSync(targetDir, { recursive: true });
         atomicWriteFileSync(targetFile, decoded);
 
+        // Redundant-ghost sweep: if the realtime cc-status snapshots for this
+        // session were already POSTed under a hostname-fallback user_id (the
+        // pre-PR #3 client bug) BEFORE this transcript arrived, the cc-status
+        // gate above couldn't catch them — at that earlier moment no
+        // transcript existed yet. Now that the transcript is on disk, sweep
+        // every ghost-shape user dir on the same date and unlink any
+        // `<sid>.cc-status.jsonl` orphan.
+        //
+        // Best-effort. Errors swallowed: a sweep failure must never 5xx an
+        // otherwise-successful transcript write.
+        let ghostSweepRemoved = 0;
+        if (isLog) {
+          try {
+            ghostSweepRemoved = sweepRedundantGhostCcStatus(outputDir, id, date);
+          } catch {
+            // tracked via response field; explicit catch silences lint
+          }
+        }
+
+        // P-D1 — append to the per-leaf session index so subsequent cold-start
+        // scans can skip directory enumeration. Best-effort: any failure is
+        // recovered by the next `rebuildIndex` at server start. We read the
+        // real on-disk mtime (not `Date.now()`) because the loader validates
+        // index freshness against `statSync(...).mtimeMs`, and FS timestamp
+        // truncation can drift the two values by 1-1000 ms on some platforms.
+        if (isLog) {
+          const capturedAtRaw = envelope.captured_at;
+          const capturedAt =
+            typeof capturedAtRaw === 'string' && capturedAtRaw.length > 0
+              ? capturedAtRaw
+              : now().toISOString();
+          let mtimeMs = Date.now();
+          try {
+            mtimeMs = statSync(targetFile).mtimeMs;
+          } catch {
+            /* file should always exist here; fall back to wall clock */
+          }
+          appendIndex(targetDir, {
+            sessionId: id,
+            file: `${id}.${ext}`,
+            mtime: mtimeMs,
+            capturedAt,
+          }).catch(() => {
+            /* non-fatal: rebuildIndex will catch up on next restart */
+          });
+        }
+
         // Issue #283 — write quota.json sidecar when envelope carries a
         // well-formed quota block. Latest write per <user>/<date>/ wins
         // (overwrites). Malformed quota is silently skipped; the transcript
@@ -826,27 +1277,39 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
         // M2 — per-session redaction-count sidecar. `GET /v1/member-stats`
         // sums these on demand for "敏感字段被模糊化次数" — there is no running
         // counter to drift. l1 = the member's uploader pass (carried on the
-        // envelope); l2 = this server's fallback pass. Written only when at
-        // least one field was scrubbed, so clean transcripts add no files.
+        // envelope); l2 = this server's fallback pass.
+        //
+        // Bucket 1/2 — the same sidecar is extended to carry envelope-level
+        // metadata that's not in the transcript itself: host info extras,
+        // settings_digest, claude_md, OAuth expiry, and L1 by-kind /
+        // by-location breakdowns. Written whenever ANY of these fields is
+        // present (clean transcript with no bucket 1/2 data → no sidecar,
+        // unchanged from old behavior).
         if (isLog) {
           const l1RedactionCount =
             typeof obj.l1_redaction_count === 'number' &&
             obj.l1_redaction_count >= 0
               ? obj.l1_redaction_count
               : 0;
-          if (l1RedactionCount > 0 || l2RedactionCount > 0) {
+          const meta: Record<string, unknown> = {};
+          if (l1RedactionCount > 0) meta.l1_redaction_count = l1RedactionCount;
+          if (l2RedactionCount > 0) meta.l2_redaction_count = l2RedactionCount;
+          // Bucket 1/2 envelope-level fields. Pluck whatever the client sent;
+          // dashboards treat absence as "unknown".
+          const envHost = envelope.host;
+          if (envHost && typeof envHost === 'object') meta.host = envHost;
+          if (envelope.settings_digest) meta.settings_digest = envelope.settings_digest;
+          if (envelope.claude_md) meta.claude_md = envelope.claude_md;
+          if (envelope.l1_redactions_by_kind) meta.l1_redactions_by_kind = envelope.l1_redactions_by_kind;
+          if (envelope.l1_redactions_by_location) meta.l1_redactions_by_location = envelope.l1_redactions_by_location;
+          if (envelope.oauth_expires_at) meta.oauth_expires_at = envelope.oauth_expires_at;
+          if (Object.keys(meta).length > 0) {
             const metaFile = join(targetDir, `${id}.meta.json`);
             if (isUnder(outputDir, metaFile)) {
               try {
                 atomicWriteFileSync(
                   metaFile,
-                  Buffer.from(
-                    JSON.stringify({
-                      l1_redaction_count: l1RedactionCount,
-                      l2_redaction_count: l2RedactionCount,
-                    }),
-                    'utf8',
-                  ),
+                  Buffer.from(JSON.stringify(meta), 'utf8'),
                 );
               } catch {
                 // best-effort sidecar — never 5xx a successful upload
@@ -878,12 +1341,36 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
           }
         }
 
-        send(res, 200, { ok: true, id, user_id: userIdSafe, date });
-      } catch (err) {
-        send(res, 500, {
-          error: 'decode or write failed',
-          detail: err instanceof Error ? err.message : String(err),
+        send(res, 200, {
+          ok: true,
+          id,
+          user_id: userIdSafe,
+          date,
+          ...(ghostSweepRemoved > 0 ? { ghost_cc_status_swept: ghostSweepRemoved } : {}),
         });
+      } catch (err) {
+        // 2026-05-19 QA-5 ops P2: distinguish "client sent bad bytes"
+        // (400) from "we couldn't write to disk" (500). Zlib raises
+        // Z_DATA_ERROR for non-gzip and corrupt streams; a malformed
+        // base64 string yields a length-mismatched Buffer that gunzip
+        // also rejects with Z_DATA_ERROR or similar. Either is a 400.
+        // Reserve 500 for unexpected fs / OOM faults so an ops dashboard
+        // can alert correctly on 5xx counts.
+        const msg = err instanceof Error ? err.message : String(err);
+        const zErr = (err as { code?: string })?.code ?? '';
+        const isDecodeError =
+          zErr === 'Z_DATA_ERROR' ||
+          zErr === 'Z_BUF_ERROR' ||
+          zErr === 'Z_STREAM_ERROR' ||
+          /incorrect header check|invalid stored block lengths|invalid distance|invalid literal\/lengths|gzip|deflate/i.test(msg);
+        if (isDecodeError) {
+          send(res, 400, { error: 'invalid_transcript_encoding', route });
+        } else {
+          send(res, 500, {
+            error: 'decode or write failed',
+            detail: msg,
+          });
+        }
       }
     });
     req.on('error', () => {
@@ -922,12 +1409,46 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
         reject(new Error('mock server failed to bind'));
         return;
       }
+      // P-D1 — warm the per-leaf session index on first boot. Deferred via
+      // setImmediate so it can never block the `listen` callback resolving;
+      // any error is swallowed because a missing index just means the next
+      // scan falls through to legacy enumeration.
+      setImmediate(() => {
+        rebuildAllIndexes(outputDir).catch(() => {
+          /* non-fatal — scanAllSessions degrades to readdirSync */
+        });
+      });
+
+      // L-11 — start the LLM narrative worker AFTER `listen` resolves so its
+      // first tick can never race the listen callback. `collectInputs` is
+      // wired to the real input collector — each tick loads sessions from
+      // `outputDir`, builds the overview snapshot via the aggregator, and
+      // maps T1..T5 inputs using the SAME builders the aggregator's
+      // cache-only render path uses (so worker writes and aggregator reads
+      // hit the same cache keys).
+      if (llmCfg.enabled && llmCache !== undefined) {
+        const cache = llmCache;
+        llmWorker = startWorker({
+          cache,
+          cfg: llmCfg,
+          collectInputs: () => collectWorkerInputs({ collectorDir: outputDir, now }),
+          log: (msg: string) => console.log(`[llm-worker] ${msg}`),
+        });
+      }
+
       resolve({
         url: `${opts.tls ? 'https' : 'http'}://${host}:${addr.port}`,
         port: addr.port,
         outputDir,
         close: () =>
           new Promise<void>((r, rej) => {
+            // L-11 — stop the LLM worker BEFORE closing the HTTP server so
+            // its interval timer can't fire one more tick while teardown is
+            // in flight. `stop()` is synchronous + idempotent.
+            if (llmWorker) {
+              llmWorker.stop();
+              llmWorker = undefined;
+            }
             server.close((err) => (err ? rej(err) : r()));
             // Force-destroy any in-flight connections so a slowloris client
             // can't keep the process alive past graceful close.

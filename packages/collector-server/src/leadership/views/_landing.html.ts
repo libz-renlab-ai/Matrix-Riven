@@ -1,0 +1,143 @@
+/**
+ * Public marketing landing page for Matrix-Riven Leadership.
+ *
+ * Hits `/landing` (and `/` when no auth token is configured AND no `?sid=`
+ * query is present). Doesn't require auth — designed to be the first thing
+ * a CTO / launch-day skeptic sees before clicking into the live dashboard.
+ *
+ * Self-contained: reuses LEADERSHIP_CSS so the visual identity is one and
+ * the same across marketing and product.
+ */
+
+import { LEADERSHIP_CSS } from './styles.css.js';
+import { CONSENT_BANNER_CSS, CONSENT_BANNER_SCRIPT, renderConsentBanner } from './_consent-banner.html.js';
+
+interface LandingFeature {
+  icon: string;       // 1–2 char glyph
+  title: string;
+  copy: string;       // 1 short sentence
+  proof: string;      // concrete number / detail
+}
+
+const FEATURES: LandingFeature[] = [
+  {
+    icon: '✦',
+    title: 'LLM 叙事层（T1–T5）',
+    copy: '每天用户的 session 自动生成五层中文叙事，从单次会话总结到一句领导日报。',
+    proof: '5 个 tier · haiku + sonnet · 叙事缓存全本地（cache 文件 50MB 上限）· LLM 推理走 Anthropic API（你的密钥）· 单次 cycle <$0.20',
+  },
+  {
+    icon: '◍',
+    title: '16 个信号检测器',
+    copy: '活跃 / 专注 / 节奏 / 卡住 / 求助 / 风险动作 / 协作热区 / 沉睡项目 / 单点依赖 / 学习面 ……',
+    proof: '不是关键词检索，是结构化检测器；每个都有单元测试',
+  },
+  {
+    icon: '◆',
+    title: '诚实的过时数据横幅',
+    copy: '数据快照超过 24 小时？/healthz 立刻显示 lastIngestAt 与 ageSec；下一版会把同一条数据横幅前置到 hero。',
+    proof: '/healthz 即时可查，nav 实时 dot + range chip 双重提示当前窗口',
+  },
+  {
+    icon: '◎',
+    title: '真 $ 成本遥测',
+    copy: '今日团队 LLM 花费在仪表盘 KPI 卡直接读出；启用 LLM 叙事时按 tier 计费，按 `LLM_DAILY_BUDGET_USD` 配额封顶。',
+    proof: '95% ceiling 防超额；单 cycle 实测 $0.12–0.20',
+  },
+  {
+    icon: '◐',
+    title: '成员小波形 + 7 日节奏',
+    copy: '每个成员 tile 的 sparkline 是 7 日真实活跃 trend；KPI 卡内嵌过去 7 天的节奏波形。',
+    proof: '7×24 热图、7 日节奏、状态徽章——数据来自同一个 snapshot',
+  },
+  {
+    icon: '✚',
+    title: 'Bearer auth + 默认 loopback',
+    copy: '产线启动默认只绑 127.0.0.1；放 LAN 必须配 `RIVEN_AUTH_TOKEN`。安全是默认值，不是 opt-in。',
+    proof: 'ETag/304 双向缓存，全路由响应都带 nosniff + X-Frame-Options',
+  },
+];
+
+export function renderLanding(opts: { hasAuth: boolean }): string {
+  const featureCards = FEATURES.map((f) => `
+      <div class="lc-card">
+        <div class="lc-icon">${escapeHtml(f.icon)}</div>
+        <div class="lc-title">${escapeHtml(f.title)}</div>
+        <div class="lc-copy">${escapeHtml(f.copy)}</div>
+        <div class="lc-proof">${escapeHtml(f.proof)}</div>
+      </div>`).join('');
+
+  // Round-1 QA: CTA priority was inverted. Demo was primary (taking
+  // first-time visitors into static fixtures) and "real data" was the
+  // de-emphasized secondary. Buyers / engineering leads should land on
+  // their own data first; demo is the "preview" fallback.
+  const ctaPrimary = opts.hasAuth
+    ? `<a class="lc-cta-primary" href="/overview">凭 token 进入看板 →</a>
+       <a class="lc-cta-secondary" href="/overview?demo=1">先看 Demo 演示 →</a>`
+    : `<a class="lc-cta-primary" href="/sources#install">接入你的团队（30 秒） →</a>
+       <a class="lc-cta-secondary" href="/overview?demo=1">先看 Demo 演示 →</a>`;
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Matrix·Riven · 团队工程节奏仪表盘</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>${LEADERSHIP_CSS}
+${CONSENT_BANNER_CSS}
+.lc-page { max-width:1080px; margin:0 auto; padding:80px 40px 120px; }
+.lc-hero h1 { font-family:'Newsreader',serif; font-size:44px; line-height:1.2; color:var(--ink-1); margin:0 0 16px; font-weight:500; }
+.lc-hero h1 em { font-style:normal; color:var(--accent-ink); font-weight:600; }
+.lc-hero .lead { font-size:17px; line-height:1.6; color:var(--ink-2); max-width:720px; margin:0 0 24px; }
+.lc-cta { display:flex; gap:14px; margin-top:32px; flex-wrap:wrap; }
+.lc-cta-primary, .lc-cta-secondary { display:inline-block; padding:12px 22px; border-radius:var(--r-lg); font-size:15px; text-decoration:none; font-weight:500; }
+.lc-cta-primary { background:var(--accent-ink); color:var(--surface); }
+.lc-cta-secondary { background:var(--surface); color:var(--ink-1); border:1px solid var(--hairline); }
+.lc-cta-primary:hover, .lc-cta-secondary:hover { box-shadow:var(--shadow-2); }
+.lc-pillars { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:16px; margin:64px 0 0; }
+.lc-card { padding:24px; background:var(--surface); border:1px solid var(--hairline); border-radius:var(--r-lg); box-shadow:var(--shadow-1); }
+.lc-icon { font-size:22px; color:var(--accent-ink); margin-bottom:10px; }
+.lc-title { font-family:'Newsreader',serif; font-size:19px; color:var(--ink-1); margin-bottom:8px; font-weight:500; }
+.lc-copy { font-size:14px; line-height:1.55; color:var(--ink-2); margin-bottom:10px; }
+.lc-proof { font-size:12px; line-height:1.5; color:var(--ink-3); font-family:ui-monospace, 'Menlo', monospace; }
+.lc-foot { margin-top:80px; padding-top:32px; border-top:1px solid var(--hairline); display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px; font-size:12.5px; color:var(--ink-3); }
+.lc-foot a { color:var(--ink-2); text-decoration:none; border-bottom:1px solid var(--ink-5); }
+</style>
+</head>
+<body>
+<div class="shell">
+<div class="lc-page">
+  <section class="lc-hero">
+    <h1>不再读一堆 <em>0 会话 · 推进新功能 · ↘ 近期已收尾</em>。<br>看团队在做什么、哪条线在卡、今天进展到哪。</h1>
+    <p class="lead">Matrix·Riven 直接读你团队的 Claude Code transcript，跑 16 个信号检测器 + 五层 LLM 叙事，每 30 秒近实时刷新一份会说人话的仪表盘——并且诚实告诉你数据多新、花了多少钱、哪条线该补人。<br><strong>透明承诺</strong>：默认聚合化数字 + LLM 改写摘要；查看 prompt 原文需 leader 主动展开（v2 起每次展开会写服务端 audit log；v1 仅做本地占位）。<a href="/sources" style="border-bottom:1px solid currentColor;">查看完整数据来源 →</a></p>
+    <div class="lc-cta">${ctaPrimary}</div>
+  </section>
+
+  <section class="lc-pillars">
+    ${featureCards}
+  </section>
+
+  <footer class="lc-foot">
+    <div>Matrix·Riven · 团队工程节奏仪表盘</div>
+    <div>
+      <a href="/overview">实时看板</a> ·
+      <a href="/retro">本周回顾</a> ·
+      <a href="/sources">数据来源与透明度</a>
+    </div>
+  </footer>
+</div>
+</div>
+${renderConsentBanner({ demo: false })}
+<script>${CONSENT_BANNER_SCRIPT}</script>
+</body>
+</html>`;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}

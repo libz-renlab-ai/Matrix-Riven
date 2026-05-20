@@ -188,19 +188,62 @@ node packages/collector-server/dist/bin-prod-server.cjs
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `PORT` | `8080` | 监听端口 |
-| `HOST` | `0.0.0.0` | 监听地址 |
+| `PORT` | `8933` | 监听端口 |
+| `HOST` | `127.0.0.1` | 监听地址。默认 loopback，**避免领导仪表盘在没有 token 的情况下被 LAN 任意访问**。明确放 LAN 必须设 `HOST=0.0.0.0` 并配 `RIVEN_AUTH_TOKEN`。 |
 | `RIVEN_COLLECTOR_DIR` | `<HOME>/riven-collector` | 数据落盘目录 |
-| `RIVEN_AUTH_TOKEN` | （不设） | 设置后 `POST /v1/cc-sessions` 需要 `Authorization: Bearer <token>` |
+| `RIVEN_AUTH_TOKEN` | （不设） | 设置后 **`POST /v1/cc-sessions` + 所有 `/api/*` 与 `/overview` 等领导路由**均要求 `Authorization: Bearer <token>` |
+| `RIVEN_MAIN_PROJECTS` | （不设） | 逗号分隔的主项目名列表。slacking 信号检测器据此判定"在非主项目摸鱼"。空 = 检测器静默 |
+| `LLM_ENABLED` | `false` | 打开后 `claude -p` 后台 worker 每 5 分钟跑一次，把 T1–T5 中文叙事写进本地 cache，看板渲染时只读 cache（永不阻塞） |
+| `LLM_DAILY_BUDGET_USD` | `5` | 日预算软上限，到 95% 自动停下剩余 tier |
+| `LLM_TIER1_MODEL` | `claude-haiku-4-5-20251001` | T1–T4 用的模型 |
+| `LLM_TIER5_MODEL` | `claude-sonnet-4-6` | T5 日报用的模型 |
+| `LLM_CACHE_DIR` | `<HOME>/.matrix-riven/llm-cache` | LLM cache JSONL 目录，50MB 软上限 + 最老条目淘汰 |
+| `LLM_WORKER_INTERVAL_MS` | `300000` | worker 触发间隔（5 分钟） |
+| `LLM_BRIEF_INTERVAL_MS` | `3600000` | T5 简报间隔（1 小时） |
 | `HTTPS_KEY_PATH` | （不设） | TLS 私钥路径；与 `HTTPS_CERT_PATH` 同时设置才启用 TLS |
 | `HTTPS_CERT_PATH` | （不设） | TLS 证书路径 |
 
-### API 端点
+### API + HTML 端点
 
-- `POST /v1/cc-sessions` — 接收 transcript（可选 token 认证）
+**Public（不需 token）：**
+- `GET /landing` — 公开 landing page，给冷点击者看
+- `GET /sources` — 数据来源 + 16 个信号检测器的透明页
+- `GET /overview?demo=1` — Demo 看板，跑在烤进去的 fixture 上（合成数据，无 PII）
+- `GET /api/overview?demo=1` — 同上的 JSON 形式
+
+**Receiver（POST，可选 token）：**
+- `POST /v1/cc-sessions` — 接收 transcript（可选 token 认证）。**`inject-mock` 合成内容会被拒收**：返回 `200 {ok: true, dropped: 'inject-mock'}` 而非落盘，防止 smoke test 误推污染 prod。`RIVEN_UPLOADER_DRYRUN=1` 仍是本地烟测的正路。
 - `POST /v1/cc-status` — 接收实时状态快照
-- `GET /` — 网页看板
-- `GET /api/*` — 查询接口
+
+**Leadership（GET，配 token 后强制鉴权）：**
+- `GET /` 或 `GET /overview` — 实时领导仪表盘（Overview tab）
+- `GET /people` / `GET /projects` — 全量成员/项目页
+- `GET /retro` — 周回顾（本周交付/需要看一眼/突出表现/沉睡项目）
+- `GET /activity` / `GET /insights` — Phase 3 占位 stub（带 nav + 主题切换）
+- `GET /api/overview[?range=today|24h|7d|30d]` — Overview 快照 JSON
+- `GET /api/members/<localpart>` — 单个成员详情（含 slideover HTML 片段）
+- `GET /api/projects/<name>` — 单个项目详情
+- `GET /api/llm/status` — LLM 工作状态 ops 端点：`{enabled, cache: {entries, bytes, todayCostUsd, byTier}}`
+
+非 GET 请求到任意 HTML/JSON leadership 路由都返回 `405 method_not_allowed`（带 `x-content-type-options: nosniff` / `x-frame-options: DENY` / `referrer-policy: no-referrer`）。
+
+### 端到端起一个完整 demo
+
+```bash
+# 一行起一个本地跑得起来的实时仪表盘
+PORT=8933 HOST=127.0.0.1 \
+  RIVEN_COLLECTOR_DIR=/path/to/your/riven-collector \
+  LLM_ENABLED=true \
+  RIVEN_AUTH_TOKEN=$(openssl rand -hex 32) \
+  RIVEN_MAIN_PROJECTS=your-repo,owner/repo \
+  node packages/collector-server/dist/bin-prod-server.cjs
+
+# 访问：
+#   http://127.0.0.1:8933/landing       — public marketing
+#   http://127.0.0.1:8933/overview?demo=1 — demo dashboard, no auth
+#   http://127.0.0.1:8933/overview        — real dashboard (need bearer)
+#   http://127.0.0.1:8933/api/llm/status   — ops health
+```
 
 ---
 
@@ -228,23 +271,28 @@ v0.2.0 把运行时命名空间从 `teamagent` / `TEAMAGENT_*` 改成了 `riven`
 
 ---
 
-## Overview tab（领导视图）
+## Leadership 看板（已重写：v0.3 起为默认入口）
 
-Dashboard 默认开在 **Browse** tab——transcript 文件浏览，跟以前一样。
+> **本节描述 v0.3 之后的实际 UI**。原来基于 4 panel（Cost / Productivity / Projects / Quality）的 Overview tab 已被替换成 v7 spatial design 的整页仪表盘——hero + KPI 卡 + Attention + Members + Projects + Highlights + Collab + slideover。入口在 `GET /` 或 `GET /overview`。
 
-切到 **Overview** tab 看团队聚合视图（单日）：
+看板布局（自上而下）：
 
-- 💰 **Cost** — 今日团队总花费 + 每人花费排行 + 模型选用分布
-- ⚡ **Productivity** — 每人 turn 数 / tool 失败率 / 平均会话时长 / OVER_200K 次数
-- 📦 **Projects** — 团队在哪些项目（cwd）/ 分支上花时间最多
-- ⚠️ **Quality** — 敏感字段被脱敏次数 / tool 失败热点 / 失控会话
+- **Hero** — 一句话标题（基于 attention / high-output 计数）+ 可选 T5 三行日报 briefBox
+- **KPI 行** — 需关注 / 高产出 / 今日消耗 (USD) / 整体节奏，每张卡都有真 sparkline
+- **需要你看一眼** — 卡住 / 求助 / 闲置 / 单点依赖 / 沉睡项目；点击展开 slideover
+- **团队** — 4 张成员卡：今日会话 · 焦点项目 · LLM 周报或推断性 fallback narrative
+- **项目** — 4 张项目卡：phase / 健康分 / ETA / bus-factor / 近期文件
+- **近期关键进展** — commit / push / PR / release，自动用 T1 narrative 替换原始 shell
+- **协作热点** — 同文件多人触碰
 
-任意 panel 里点用户名 → 跳回 Browse tab + 自动选中该用户，看会话原文。
+切到 `/people` / `/projects` 看全量列表。Slideover 通过点击成员/项目卡片自动打开，显示该实体的近况 + prompt 演变 + 项目分布。
 
-数据 API：`GET /api/overview?date=YYYY-MM-DD`（默认今天 UTC）。返回 JSON 见 [`docs/superpowers/specs/2026-05-15-leadership-overview-design.md`](docs/superpowers/specs/2026-05-15-leadership-overview-design.md) §5.3。
+数据 API：`GET /api/overview[?range=today|24h|7d|30d]`（默认 7d）。完整端点列表见上一节"API + HTML 端点"。
 
-> **权限说明**：和其它 `/api/*` 一样，当前没加 token gate，假设公司内网受限。
-> 如果要把它暴露到不受控网络，先按 §7.3 加 auth 再 deploy。
+**权限说明（v0.3 起重写）：**
+- 默认 `HOST=127.0.0.1`（loopback）——本地起服务时不会自动暴露到 LAN。
+- 配 `RIVEN_AUTH_TOKEN` 后，`POST /v1/cc-sessions` **以及** 所有领导路由（`/overview` / `/api/*`）都要求 `Authorization: Bearer <token>`。Public landing / sources / demo 仍可匿名访问。
+- 要在 LAN 上 demo：`HOST=0.0.0.0 RIVEN_AUTH_TOKEN=$(openssl rand -hex 32)`。两者必须同时配，否则 bin-prod-server 在 stderr 打 WARNING。
 
 ---
 

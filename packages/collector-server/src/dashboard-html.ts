@@ -119,7 +119,7 @@ header button:hover { background: #1d4ed8; }
   <h1>Matrix Riven Collector</h1>
   <nav class="tab-nav">
     <button id="tab-btn-browse" class="tab-btn active" onclick="activateTab('browse')">Browse</button>
-    <button id="tab-btn-overview" class="tab-btn" onclick="activateTab('overview')">Overview</button>
+    <a id="tab-btn-overview" class="tab-btn" href="/overview">Overview</a>
     <button id="tab-btn-updates" class="tab-btn" onclick="activateTab('updates')">🔄 Updates</button>
   </nav>
   <span class="ts" id="ts"></span>

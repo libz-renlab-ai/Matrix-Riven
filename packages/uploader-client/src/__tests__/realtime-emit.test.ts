@@ -157,6 +157,69 @@ describe("emitCcStatus", () => {
     expect(fetchSpy.mock.calls[0]![0]).toBe("http://127.0.0.1:9787/v1/cc-status");
   });
 
+  it("identity-from-config: cc-status user_id matches digital-twin.json identity.user_id (no git config / hostname fallback)", async () => {
+    // Regression for the ghost-user bug: when `git config user.email` returns
+    // empty (non-git cwd / unset local+global), realtime-emit used to fall
+    // back to `${username}@${hostname()}` while bin-uploader still wrote
+    // transcripts under the configured identity. Result: same physical CC
+    // session split into TWO user_id buckets on the collector.
+    //
+    // Fix: read `identity.user_id` from digital-twin.json FIRST, fall back to
+    // getUserId() only when config is missing / has no identity.
+    writeDigitalTwinConfig({
+      enabled: true,
+      endpoint: "http://127.0.0.1:9787",
+      token: "team-shared",
+    });
+    process.env.TEAMAGENT_REALTIME_URL = "http://127.0.0.1:9787";
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    emitCcStatus({
+      event: "session_start",
+      sessionId: "s-identity-config",
+      cwd: "/tmp/non-git-dir",
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    // writeDigitalTwinConfig() writes identity.user_id = 'test@example.com'.
+    // That MUST be the user_id on the snapshot — NOT a `${username}@${hostname}`
+    // fallback derived from the runtime user.
+    expect(body.user_id).toBe("test@example.com");
+    expect(body.user_id).not.toMatch(/@.+\.local$/);
+  });
+
+  it("identity-from-config: empty identity.user_id falls through to getUserId() chain", async () => {
+    // Edge case: config exists but identity.user_id is an empty string —
+    // treat as "no usable identity" and let the existing getUserId() chain
+    // (git config / hostname) take over.
+    const cfgDir = path.join(sandboxHome, ".teamagent");
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cfgDir, "digital-twin.json"),
+      JSON.stringify({
+        schema_version: "1",
+        identity: { user_id: "", machine_id: "test-host" },
+        uploader: { enabled: true, endpoint: "http://127.0.0.1:9787", token: null },
+        consented_at: new Date().toISOString(),
+      }),
+    );
+    __resetIdentityCacheForTests();
+    process.env.TEAMAGENT_REALTIME_URL = "http://127.0.0.1:9787";
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    emitCcStatus({ event: "session_start", sessionId: "s-empty-id" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    // Falls through to getUserId() — could be a real git email OR the
+    // hostname fallback; either way it is NOT the literal empty string.
+    expect(typeof body.user_id).toBe("string");
+    expect(body.user_id.length).toBeGreaterThan(0);
+    expect(body.user_id).not.toBe("");
+  });
+
   it("fires one POST to /v1/cc-status when the URL is set", async () => {
     process.env.TEAMAGENT_REALTIME_URL = "http://127.0.0.1:9787";
     const fetchSpy = vi.fn().mockResolvedValue(
@@ -338,31 +401,30 @@ describe("emitCcStatus", () => {
       expect(body.raw_prompt).toBeUndefined();
     });
 
-    it("threads raw_prompt only when TEAMAGENT_REALTIME_RAW_PROMPT=1 (defense in depth)", async () => {
-      // Without the env opt-in, the transport drops raw_prompt regardless
-      // of what the caller passed. Even a direct caller bypassing the hook
-      // policy gate (bin-user-prompt-submit.ts) cannot exfiltrate prompt
-      // text. /review adversarial finding #9.
-      const bodyWithoutOptIn = await captureBody(() => {
+    it("threads raw_prompt by default; opt-out via RIVEN_REALTIME_RAW_PROMPT=0 (bucket 1 G1)", async () => {
+      // Bucket 1 (G1) flipped the default: raw_prompt is threaded UNLESS the
+      // user explicitly sets RIVEN_REALTIME_RAW_PROMPT=0 (or legacy
+      // TEAMAGENT_REALTIME_RAW_PROMPT=0). Direct callers see the same default.
+      const bodyDefault = await captureBody(() => {
         emitCcStatus({
           event: "user_prompt_submit",
           sessionId: "s-3a",
           rawPrompt: "hello presence",
         });
       });
-      expect(bodyWithoutOptIn.raw_prompt).toBeUndefined();
+      expect(bodyDefault.raw_prompt).toBe("hello presence");
 
-      // With the env opt-in, raw_prompt is threaded through.
-      process.env.TEAMAGENT_REALTIME_RAW_PROMPT = "1";
+      // Explicit opt-out drops raw_prompt.
+      process.env.TEAMAGENT_REALTIME_RAW_PROMPT = "0";
       try {
-        const bodyWithOptIn = await captureBody(() => {
+        const bodyOptOut = await captureBody(() => {
           emitCcStatus({
             event: "user_prompt_submit",
             sessionId: "s-3b",
             rawPrompt: "hello presence",
           });
         });
-        expect(bodyWithOptIn.raw_prompt).toBe("hello presence");
+        expect(bodyOptOut.raw_prompt).toBeUndefined();
       } finally {
         delete process.env.TEAMAGENT_REALTIME_RAW_PROMPT;
       }
@@ -389,6 +451,221 @@ describe("emitCcStatus", () => {
         });
       });
       expect(body.event).toBe("session_end");
+    });
+  });
+
+  describe("transcript-derived metrics", () => {
+    /**
+     * Capture the POST body that emit produced (mocks fetch with a 204 stub
+     * and reads the JSON.stringify'd init.body). Local helper so each test
+     * doesn't repeat the fetch boilerplate.
+     */
+    async function captureBody(action: () => void): Promise<Record<string, unknown>> {
+      writeDigitalTwinConfig({
+        enabled: true,
+        endpoint: "http://127.0.0.1:9787",
+        token: "team-shared",
+      });
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValue(new Response(null, { status: 204 }));
+      globalThis.fetch = fetchSpy as unknown as typeof fetch;
+      action();
+      await new Promise((r) => setTimeout(r, 5));
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      return JSON.parse(
+        (fetchSpy.mock.calls[0]![1] as RequestInit).body as string,
+      ) as Record<string, unknown>;
+    }
+
+    function writeTranscript(name: string, lines: object[]): string {
+      const transcriptPath = path.join(sandboxHome, name);
+      fs.writeFileSync(
+        transcriptPath,
+        lines.map((l) => JSON.stringify(l)).join("\n") + "\n",
+      );
+      return transcriptPath;
+    }
+
+    it("fills turn_count / tool_calls / files_touched / model / context_tokens from a real-shape transcript", async () => {
+      const transcriptPath = writeTranscript("scan-1.jsonl", [
+        {
+          type: "user",
+          message: { role: "user", content: "hi" },
+          timestamp: "2026-05-19T10:00:00.000Z",
+        },
+        {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-7",
+            content: [
+              { type: "text", text: "ok" },
+              { type: "tool_use", name: "Edit", input: { file_path: "/a.ts" } },
+              { type: "tool_use", name: "Edit", input: { file_path: "/b.ts" } },
+            ],
+            usage: {
+              input_tokens: 100,
+              cache_creation_input_tokens: 50,
+              cache_read_input_tokens: 30,
+              output_tokens: 10,
+            },
+          },
+          timestamp: "2026-05-19T10:00:01.000Z",
+        },
+        {
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              { type: "tool_result", is_error: true, content: "boom" },
+            ],
+          },
+          timestamp: "2026-05-19T10:00:02.000Z",
+        },
+        {
+          type: "user",
+          message: { role: "user", content: "again" },
+          timestamp: "2026-05-19T10:00:03.000Z",
+        },
+        {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-7",
+            content: [
+              { type: "tool_use", name: "Write", input: { file_path: "/a.ts" } }, // dup → set
+            ],
+            usage: { input_tokens: 200, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 5 },
+          },
+          timestamp: "2026-05-19T10:00:04.000Z",
+        },
+      ]);
+      const body = await captureBody(() => {
+        emitCcStatus({
+          event: "user_prompt_submit",
+          sessionId: "scan-sess",
+          cwd: "/tmp",
+          transcriptPath,
+        });
+      });
+      expect(body.turn_count).toBe(2); // 2 real user turns (third 'user' line is tool_result)
+      expect(body.tool_calls_total).toBe(3); // 2 Edits + 1 Write
+      expect(body.tool_calls_failed).toBe(1);
+      expect(body.files_touched).toBe(2); // {/a.ts, /b.ts} de-duped
+      expect(body.model).toBe("claude-opus-4-7");
+      expect(body.context_tokens).toBe(200); // LATEST assistant turn
+      // pct formula = Math.round((tokens / 200_000) * 100) / 100 → 2 decimal
+      // places. 200/200000 = 0.001 → rounds to 0.00.
+      expect(body.context_pct).toBe(0);
+      expect(body.session_health).toBe("OK");
+      expect(body.session_started_at).toBe("2026-05-19T10:00:00.000Z");
+    });
+
+    it("marks session_health OVER_200K when latest assistant context exceeds 200k", async () => {
+      const transcriptPath = writeTranscript("scan-2.jsonl", [
+        {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-7",
+            content: [{ type: "text", text: "x" }],
+            usage: {
+              input_tokens: 220_000,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              output_tokens: 1,
+            },
+          },
+          timestamp: "2026-05-19T11:00:00.000Z",
+        },
+      ]);
+      const body = await captureBody(() => {
+        emitCcStatus({
+          event: "session_start",
+          sessionId: "over",
+          cwd: "/tmp",
+          transcriptPath,
+        });
+      });
+      expect(body.context_tokens).toBe(220_000);
+      expect(body.session_health).toBe("OVER_200K");
+    });
+
+    it("ships snapshot unchanged when transcript missing / oversized / unparseable", async () => {
+      const body1 = await captureBody(() => {
+        emitCcStatus({
+          event: "session_start",
+          sessionId: "no-path",
+          cwd: "/tmp",
+          // no transcriptPath
+        });
+      });
+      expect(body1.turn_count).toBeUndefined();
+      expect(body1.tool_calls_total).toBeUndefined();
+
+      const garbage = path.join(sandboxHome, "garbage.jsonl");
+      fs.writeFileSync(garbage, "{not json\n{still not json\n");
+      const body2 = await captureBody(() => {
+        emitCcStatus({
+          event: "session_start",
+          sessionId: "garbage",
+          cwd: "/tmp",
+          transcriptPath: garbage,
+        });
+      });
+      // Both lines fail JSON.parse — scan returns 0 turn_count, no fields
+      // populated (the `if (scan.turnCount > 0)` etc guards drop them).
+      expect(body2.turn_count).toBeUndefined();
+      expect(body2.tool_calls_total).toBeUndefined();
+    });
+
+    it("fills quota fields from ~/.riven/digital-twin/quota-cache.json when present", async () => {
+      // Mirror what `quota/state.ts:writeQuotaCache` would write — into the
+      // sandbox HOME so realtime-emit reads from there. Path uses `.teamagent`
+      // for legacy fallback parity with `writeDigitalTwinConfig`.
+      const cacheDir = path.join(sandboxHome, ".teamagent", "digital-twin");
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(cacheDir, "quota-cache.json"),
+        JSON.stringify({
+          subscription_tier: "max/default_claude_max_20x",
+          five_hour_utilization: 0.42,
+          seven_day_utilization: 0.31,
+          five_hour_reset_at: 1747700000,
+          seven_day_reset_at: 1747800000,
+          probed_at: "2026-05-19T10:00:00.000Z",
+          stale: false,
+        }),
+      );
+      __resetIdentityCacheForTests();
+
+      const body = await captureBody(() => {
+        emitCcStatus({
+          event: "session_start",
+          sessionId: "q-1",
+          cwd: "/tmp",
+        });
+      });
+      expect(body.subscription_tier).toBe("max/default_claude_max_20x");
+      expect(body.five_hour_utilization).toBe(0.42);
+      expect(body.seven_day_utilization).toBe(0.31);
+      expect(body.five_hour_reset_at).toBe(1747700000);
+      expect(body.seven_day_reset_at).toBe(1747800000);
+      expect(body.quota_stale).toBe(false);
+    });
+
+    it("leaves quota fields unset when cache absent", async () => {
+      const body = await captureBody(() => {
+        emitCcStatus({
+          event: "session_start",
+          sessionId: "no-q",
+          cwd: "/tmp",
+        });
+      });
+      expect(body.subscription_tier).toBeUndefined();
+      expect(body.five_hour_utilization).toBeUndefined();
+      expect(body.seven_day_utilization).toBeUndefined();
     });
   });
 });
