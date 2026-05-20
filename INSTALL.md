@@ -36,11 +36,12 @@ pnpm install
 pnpm -r build
 ```
 
-**成功判据：** 最后一条命令的输出里有 `Build success` 字样，且以下 5 个文件存在：
+**成功判据：** 最后一条命令的输出里有 `Build success` 字样，且以下 6 个文件存在：
 
 ```bash
 ls packages/uploader-client/dist/bin-*.cjs
-# 期望看到 5 个文件：
+# 期望看到 6 个文件：
+#   bin-auto-updater.cjs
 #   bin-digital-twin-tap.cjs
 #   bin-digital-twin.cjs
 #   bin-session-start.cjs
@@ -58,7 +59,8 @@ node scripts/install-client.mjs
 
 这一条命令做完以下所有事：
 
-1. 把 5 个 `.cjs` bin 从 `dist/` 拷到 `~/.riven/digital-twin/`（稳定路径，不依赖 worktree）
+1. 把 6 个 `.cjs` bin 从 `dist/` 拷到 `~/.riven/digital-twin/`（稳定路径，不依赖 worktree）
+   - 包括 `bin-auto-updater.cjs`，由 SessionStart hook fire-and-forget 拋起来自我维护
 2. 在 `~/.claude/settings.json` 里加 3 个 hook（`Stop` / `SessionStart` / `UserPromptSubmit`）
    - 已有 settings.json 先备份成 `settings.json.riven-backup-<timestamp>`
    - 用 `_rivenTag` 识别幂等更新——重跑这一步不会产生重复 entry
@@ -155,7 +157,35 @@ cat ~/.riven/digital-twin.json
 node ~/.riven/digital-twin/bin-digital-twin.cjs status
 ```
 
-`user_id` 字段就是你在看板上的标识。
+`user_id` 字段就是你在看板上的标识。新版 `status` 命令还会显示 `client_version` 和
+`auto-update.last_event`，可以直接看到 auto-update 上次跑成功 / 失败。
+
+### §D. 自动更新失败
+
+`status` 输出里如果 `auto-update.last_event` 显示 `ERROR stage=...`，看：
+
+```bash
+tail -20 ~/.riven/digital-twin/auto-update.log
+```
+
+常见原因：
+- `stage=fetch-manifest`：collector 不通 / endpoint 配错
+- `stage=download` + `HTTP 404`：server 上 manifest 引用的文件没传上
+- `stage=sha256`：server 上文件被改但 manifest 没重算（用 `--target-dir` 自定义部署常见）
+- `stage=probe`：新版本的 `bin-uploader.cjs` 启动就崩了——客户端**已自动回滚**到 .old
+- `stage=daemon-restart`：probe OK 但 spawn 新 daemon 失败（磁盘 / 杀软锁文件）—— 下次
+  SessionStart 会再试
+- `stage=manifest-suspicious`：远端 `generated_at` 不比本地新（防降级闸触发）—— 联系运维
+
+紧急关掉自动更新：
+
+```bash
+# 单机临时：
+export RIVEN_AUTO_UPDATE_DISABLED=1
+
+# 全员紧急停（运维操作）：
+node scripts/publish-client.mjs --server <host> --kill-switch --note "halted for incident X"
+```
 
 ---
 
@@ -167,7 +197,7 @@ node scripts/install-client.mjs --uninstall
 
 会：
 - 从 `~/.claude/settings.json` 删除 3 个带 `_rivenTag` 的 hook 条目（同时清理老 `_teamagentTag` 条目）
-- 删除 `~/.riven/digital-twin/` 下的 5 个 `.cjs` bin
+- 删除 `~/.riven/digital-twin/` 下的 6 个 `.cjs` bin
 
 不会：
 - 删 `~/.riven/digital-twin/queue/` 队列（有未上传的数据）
@@ -199,3 +229,6 @@ rm -rf ~/.riven
 - **重启 Claude Code 让 hook 生效** —— installer 写完 settings.json 后，Claude Code 不会热加载；新开的 Claude Code session 才会读到新 hook。Step 3 的 inject-mock 验证不依赖这个（它通过 CLI 直接调底层函数），但**正常的 Stop hook 触发**需要重启 Claude Code。
 - **企业认证 token** —— 当前 server 没开 `RIVEN_AUTH_TOKEN`，默认 config 用 `team-shared` 这个 sentinel token 直接通过。如果将来 server 开了 token gate，要手动跑一次 `bin-digital-twin.cjs login <real-token>`。
 - **跨用户共享配置** —— 一台机器一个用户。多用户共用一台机器的，每个用户自己跑一次这个 installer。
+- **现有 v0.2.x 装机升级到自动更新版本** —— 老的 `bin-session-start.cjs` 不知道要拋
+  `bin-auto-updater.cjs`。要享受自动更新，必须**手动跑一次** `node scripts/install-client.mjs`
+  把第 6 个 bin + 新版 hook 装进去。之后所有后续更新（包括对 updater 自身的）会自动完成。

@@ -247,7 +247,11 @@ function preflightDist() {
   if (!existsSync(join(DIST_DIR, 'bin-digital-twin.cjs'))) {
     fatal(`missing ${join(DIST_DIR, 'bin-digital-twin.cjs')} — rerun \`pnpm -r build\``);
   }
-  log(`OK: all ${HOOKS.length + 2} bins present in ${DIST_DIR}`);
+  // bin-auto-updater.cjs is fired by SessionStart hook; verify it's built.
+  if (!existsSync(join(DIST_DIR, 'bin-auto-updater.cjs'))) {
+    fatal(`missing ${join(DIST_DIR, 'bin-auto-updater.cjs')} — rerun \`pnpm -r build\``);
+  }
+  log(`OK: all ${HOOKS.length + 3} bins present in ${DIST_DIR}`);
 }
 
 function stageBins(home, dryRun) {
@@ -257,6 +261,7 @@ function stageBins(home, dryRun) {
     ...HOOKS.map((h) => h.bin),
     'bin-uploader.cjs',
     'bin-digital-twin.cjs',
+    'bin-auto-updater.cjs',
   ];
   for (const bin of allBins) {
     const src = join(DIST_DIR, bin);
@@ -277,6 +282,7 @@ function unstageBins(home, dryRun) {
     ...HOOKS.map((h) => h.bin),
     'bin-uploader.cjs',
     'bin-digital-twin.cjs',
+    'bin-auto-updater.cjs',
   ];
   let removed = 0;
   for (const bin of allBins) {
@@ -402,6 +408,7 @@ if (!args.dryRun) {
 log(`done.`);
 log(`next steps:`);
 log(`  1. Restart Claude Code (so it re-reads ~/.claude/settings.json).`);
-log(`  2. Verify with: node ${join(stageDir, 'bin-digital-twin.cjs')} inject-mock`);
-log(`  3. Then run: node ${join(stageDir, 'bin-uploader.cjs')}`);
-log(`  4. Check that http://192.168.22.88:8933/api/users lists your user_id.`);
+log(`  2. Verify status: node ${join(stageDir, 'bin-digital-twin.cjs')} status`);
+log(`     Expect: enabled=true, endpoint set, client_version visible after first auto-update tick.`);
+log(`  3. Real uploads happen automatically when your next CC Stop hook fires.`);
+log(`  4. After your next session, check the dashboard for your user_id.`);

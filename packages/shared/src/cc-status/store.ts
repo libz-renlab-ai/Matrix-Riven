@@ -66,6 +66,7 @@ const STRING_FIELD_CAP: Record<string, number> = {
   display_name: 256,
   machine_id: 256,
   subscription_tier: 256,
+  client_version: 64,
   // Issue #308 grill §3: raw prompt evidence. Cap at 64 KiB — comfortably
   // larger than typical CC prompts (≤8 KiB) but small enough that a hostile
   // client looping POSTs cannot fill disk through this single field. Anything
@@ -117,6 +118,8 @@ const SNAPSHOT_KEYS: ReadonlyArray<keyof CcStatusSnapshot> = [
   'session_started_at',
   // Issue #308 grill §3 — raw prompt evidence. See STRING_FIELD_CAP for the cap.
   'raw_prompt',
+  // auto-update (2026-05-19) — client manifest version, "unknown" for legacy.
+  'client_version',
   // Bucket 1/2 additions.
   'tool_name',
   'tool_input_digest',
@@ -178,6 +181,8 @@ const STRING_KEYS = new Set<string>([
   'session_started_at',
   // Issue #308 grill §3 — raw prompt evidence. Capped at 64 KiB via STRING_FIELD_CAP.
   'raw_prompt',
+  // auto-update — client manifest version string (e.g. "0.3.1+abc1234")
+  'client_version',
   // Bucket 1/2 strings.
   'tool_name',
   'tool_input_digest',

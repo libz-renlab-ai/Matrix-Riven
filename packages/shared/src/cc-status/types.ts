@@ -87,6 +87,15 @@ export interface CcStatusSnapshot {
   /** ISO timestamp of the first transcript line for this session. */
   session_started_at?: string;
 
+  // ---- client version (auto-update, 2026-05-19) ----
+  /**
+   * Riven client manifest version, e.g. "0.3.1+abc1234". Reported on every
+   * cc-status push so the Updates dashboard can show "who's on which version".
+   * Older clients (pre-auto-update) omit this; receivers treat missing as
+   * "unknown". Capped at 64 chars via STRING_FIELD_CAP.
+   */
+  client_version?: string;
+
   // ---- raw prompt evidence (issue #308, grill §3) ----
   /**
    * Raw user prompt text captured at UserPromptSubmit. Privacy-sensitive:
