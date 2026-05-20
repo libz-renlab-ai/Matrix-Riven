@@ -13,6 +13,14 @@ packages/*/.teamagent/
 .env.local
 .superpowers/
 
+# Per-machine Claude Code overrides — .claude/settings.json (no .local) can
+# still be committed for shared team settings; only the .local one is private.
+.claude/settings.local.json
+
+# viki (local knowledge graph harvested from this dev's CC sessions —
+# strictly per-machine, may contain session summaries / corrections / etc.)
+.viki/
+
 # Smoke + QA evidence artifacts (manual curl dumps from launch-readiness rounds)
 tmp_*.html
 tmp_*.json

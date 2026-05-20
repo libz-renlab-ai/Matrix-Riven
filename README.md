@@ -4,6 +4,15 @@
 
 ---
 
+## 🌐 项目主页 / Pitch Site
+
+- **VC 简版**：<https://landing-tau-lake.vercel.app/>
+- **完整版（13 章 editorial）**：<https://landing-tau-lake.vercel.app/detail.html>
+- 顶部 nav 右上角 `中 / EN` 按钮切换语言（状态存 localStorage）
+- 源码在 [`landing/`](landing/)，纯静态 + Vercel zero-config 部署
+
+---
+
 ## 包结构
 
 依赖方向：`uploader-client` → `shared`，`collector-server` → `shared`。
