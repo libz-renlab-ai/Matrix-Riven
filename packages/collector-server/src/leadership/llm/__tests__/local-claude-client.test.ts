@@ -162,7 +162,7 @@ describe('runLocalClaude', () => {
     const promise = runLocalClaude({
       systemPrompt: 's',
       userPrompt: 'u',
-      model: 'm',
+      model: 'claude-haiku-4-5-20251001',
     });
     await Promise.resolve();
     await Promise.resolve();
@@ -187,7 +187,7 @@ describe('runLocalClaude', () => {
     const promise = runLocalClaude({
       systemPrompt: 's',
       userPrompt: 'u',
-      model: 'm',
+      model: 'claude-haiku-4-5-20251001',
     });
     await Promise.resolve();
     await Promise.resolve();
@@ -206,7 +206,7 @@ describe('runLocalClaude', () => {
     const promise = runLocalClaude({
       systemPrompt: 's',
       userPrompt: 'u',
-      model: 'm',
+      model: 'claude-haiku-4-5-20251001',
       timeoutMs: 25,
     });
     await Promise.resolve();
@@ -234,8 +234,8 @@ describe('runLocalClaude', () => {
       handles.push(h);
     };
 
-    const p1 = runLocalClaude({ systemPrompt: 's', userPrompt: 'u1', model: 'm' });
-    const p2 = runLocalClaude({ systemPrompt: 's', userPrompt: 'u2', model: 'm' });
+    const p1 = runLocalClaude({ systemPrompt: 's', userPrompt: 'u1', model: 'claude-haiku-4-5-20251001' });
+    const p2 = runLocalClaude({ systemPrompt: 's', userPrompt: 'u2', model: 'claude-haiku-4-5-20251001' });
 
     // Flush a few microtasks to let p1's spawn run.
     await Promise.resolve();

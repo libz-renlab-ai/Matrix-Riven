@@ -82,12 +82,10 @@ export const FILTER_BAR_SCRIPT = `(function() {
       var value = item.getAttribute('data-fb-value');
       closeOpenMenus();
       if (key === 'range' && value === 'custom') {
-        // Prompt for from/to instead of immediate apply.
-        var f = window.prompt('开始日期 (YYYY-MM-DD)');
-        if (!f) return;
-        var t = window.prompt('结束日期 (YYYY-MM-DD)');
-        if (!t) return;
-        urlSetMany({ range: 'custom', from: f, to: t });
+        // Round-1 QA P2 (VC): window.prompt looks like 2010-era PHP forum
+        // in an enterprise dashboard. Inject a small in-place form using
+        // two <input type="date"> controls + apply / cancel buttons.
+        openCustomRangePicker();
         return;
       }
       var update = {};
@@ -105,6 +103,43 @@ export const FILTER_BAR_SCRIPT = `(function() {
   }
   function escHtml(s) {
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function openCustomRangePicker() {
+    closeOpenMenus();
+    var existing = document.getElementById('fb-range-picker');
+    if (existing) { existing.remove(); return; }
+    var u = new URL(location.href);
+    var from = u.searchParams.get('from') || '';
+    var to = u.searchParams.get('to') || '';
+    var pop = document.createElement('div');
+    pop.id = 'fb-range-picker';
+    pop.className = 'fb-menu';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', '自定义日期区间');
+    pop.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);padding:18px 22px;background:var(--surface,#fff);border:1px solid var(--hairline,#ddd);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,0.18);z-index:9990;min-width:280px;';
+    pop.innerHTML = '<div style="font-size:13px;color:var(--ink-2);margin-bottom:10px;font-weight:500;">自定义日期区间</div>' +
+      '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px;">' +
+      '<label style="font-size:12px;color:var(--ink-3);">开始日期<br><input id="fb-rp-from" type="date" value="' + escAttr(from) + '" style="margin-top:4px;padding:6px 8px;width:100%;border:1px solid var(--hairline);border-radius:6px;font-size:13px;font-family:inherit;"></label>' +
+      '<label style="font-size:12px;color:var(--ink-3);">结束日期<br><input id="fb-rp-to" type="date" value="' + escAttr(to) + '" style="margin-top:4px;padding:6px 8px;width:100%;border:1px solid var(--hairline);border-radius:6px;font-size:13px;font-family:inherit;"></label>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+      '<button id="fb-rp-cancel" type="button" style="padding:6px 14px;border:1px solid var(--hairline);background:transparent;border-radius:6px;cursor:pointer;font-size:12px;">取消</button>' +
+      '<button id="fb-rp-ok" type="button" style="padding:6px 14px;border:1px solid var(--accent-ink,#5a6d4a);background:var(--accent-ink,#5a6d4a);color:var(--surface,#fff);border-radius:6px;cursor:pointer;font-size:12px;">应用</button>' +
+      '</div>';
+    document.body.appendChild(pop);
+    var cancel = function() { pop.remove(); };
+    pop.querySelector('#fb-rp-cancel').addEventListener('click', cancel);
+    pop.querySelector('#fb-rp-ok').addEventListener('click', function() {
+      var f = pop.querySelector('#fb-rp-from').value;
+      var t = pop.querySelector('#fb-rp-to').value;
+      if (!f || !t) { cancel(); return; }
+      pop.remove();
+      urlSetMany({ range: 'custom', from: f, to: t });
+    });
+    document.addEventListener('keydown', function onEsc(e) {
+      if (e.key === 'Escape') { cancel(); document.removeEventListener('keydown', onEsc); }
+    });
   }
 
   function bind() {

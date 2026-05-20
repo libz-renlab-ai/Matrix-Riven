@@ -30,7 +30,24 @@ export function scanForOverview(outputDir: string, date: string): RawSnapshots {
     return { allSnapshots, latestPerSession, redactionsPerSession };
   }
 
+  // Round-7 QA P0 (EM): skip legacy pentest residue at read time so a
+  // CTO opening the real dashboard never sees `xss_+alert_1___` or
+  // `anon_attacker` listed as a "team member" just because the dir wasn't
+  // purged. Mirrors transcript-loader's filter.
+  const PENTEST_SUBSTRINGS = ['xss', 'svg_onload', 'onerror', 'attacker', 'evil', 'pwn', 'eve@', 'script_alert', '__alert', '_alert_', 'alert(1)', 'javascript:'];
+  const isValidUserIdShape = (raw: string): boolean => {
+    if (raw === 'unknown') return true;
+    if (raw.length === 0 || raw.length > 254) return false;
+    const lower = raw.toLowerCase();
+    for (const bad of PENTEST_SUBSTRINGS) if (lower.includes(bad)) return false;
+    if (raw.includes('@')) {
+      return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9.-]{0,253}(?:\.[A-Za-z]{1,24})?$/.test(raw);
+    }
+    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(raw);
+  };
+
   for (const user of userDirs) {
+    if (!isValidUserIdShape(user)) continue;
     const dayDir = join(outputDir, user, date);
     if (!existsSync(dayDir)) continue;
     let files: string[];

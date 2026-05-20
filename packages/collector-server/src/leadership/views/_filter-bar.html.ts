@@ -58,7 +58,7 @@ const RANGE_LABELS: Record<RangeLabel, string> = {
 const STATE_LABELS: Record<string, string> = {
   active: '活跃中',
   quiet: '安静',
-  stuck: '卡住',
+  stuck: '进展受阻',
   needs_help: '求助',
   low_activity: '本周参与不多',
 };

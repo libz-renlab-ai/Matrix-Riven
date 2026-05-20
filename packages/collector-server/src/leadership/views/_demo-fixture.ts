@@ -322,7 +322,14 @@ export function getDemoSnapshot(): OverviewSnapshot {
   // demo CTA flow and the real-data flow. Override `computedAt` to "now" so
   // the hero shows today's date in demo; event timestamps stay as the
   // hand-edited 7-day arc since they encode narrative, not absolute time.
-  const nowIso = new Date().toISOString();
+  //
+  // Round-7 P2 / autonomous: quantize `computedAt` to a 30-second bucket so
+  // /api/overview?demo=1 produces a stable ETag within the polling window.
+  // Without this, every poll mints a new ISO string → new ETag → 304 never
+  // hits → demo polling re-downloads ~26 KB each tick.
+  const bucketMs = 30_000;
+  const nowMs = Math.floor(Date.now() / bucketMs) * bucketMs;
+  const nowIso = new Date(nowMs).toISOString();
   return {
     schemaVersion: 1,
     range: { start: '2026-05-11T09:00:00Z', end: nowIso, label: '7d' },
@@ -330,7 +337,7 @@ export function getDemoSnapshot(): OverviewSnapshot {
     staleness: undefined,
     llmBrief: [
       '今日团队推进顺利：核心 dashboard 模块已上线，CI 全绿。',
-      '一名工程师在 status/page.tsx 卡住两天，需要一次结对排查。',
+      '一名工程师在 status/page.tsx 推进受阻 2 天，建议安排一次结对排查。',
       '明日聚焦 LLM 叙事层与 OKR 联动；本周已无悬而未决的发布。',
     ],
     kpis: {
@@ -359,7 +366,7 @@ export function getDemoSnapshot(): OverviewSnapshot {
         // today.sessions (the dana fix's symmetric sibling). Shape now
         // lands on "逐渐放缓" (earlier=21, later=10 < 10.5) AND ends at
         // 4 — matches today.sessions=4 + stuck narrative.
-        trend7d: [9, 7, 5, 3, 2, 1, 4], deltaVs7dAvgPct: -0.18, warnings: ['卡 2 天'],
+        trend7d: [9, 7, 5, 3, 2, 1, 4], deltaVs7dAvgPct: -0.18, warnings: ['受阻 2 天'],
         topProject: 'matrix-riven', lastSessionAt: '2026-05-18T07:10:00Z',
         toolFailureRate: 0.31, riskyActionCount: 4,
         llmWeekly: '本周聚焦 status/page.tsx 报错\n卡在 类型推导，需要结对排查',
@@ -438,7 +445,7 @@ export function getDemoSnapshot(): OverviewSnapshot {
     attention: [
       {
         kind: 'member', refId: 'blake@example.com', displayName: 'blake', initials: 'bl',
-        tag: '疑似卡住', tagSeverity: 'urgent',
+        tag: '进展受阻', tagSeverity: 'urgent',
         line2: '卡在 <span class="mono">status/page.tsx</span>',
         time: '2h 前', severity: 9,
         llmRewrite: '已在 status/page.tsx 反复尝试两天，建议结对排查 useEffect 依赖。',

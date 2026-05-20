@@ -61,7 +61,12 @@ export async function postCcStatusSnapshot(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const fetchImpl = opts.fetchImpl ?? fetch;
   const url = `${opts.baseUrl.replace(/\/$/, '')}/v1/cc-status`;
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    // CSRF / DNS-rebind hardening (Round-1 QA P2 security). Marks the
+    // request as coming from a riven uploader rather than a browser fetch.
+    'x-riven-client': 'uploader',
+  };
   if (opts.bearerToken) headers.authorization = `Bearer ${opts.bearerToken}`;
 
   const ctrl = new AbortController();

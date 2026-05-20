@@ -28,15 +28,18 @@ export function renderRetro(snap: OverviewSnapshot, opts: { demo?: boolean } = {
     .filter((m) => m.stateBadge === 'active' && m.deltaVs7dAvgPct > 0.1)
     .slice(0, 5);
   const dormant = snap.projects.filter((p) => p.state === 'dormant').slice(0, 4);
-  const briefBox = snap.llmBrief && snap.llmBrief.length > 0
-    ? `<div class="rt-brief">${snap.llmBrief.slice(0, 3).map((l) => `<div>${escapeHtml(l)}</div>`).join('')}</div>`
-    : '';
+  // §5.6: /retro is a *weekly* view. Previously we rendered `snap.llmBrief`
+  // (T5 daily brief) here because the snapshot already had it — but a daily
+  // brief at the top of a weekly retrospective reads as semantic noise
+  // ("今日… 明日…" copy in a "本周回顾" page). Replace with a
+  // deterministic weekly summary line built from the same snapshot.
+  const weeklySummary = renderWeeklySummary(snap);
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>周回顾 · Matrix-Riven</title>
+<title>周回顾 · Matrix·Riven</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>${LEADERSHIP_CSS}
 ${CONSENT_BANNER_CSS}
@@ -64,10 +67,10 @@ ${CONSENT_BANNER_CSS}
 <div class="shell">
 ${renderNav('retro', { rangeLabel: '本周回顾', demo: opts.demo === true })}
 <div class="rt-page">
-  <a class="rt-back" href="/overview">← 返回实时看板</a>
+  <a class="rt-back" href="/overview">← 返回近实时看板</a>
   <h1>本周回顾</h1>
   <div class="sub">由 ${escapeHtml(snap.range.label)} 窗口生成，覆盖 ${snap.members.length} 位成员 · ${snap.projects.length} 个项目</div>
-  ${briefBox}
+  ${weeklySummary}
 
   <section class="rt-section">
     <h2>本周交付 <span class="count">${delivered.length}</span></h2>
@@ -122,6 +125,35 @@ ${renderConsentBanner({ demo: opts.demo === true })}
 </html>`;
 }
 
+function renderWeeklySummary(snap: OverviewSnapshot): string {
+  // Round-1 QA P1 (EM): previous version repeated the same numbers that
+  // appear in each section header right below (本周交付 5 · 本周交付 5 兵
+  // 突出表现 2 · 突出表现 2). Re-shape the top line so it's a qualitative
+  // judgement, not a leading duplicate of the counts.
+  const delivered = (snap.highlights ?? []).filter((h) => ['commit', 'push', 'pr', 'release', 'tag'].includes(h.type)).length;
+  const concerns = snap.attention.length;
+  const standoutN = snap.members.filter((m) => m.stateBadge === 'active' && m.deltaVs7dAvgPct > 0.1).length;
+  const dormantN = snap.projects.filter((p) => p.state === 'dormant').length;
+  // Pick one qualitative sentence based on the dominant signal. The exact
+  // counts live in the section headers below — no need to pre-print them.
+  let judgement: string;
+  if (delivered === 0 && concerns === 0) {
+    judgement = '本周窗口内无明显交付与关注项 — 团队节奏处于低谷或数据稀疏。';
+  } else if (concerns === 0 && standoutN > 0) {
+    judgement = '本周交付稳健、无待跟进项；下方有节奏突出的成员表现。';
+  } else if (concerns > 0 && dormantN > 0) {
+    judgement = '本周有需要跟进的关注项，叠加沉睡项目；建议优先看下方"需要看一眼"段。';
+  } else if (concerns > 0) {
+    judgement = '本周有需要跟进的关注项；下方按严重度排序。';
+  } else if (dormantN > 0) {
+    judgement = '本周交付正常，但有沉睡项目需要安排接手或归档。';
+  } else {
+    judgement = '本周节奏平稳，交付落地。';
+  }
+  void delivered; void concerns; void standoutN; void dormantN;
+  return `<div class="rt-brief" aria-label="weekly summary"><div>${judgement}</div></div>`;
+}
+
 function verbLabel(type: HighlightEvent['type']): string {
   switch (type) {
     case 'commit': return '提交';
@@ -138,7 +170,7 @@ function stateBadgeLabel(b: MemberSnapshot['stateBadge']): string {
   switch (b) {
     case 'active': return '推进中';
     case 'quiet': return '安静';
-    case 'stuck': return '卡住';
+    case 'stuck': return '进展受阻';
     case 'needs_help': return '需支援';
     case 'low_activity': return '本周参与不多';
     default: return String(b);

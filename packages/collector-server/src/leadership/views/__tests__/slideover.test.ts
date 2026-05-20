@@ -192,7 +192,12 @@ describe('renderMemberSlideoverFragments (P-B6)', () => {
     expect(empty.projects).toContain('无项目活动');
   });
 
-  it('escapes user-controlled text in evolve + projects (XSS guard)', () => {
+  it('does not surface prompt text in evolve; escapes project name (XSS guard)', () => {
+    // Round-7 QA P0 (EM + journalist): the slideover evolve section used to
+    // render `p.preview` (first ~80 chars of the prompt). Now it shows only
+    // a topic class + length. Prompt text — even escaped — should not appear.
+    // Project names are still rendered (they're not PII), so the XSS escape
+    // path on projectName is the remaining assertion.
     const evil = renderMemberSlideoverFragments(
       makeMember(),
       makeMemberDetail({
@@ -210,10 +215,10 @@ describe('renderMemberSlideoverFragments (P-B6)', () => {
       }),
     );
     expect(evil.evolve).not.toContain('<script>');
-    expect(evil.evolve).toContain('&lt;script&gt;');
+    // Round-7: prompt text (escaped or not) must not appear in evolve.
+    expect(evil.evolve).not.toContain('&lt;script&gt;');
+    expect(evil.evolve).toMatch(/字符/);
     expect(evil.projects).not.toContain('<bad>');
-    // The full project label and the truncated proj-icon initials are both
-    // escaped — the literal angle-bracket sequence must not survive.
     expect(evil.projects).toContain('&lt;bad&gt;');
     expect(evil.projects).not.toMatch(/<bad/);
   });

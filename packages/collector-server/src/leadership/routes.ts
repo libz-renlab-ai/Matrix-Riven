@@ -92,6 +92,11 @@ export interface LeadershipRouteDeps {
   authToken?: string;
 }
 
+// Round-2 QA P0 (security): bound the `/healthz` disk scan. 30 s TTL means
+// up to 1 collector-tree readdir burst per 30 s regardless of probe rate.
+const HEALTHZ_TTL_MS = 30_000;
+let healthzCache: { computedAtMs: number; collectorDirExists: boolean; envelopeCount: number; lastIngestAt: string | null } | null = null;
+
 /**
  * Dispatch a single HTTP request to the leadership route handlers.
  *
@@ -137,18 +142,36 @@ export function handleLeadershipRequest(
       sendJson(res, 405, { error: 'method_not_allowed' });
       return true;
     }
+    // Round-2 QA P0 (security): the disk scan below was unauth and uncached,
+    // making `/healthz` a DoS amplifier — N members × M days × K files of
+    // readdirSync + statSync per request. Cache the result for 30 s and
+    // return the cached payload on every hit inside that window. Result:
+    // bounded I/O even under 10k req/s probing.
+    const cached = healthzCache;
+    const nowMs = now().getTime();
+    if (cached && nowMs - cached.computedAtMs < HEALTHZ_TTL_MS) {
+      const ageOfIngest = cached.lastIngestAt
+        ? Math.max(0, Math.round((nowMs - new Date(cached.lastIngestAt).getTime()) / 1000))
+        : null;
+      sendJson(res, 200, {
+        ok: true,
+        service: 'matrix-riven-collector',
+        now: new Date(nowMs).toISOString(),
+        uptimeSec: Math.round(process.uptime()),
+        collectorDirExists: cached.collectorDirExists,
+        envelopeCount: cached.envelopeCount,
+        lastIngestAt: cached.lastIngestAt,
+        lastIngestAgeSec: ageOfIngest,
+        cacheSize: deps.cache.size,
+      });
+      return true;
+    }
     let collectorDirExists = false;
     let envelopeCount = 0;
     let lastIngestAt: string | null = null;
     try {
       collectorDirExists = existsSync(deps.collectorDir);
       if (collectorDirExists) {
-        // 2026-05-19 QA-6 P2: daily-driver agent flagged that "is the
-        // server up?" isn't enough — ops needs "is anyone actually
-        // uploading?" Walk the top-level user dirs and find newest file
-        // mtime + count envelopes. Cheap O(N members × M days) on a
-        // small team; if the collector grows beyond a few thousand
-        // sessions we'd cache this for 30 s.
         let newestMs = 0;
         for (const userDir of readdirSync(deps.collectorDir, { withFileTypes: true })) {
           if (!userDir.isDirectory()) continue;
@@ -170,15 +193,14 @@ export function handleLeadershipRequest(
         if (newestMs > 0) lastIngestAt = new Date(newestMs).toISOString();
       }
     } catch { /* ignore — degrade gracefully if dir scan fails */ }
-    // Surface the ingest age so an ops query like "is anyone uploading?"
-    // is one HTTP GET away. null when no envelopes exist yet.
+    healthzCache = { computedAtMs: nowMs, collectorDirExists, envelopeCount, lastIngestAt };
     const lastIngestAgeSec = lastIngestAt
-      ? Math.max(0, Math.round((now().getTime() - new Date(lastIngestAt).getTime()) / 1000))
+      ? Math.max(0, Math.round((nowMs - new Date(lastIngestAt).getTime()) / 1000))
       : null;
     sendJson(res, 200, {
       ok: true,
       service: 'matrix-riven-collector',
-      now: now().toISOString(),
+      now: new Date(nowMs).toISOString(),
       uptimeSec: Math.round(process.uptime()),
       collectorDirExists,
       envelopeCount,
@@ -232,7 +254,21 @@ export function handleLeadershipRequest(
       highlights: renderHighlightsFragment(demoSnap),
       collab: renderCollabFragment(demoSnap),
     };
-    sendJson(res, 200, { ...demoSnap, _html });
+    // Round-7 P2 / autonomous: demo /api/overview previously had no ETag,
+    // so the 30 s polling loop re-downloaded the full demo snapshot every
+    // tick. Stamp an ETag based on the rendered demo payload and honour
+    // If-None-Match so the demo path matches the real path's 304 contract.
+    const demoBody = { ...demoSnap, _html };
+    const demoEtag = etagFor(demoBody);
+    const ifNoneMatch = req.headers['if-none-match'];
+    if (typeof ifNoneMatch === 'string' && ifNoneMatch === demoEtag) {
+      applySecurityHeaders(res);
+      res.statusCode = 304;
+      res.setHeader('etag', demoEtag);
+      res.end();
+      return true;
+    }
+    sendJsonWithEtag(res, 200, demoBody, demoEtag);
     return true;
   }
 
@@ -775,7 +811,7 @@ function renderPeopleTab(
           llmCache: deps.llmCache,
           filter,
         });
-    const tightHero = `<header id="hero" class="hero fade-in"><div><h1 class="serif">团队 <em>${snap.members.length} 人</em></h1><div class="sub">完整成员视图 · 数据每 30 秒刷新</div></div></header>`;
+    const tightHero = `<header id="hero" class="hero fade-in"><div><h1 class="serif">团队 <em>${snap.members.length} 人</em></h1><div class="sub">完整成员视图 · ${snap.members.length === 0 ? '等待第一条 transcript' : '每 30 秒近实时刷新'}</div></div></header>`;
     const body = snap.members.length === 0
       ? `<section id="members" class="section fade-in"><div class="lh-empty">这个窗口内没有成员活动</div></section>`
       : renderMembersFragment(snap); // no limit → full grid
@@ -836,7 +872,7 @@ function renderProjectsTab(
           llmCache: deps.llmCache,
           filter,
         });
-    const tightHero = `<header id="hero" class="hero fade-in"><div><h1 class="serif">项目 <em>${snap.projects.length} 个</em></h1><div class="sub">完整项目视图 · 数据每 30 秒刷新</div></div></header>`;
+    const tightHero = `<header id="hero" class="hero fade-in"><div><h1 class="serif">项目 <em>${snap.projects.length} 个</em></h1><div class="sub">完整项目视图 · ${snap.projects.length === 0 ? '等待第一条 transcript' : '每 30 秒近实时刷新'}</div></div></header>`;
     const body = snap.projects.length === 0
       ? `<section id="projects" class="section fade-in"><div class="lh-empty">这个窗口内没有项目活动</div></section>`
       : renderProjectsFragment(snap); // no limit → full list
@@ -916,7 +952,18 @@ function renderRetroTab(
  * / project rows without duplicating markup.
  */
 function renderTabPage(active: ActiveTab, rangeLabel: string, innerHtml: string, filterBarHtml: string = '', opts: { demo?: boolean } = {}): string {
-  const title = active.charAt(0).toUpperCase() + active.slice(1);
+  // Round-7 QA P1 (designer): page <title> should be Chinese, matching
+  // lang="zh-CN" + the renamed other tabs. Previously titles were
+  // English-capitalised ("People · …", "Projects · …").
+  const titleMap: Record<ActiveTab, string> = {
+    overview: '实时看板',
+    people: '团队',
+    projects: '项目',
+    activity: '活动流',
+    insights: '洞察',
+    retro: '周回顾',
+  };
+  const title = titleMap[active] ?? active;
   const isDemo = opts.demo === true;
   // 2026-05-19 QA-7 P0: final acceptance review caught that /people and
   // /projects rendered with NO consent banner — renderTabPage didn't
@@ -1508,10 +1555,28 @@ function applyFilterToDemoSnapshot(snap: OverviewSnapshot, filter: FocusFilter):
   let projects = snap.projects;
   if (project) projects = projects.filter((p) => p.name.toLowerCase() === project);
 
+  // Round-2 QA P0 (EM N1): when focus=<person> is set, project-kind
+  // attention items should be limited to projects the focused person
+  // contributes to. Otherwise the page lists "devops-pipelines 单点依赖
+  // (casey 一人独撑)" inside a blake-focused view — answers a question
+  // the viewer isn't asking. Build the focused-member's project set
+  // from snap.projects.contributors, then drop project-kind attention
+  // for projects outside it.
+  let focusProjectNames: Set<string> | null = null;
+  if (focus) {
+    focusProjectNames = new Set();
+    for (const p of snap.projects) {
+      const isContrib = p.contributors.some((c) => (c.email.split('@')[0] ?? '').toLowerCase() === focus);
+      if (isContrib) focusProjectNames.add(p.name.toLowerCase());
+    }
+  }
   const attention = snap.attention.filter((a) => {
     if (focus && a.kind === 'member') {
       const local = (a.refId.split('@')[0] ?? '').toLowerCase();
       if (local !== focus) return false;
+    }
+    if (focus && a.kind === 'project') {
+      if (!focusProjectNames || !focusProjectNames.has(a.refId.toLowerCase())) return false;
     }
     if (project && a.kind === 'project') {
       if (a.refId.toLowerCase() !== project) return false;

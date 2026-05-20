@@ -95,7 +95,12 @@ describe('mock-server', () => {
     expect(existsSync(join(outputDir, 'unknown', FROZEN_DATE, 'no-user.jsonl'))).toBe(true);
   });
 
-  it('sanitizes path-unsafe characters in user_id', async () => {
+  it('rejects path-traversal user_id with 400', async () => {
+    // Round-2 QA P0 (security N1): previously this payload was silently
+    // sanitized — `'../../etc/passwd\\evil'` got collapsed to a legit-looking
+    // folder. Penetration-test residue then appeared as a real team member.
+    // Now any provided user_id that doesn't match the email/local-part
+    // allowlist is rejected with 400 before any write.
     const transcript = '{"x":1}\n';
     const compressed = gzipSync(Buffer.from(transcript));
     const payload = {
@@ -112,12 +117,9 @@ describe('mock-server', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { user_id: string };
-    expect(body.user_id).not.toContain('/');
-    expect(body.user_id).not.toContain('\\');
-    expect(body.user_id).not.toContain('..');
-    expect(existsSync(join(outputDir, body.user_id, '2026-05-09', 'sx.jsonl'))).toBe(true);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toBe('invalid user_id');
   });
 
   it('rejects non-POST/GET with 405', async () => {

@@ -37,6 +37,13 @@ export interface RenderNavOptions {
    * back to the same path with ?demo=1 stripped (a.k.a. real mode).
    */
   demo?: boolean;
+  /**
+   * Round-1 QA P1: avatar in the top-right used to be a hardcoded "YL"
+   * which reads as un-replaced placeholder in production. Pass the
+   * current viewer's initials here when known (from auth), otherwise
+   * the avatar renders as a neutral viewer-slot dot.
+   */
+  meInitials?: string;
 }
 
 /**
@@ -54,9 +61,16 @@ export function renderNav(active: ActiveTab, opts: RenderNavOptions = {}): strin
   // the page context AND any filter chips). Now we render with href="#"
   // and a small inline onclick that strips ?demo=1 from the current URL,
   // so the pill takes you to the SAME page in real mode.
+  // Round-1 P2 — pill label was "演示数据 · 切换", but "切换" is ambiguous
+  // (theme? language?). Rename to be explicit: clicking exits demo.
   const demoPill = opts.demo
-    ? `<a class="nav-demo-pill" href="#" data-real-link title="切换到真实数据（保留当前页面）" onclick="event.preventDefault();var u=new URL(location.href);u.searchParams.delete('demo');location.href=u.pathname+(u.search||'')+u.hash;" style="background:#fdf3e0;color:#8a6420;border:1px solid #e7c98f;padding:3px 10px;border-radius:999px;font-size:11.5px;text-decoration:none;letter-spacing:.02em;">演示数据 · 切换</a>`
+    ? `<a class="nav-demo-pill" href="#" data-real-link title="退出 Demo，连接真实数据（保留当前页面）" onclick="event.preventDefault();var u=new URL(location.href);u.searchParams.delete('demo');location.href=u.pathname+(u.search||'')+u.hash;" style="background:#fdf3e0;color:#8a6420;border:1px solid #e7c98f;padding:3px 10px;border-radius:999px;font-size:11.5px;text-decoration:none;letter-spacing:.02em;">📊 演示数据 · 切到真实</a>`
     : '';
+  // Round-1 P1 — avatar was hardcoded "YL", reading like an un-replaced
+  // placeholder in production. Derive initials from auth context when
+  // present; in demo / unauth render a neutral "·" so it's clearly the
+  // viewer slot, not a stale name.
+  const meInitials = (opts.meInitials ?? '').slice(0, 2).toUpperCase() || '·';
   return `
     <nav class="nav fade-in">
       <div class="brand"><div class="brand-mark"></div><span>Matrix·Riven</span></div>
@@ -64,10 +78,10 @@ export function renderNav(active: ActiveTab, opts: RenderNavOptions = {}): strin
       <div class="nav-meta">
         ${demoPill}
         <span class="live-dot"></span>
-        <span>实时 · ${escapeHtml(rangeLabel)}</span>
+        <span>近实时 · ${escapeHtml(rangeLabel)}</span>
         <button id="theme-toggle" type="button" aria-label="切换主题" title="切换深色/浅色主题"
           style="background:transparent;border:1px solid var(--hairline);color:var(--ink-3);padding:6px 10px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;line-height:1;">◐</button>
-        <div class="avatar-me">YL</div>
+        <div class="avatar-me" title="${escapeHtml(opts.meInitials ?? '当前查看者')}">${escapeHtml(meInitials)}</div>
       </div>
     </nav>
     <script>${THEME_TOGGLE_SCRIPT}</script>

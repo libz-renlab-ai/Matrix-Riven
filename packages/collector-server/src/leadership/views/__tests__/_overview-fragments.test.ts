@@ -41,6 +41,70 @@ describe('renderHeroFragment (P-B3)', () => {
   });
 });
 
+describe('Round-7 P2 — empty state has clickable CTAs', () => {
+  it('zero members + zero projects → renders /sources and /overview?demo=1 links', () => {
+    const html = renderHeroFragment(makeSnapshot({ members: [], projects: [] }));
+    expect(html).toContain('暂无数据');
+    expect(html).toContain('href="/sources"');
+    expect(html).toContain('href="/overview?demo=1"');
+    expect(html).toContain('看怎么接入');
+    expect(html).toContain('先看 Demo');
+  });
+  it('non-empty state does NOT show empty CTAs', () => {
+    const html = renderHeroFragment(makeSnapshot({
+      members: [{ email: 'x@y' } as never],
+      projects: [{ name: 'p' } as never],
+    }));
+    expect(html).not.toContain('暂无数据');
+    expect(html).not.toContain('看怎么接入 collector');
+  });
+});
+
+describe('§5.7 — hero headline rewrites when filter active', () => {
+  it('focus=blake → headline mentions blake by name, not 团队 / 今天', () => {
+    const html = renderHeroFragment(makeSnapshot({
+      members: [{ email: 'x@y' } as never],
+      projects: [],
+      attention: [{ severity: 9 } as never],
+      appliedFilter: { focus: 'blake', range: 'today' } as never,
+    }));
+    expect(html).toContain('blake');
+    expect(html).not.toContain('今天有');
+    expect(html).not.toContain('今天，团队');
+  });
+  it('project filter → headline starts with 项目 <name>', () => {
+    const html = renderHeroFragment(makeSnapshot({
+      members: [{ email: 'x@y' } as never],
+      projects: [{ name: 'matrix-riven' } as never],
+      attention: [],
+      appliedFilter: { project: 'matrix-riven', range: '7d' } as never,
+    }));
+    expect(html).toContain('项目');
+    expect(html).toContain('matrix-riven');
+    expect(html).toContain('近 7 天');
+  });
+  it('range only (no focus/project/state) → headline mentions window not 今天', () => {
+    const html = renderHeroFragment(makeSnapshot({
+      members: [{ email: 'x@y' } as never],
+      projects: [],
+      attention: [],
+      appliedFilter: { range: '30d' } as never,
+    }));
+    expect(html).toContain('近 30 天');
+    expect(html).not.toContain('今天，团队');
+  });
+  it('still keeps the filter crumb on top of the H1', () => {
+    const html = renderHeroFragment(makeSnapshot({
+      members: [{ email: 'x@y' } as never],
+      projects: [],
+      attention: [],
+      appliedFilter: { focus: 'blake', range: 'today' } as never,
+    }));
+    expect(html).toContain('hero-filter-crumb');
+    expect(html).toContain('🔍 当前聚焦');
+  });
+});
+
 describe('renderKpisFragment (P-B3)', () => {
   const snap = makeSnapshot();
   it('emits 4 kpi cards', () => {
@@ -187,7 +251,7 @@ describe('renderAttentionFragment (P-B4)', () => {
       }],
     }));
     expect(html).toMatch(/class="attention-headline serif"/);
-    expect(html).toMatch(/一件事在等你/);
+    expect(html).toMatch(/一件事需关注/);
   });
 
   it('escapes user-supplied displayName', () => {
@@ -544,7 +608,7 @@ describe('L-10 LLM narrative — hero brief box (T5)', () => {
   it('renders no .brief-box when llmBrief is absent', () => {
     const html = renderHeroFragment(makeSnapshot());
     expect(html).not.toContain('brief-box');
-    expect(html).not.toContain('aria-label="leader daily brief"');
+    expect(html).not.toContain('aria-label="team daily brief"');
   });
 
   it('renders no .brief-box when llmBrief is an empty array', () => {
@@ -557,7 +621,7 @@ describe('L-10 LLM narrative — hero brief box (T5)', () => {
       llmBrief: ['第一条 brief 文案', '第二条 brief 文案', '第三条 brief 文案'],
     }));
     expect(html).toContain('class="brief-box');
-    expect(html).toContain('aria-label="leader daily brief"');
+    expect(html).toContain('aria-label="team daily brief"');
     expect(html).toContain('第一条 brief 文案');
     expect(html).toContain('第二条 brief 文案');
     expect(html).toContain('第三条 brief 文案');

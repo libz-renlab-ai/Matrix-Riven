@@ -31,7 +31,7 @@ export function renderActivityPage(snap: ActivityFeedSnapshot, opts: RenderActiv
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Activity · Matrix·Riven</title>
+<title>活动流 · Matrix·Riven</title>
 <style>${LEADERSHIP_CSS}
 ${FILTER_BAR_CSS}
 ${CONSENT_BANNER_CSS}
@@ -44,7 +44,7 @@ ${opts.filterBarHtml ?? ''}
 <header id="hero" class="hero fade-in">
   <div>
     <h1 class="serif">活动流</h1>
-    <div class="sub">共 ${snap.events.length} 条事件 · 数据每 30 秒刷新</div>
+    <div class="sub">共 ${snap.events.length} 条事件 · 近实时（30 秒刷新）· 最近一次 <span id="activity-last-tick" data-computed-at="${escapeHtml(snap.computedAt)}">${formatRelative(snap.computedAt)}</span></div>
   </div>
 </header>
 ${body}
@@ -54,9 +54,43 @@ ${renderConsentBanner({ demo: opts.demo === true })}
 <script>${CLIENT_REFRESH_SCRIPT}</script>
 <script>${FILTER_BAR_SCRIPT}</script>
 <script>${CONSENT_BANNER_SCRIPT}</script>
+<script>${ACTIVITY_LAST_TICK_SCRIPT}</script>
 </body>
 </html>`;
 }
+
+const ACTIVITY_LAST_TICK_SCRIPT = `
+(function () {
+  // §5.8: keep the "最近一次 X 秒前" label live without a round-trip. We
+  // pulled the server's computedAt into data-computed-at on initial render;
+  // every 10 s we re-derive the relative label client-side so the badge
+  // reflects "how stale you're looking at" instead of an evergreen
+  // "数据每 30 秒刷新" promise.
+  function fmt(iso) {
+    try {
+      var ms = Date.now() - new Date(iso).getTime();
+      if (isNaN(ms) || ms < 0) return '刚刚';
+      var s = Math.round(ms / 1000);
+      if (s < 5) return '刚刚';
+      if (s < 60) return s + ' 秒前';
+      var m = Math.round(s / 60);
+      if (m < 60) return m + ' 分钟前';
+      var h = Math.round(m / 60);
+      if (h < 24) return h + ' 小时前';
+      return Math.round(h / 24) + ' 天前';
+    } catch (e) { return '刚刚'; }
+  }
+  function tick() {
+    var el = document.getElementById('activity-last-tick');
+    if (!el) return;
+    var iso = el.getAttribute('data-computed-at');
+    if (!iso) return;
+    el.textContent = fmt(iso);
+  }
+  tick();
+  setInterval(tick, 10000);
+})();
+`;
 
 function renderBody(snap: ActivityFeedSnapshot, groups: Map<string, ActivityEvent[]>): string {
   if (snap.events.length === 0) {
@@ -140,6 +174,25 @@ function shortTokens(n: number): string {
   if (n < 100_000) return (Math.round(n / 100) / 10).toFixed(1) + 'k';
   if (n < 1_000_000) return Math.round(n / 1000) + 'k';
   return (Math.round(n / 100_000) / 10).toFixed(1) + 'M';
+}
+
+function formatRelative(iso: string): string {
+  // Render a human "X秒前 / X分钟前 / 刚刚" label for the initial server-rendered
+  // sub-header. Client polling updates the same DOM node via the polling loop.
+  try {
+    const ms = Date.now() - new Date(iso).getTime();
+    if (Number.isNaN(ms) || ms < 0) return '刚刚';
+    const s = Math.round(ms / 1000);
+    if (s < 5) return '刚刚';
+    if (s < 60) return `${s} 秒前`;
+    const m = Math.round(s / 60);
+    if (m < 60) return `${m} 分钟前`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h} 小时前`;
+    return `${Math.round(h / 24)} 天前`;
+  } catch {
+    return '刚刚';
+  }
 }
 
 function rangeLabelOf(label: string): string {

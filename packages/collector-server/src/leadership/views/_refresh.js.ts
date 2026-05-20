@@ -142,6 +142,29 @@ export const CLIENT_REFRESH_SCRIPT = `
     soId = id;
     soEtag = null;
     if (soInterval) { clearInterval(soInterval); soInterval = null; }
+    // Round-7 P2 / autonomous: wire the drawer→full-page expand link. Members
+    // get /people/<localpart>, projects get /projects (no per-project page —
+    // surface the slideover via #project=<id> deeplink so back-button works).
+    var expandEl = document.getElementById('so-expand');
+    if (expandEl) {
+      var demoSuffix = '';
+      try {
+        if (typeof location !== 'undefined' && /(\\?|&)demo=1(&|$)/.test(location.search)) {
+          demoSuffix = '?demo=1';
+        }
+      } catch (e) { /* SSR fallback */ }
+      if (kind === 'member') {
+        expandEl.setAttribute('href', '/people/' + encodeURIComponent(id) + demoSuffix);
+        expandEl.hidden = false;
+      } else if (kind === 'project') {
+        // No per-project standalone page yet — link back to /projects with a
+        // deeplink that auto-reopens the slideover (handleSlideoverHash).
+        expandEl.setAttribute('href', '/projects' + demoSuffix + '#project=' + encodeURIComponent(id));
+        expandEl.hidden = false;
+      } else {
+        expandEl.hidden = true;
+      }
+    }
     // Optimistic loading state — clear stale content while the fetch runs.
     swap('so-callout', '<div class="so-callout"><div class="so-callout-text serif">加载中…</div></div>');
     swap('so-stats', '');
@@ -153,10 +176,83 @@ export const CLIENT_REFRESH_SCRIPT = `
     if (nameEl) nameEl.textContent = id;
     if (metaEl) metaEl.textContent = '';
     if (avatarEl) avatarEl.textContent = String(id).slice(0, 2).toLowerCase();
+    // Round-1 QA P0 (EM): wire next-action affordance. Member drawer shows
+    // 3 buttons (draft Slack opener / add to 1:1 / show evidence). Hidden
+    // for project drawers (no useful 1:1 / Slack scope there).
+    var actEl = document.getElementById('so-actions');
+    if (actEl) actEl.hidden = (kind !== 'member');
     // Immediate first paint, then arm 30 s live polling.
     await pollSO();
     soInterval = setInterval(pollSO, 30000);
   };
+
+  // wire the three slideover action buttons; each emits a scoped artifact
+  // so the viewer can move from observation to one of three next actions
+  // in one click instead of dashboard-staring.
+  function copyTextSafe(text) {
+    try {
+      if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text);
+      }
+    } catch (e) {}
+    // Fallback: temporary textarea + execCommand.
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'absolute';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (e) {}
+    return null;
+  }
+  function flashToast(msg) {
+    var t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = 'position:fixed;left:50%;bottom:30px;transform:translateX(-50%);background:#222;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:10000;opacity:0;transition:opacity .2s;';
+    document.body.appendChild(t);
+    requestAnimationFrame(function () { t.style.opacity = '1'; });
+    setTimeout(function () {
+      t.style.opacity = '0';
+      setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 250);
+    }, 2200);
+  }
+  document.addEventListener('click', function (e) {
+    var target = e.target;
+    if (!target || !target.closest) return;
+    var btn = target.closest('#so-act-draft, #so-act-11, #so-act-evidence');
+    if (!btn) return;
+    if (!soId || soKind !== 'member') return;
+    var nameEl = document.getElementById('so-name');
+    var name = (nameEl && nameEl.textContent) || soId;
+    var calloutEl = document.querySelector('#so-callout .so-callout-text');
+    var calloutText = (calloutEl && calloutEl.textContent) ? calloutEl.textContent.trim() : '';
+    if (btn.id === 'so-act-draft') {
+      // Round-5 R4 P0 (journalist): rewrite the draft to read as a starting
+      // point the viewer obviously edits, not an "AI-prompted manager
+      // message". Tone shifts from prescriptive ("找个 15 分钟聊一下") to
+      // exploratory ("方便时随手回一下"); also explicit "(自动草稿 · 请按
+      // 实际情况修改)" prefix so the receiver — if it leaks — sees the AI
+      // origin instead of mistaking it for considered human concern.
+      var draft = '(自动草稿 · 请按实际情况修改) Hi ' + name + '，看 dashboard 提示「' + (calloutText || '近期可能不太顺') + '」，不一定准 — 方便时随手回一下，我看要不要帮你挪点优先级。';
+      copyTextSafe(draft);
+      flashToast('开场草稿已复制 · 请按实际情况修改后再发');
+    } else if (btn.id === 'so-act-11') {
+      var key = 'riven.next-1on1';
+      var existing = [];
+      try { existing = JSON.parse(localStorage.getItem(key) || '[]'); } catch (e) {}
+      existing.push({ name: name, addedAt: new Date().toISOString(), note: calloutText });
+      try { localStorage.setItem(key, JSON.stringify(existing.slice(-50))); } catch (e) {}
+      flashToast('已加入 ' + name + ' 的下次 1:1 议程（仅保存在本机）');
+    } else if (btn.id === 'so-act-evidence') {
+      var stats = document.getElementById('so-stats');
+      if (stats) stats.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      flashToast('已滚动到本周快照 — 信号证据');
+    }
+  });
 
   window.closeSO = function () {
     var scrim = document.getElementById('scrim');
@@ -246,7 +342,7 @@ export const CLIENT_REFRESH_SCRIPT = `
     try {
       // 2026-05-18 round-15 audit P0: propagate the demo flag.
       // 2026-05-19 QA-7 P1: propagate THE WHOLE query string. Previous
-      // version only carried "?demo=1", so a leader on
+      // version only carried "?demo=1", so a viewer on
       // /overview?demo=1&focus=alex&range=7d kept getting their filtered
       // 1-member view silently swapped back to the unfiltered 4-member
       // /api/overview?demo=1 response every 30 s. The chip stayed

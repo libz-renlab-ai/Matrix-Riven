@@ -407,9 +407,9 @@ describe('Phase 2 P2 — placeholder → real data (P-A2)', () => {
       collectorDir: '',
       mainProjects: ['main'],
     });
-    const stuck = snap.attention.find((a) => a.kind === 'member' && a.tag === '疑似卡住');
+    const stuck = snap.attention.find((a) => a.kind === 'member' && a.tag === '进展受阻');
     if (stuck) {
-      expect(stuck.line2).toMatch(/卡在|反复尝试相似问题/);
+      expect(stuck.line2).toMatch(/推进受阻于|反复尝试相似问题/);
       // No raw iteration-density / prompt-length engineer-speak
       expect(stuck.line2).not.toMatch(/次 prompt/);
       expect(stuck.line2).not.toMatch(/均长 \d+ 字/);

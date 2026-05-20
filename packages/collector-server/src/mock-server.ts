@@ -312,6 +312,35 @@ function validateUserParam(raw: string | undefined): string | null {
   return raw;
 }
 
+/**
+ * Round-2 QA P0 (EM N1): strict ingest-side user_id format check. POST
+ * envelopes whose user_id doesn't match are rejected with 400 BEFORE any
+ * filesystem write. Previously the only gate was safeUserId (which only
+ * sanitized), so penetration-test payloads like `xss_+alert_1___@test.com`
+ * and `svg_onload_1_@x.com` got created as actual user directories and then
+ * appeared as "team members" on real-data /people view. Allowed shapes:
+ *   - email-style:    LOCAL@DOMAIN.TLD  (simplified RFC5321)
+ *   - local-part only: starts with alnum, contains alnum/./_/-, ≤ 64 chars
+ * Both forms must START with alphanumeric — that rejects payloads opening
+ * with punctuation or special chars (`xss_+`, `<script`, `..`, etc.).
+ */
+const PENTEST_SUBSTRINGS = ['xss', 'svg_onload', 'onerror', 'attacker', 'evil', 'pwn', 'eve@', 'script_alert', '__alert', '_alert_', 'alert(1)', 'javascript:'];
+export function isValidUserId(raw: unknown): raw is string {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 254) return false;
+  // Round-7 QA P0 (EM): even alphanumeric-only payloads like `anon_attacker`
+  // need to be rejected. Add a blocklist of obviously-pentest substrings on
+  // top of the shape gate; mirrored at read-time in transcript-loader and
+  // disk-scan so any legacy residue is filtered from the UI.
+  const lower = raw.toLowerCase();
+  for (const bad of PENTEST_SUBSTRINGS) if (lower.includes(bad)) return false;
+  // Email shape — most common in real deployments.
+  if (raw.includes('@')) {
+    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9.-]{0,253}(?:\.[A-Za-z]{1,24})?$/.test(raw);
+  }
+  // Bare local-part / username — e.g. legacy installs without email.
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(raw);
+}
+
 function validateDateParam(raw: string | undefined): string | null {
   if (typeof raw !== 'string') return null;
   if (!DATE_RE.test(raw)) return null;
@@ -524,6 +553,16 @@ function handleGet(
   const path = url.split('?')[0];
 
   if (path === '/' || path === '/index.html') {
+    // Round-1 QA P0 (security): legacy Phase-1 dashboard at `/` was served
+    // without ANY security headers (no CSP, no X-Frame-Options, no nosniff,
+    // no Referrer-Policy), contradicting the /landing claim of "全路由响应都
+    // 带 nosniff + X-Frame-Options". Apply the same baseline as the
+    // leadership routes.
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('x-frame-options', 'DENY');
+    res.setHeader('referrer-policy', 'no-referrer');
+    res.setHeader('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'");
+    res.setHeader('cache-control', 'no-store');
     res.statusCode = 200;
     res.setHeader('content-type', 'text/html; charset=utf-8');
     res.end(DASHBOARD_HTML);
@@ -840,6 +879,23 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
       return;
     }
     if (req.method === 'GET') {
+      // Round-1 QA P0 (security): legacy GET surface (/api/file, /api/users,
+      // /api/dates, /api/sessions, /api/quota, /api/cc-status/*, /v1/member-
+      // stats) returns raw transcript content + user PII. Until each route is
+      // individually re-evaluated, gate the whole surface on `authToken` when
+      // it's configured. The Phase-1 dashboard at `/` is still served (it
+      // needs ?sid= which is a separate ACL).
+      const legacyPath = (req.url ?? '').split('?')[0] ?? '';
+      const legacyNeedsAuth =
+        legacyPath.startsWith('/api/') ||
+        legacyPath === '/v1/member-stats';
+      if (authToken && legacyNeedsAuth) {
+        const auth = requireBearerToken(req.headers, authToken);
+        if (!auth.ok) {
+          send(res, 401, { error: 'unauthorized' });
+          return;
+        }
+      }
       handleGet(req, res, outputDir, now);
       return;
     }
@@ -856,10 +912,32 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
       return;
     }
 
-    // M2 — token auth on the conversation-upload endpoint. When BPP_AUTH_TOKEN
+    // Round-1 QA P2 (security): CSRF / DNS-rebinding hardening. Reject POST
+    // requests carrying browser-origin signals — uploader clients send a
+    // bespoke `X-Riven-Client: uploader` header (or the legacy `User-Agent:
+    // matrix-riven-uploader`), so any POST that looks like a browser
+    // (Origin / Referer set, no riven client marker) is refused. This blocks
+    // a DNS-rebound site at 127.0.0.1 from submitting forged sessions.
+    const xClient = String(req.headers['x-riven-client'] ?? '');
+    const ua = String(req.headers['user-agent'] ?? '');
+    const looksLikeRivenClient =
+      xClient === 'uploader' || /matrix-riven-uploader/i.test(ua);
+    const origin = String(req.headers['origin'] ?? '');
+    const referer = String(req.headers['referer'] ?? '');
+    if (!looksLikeRivenClient && (origin.length > 0 || referer.length > 0)) {
+      send(res, 403, { error: 'csrf_blocked' });
+      return;
+    }
+
+    // M2 — token auth on the conversation-upload endpoint. When RIVEN_AUTH_TOKEN
     // is set, POST /v1/cc-sessions requires a matching Bearer token. Checked
     // BEFORE the body read so a missing/wrong token 401s regardless of payload.
-    if (authToken && route === ROUTE_CC_SESSIONS) {
+    //
+    // Round-2 QA P0 (security): cc-status POST was previously unguarded even
+    // with authToken set — any anonymous caller could inject a status snapshot
+    // for any user_id, poisoning the leadership dashboard's "live status"
+    // column. Now both POST routes go through the same gate.
+    if (authToken && (route === ROUTE_CC_SESSIONS || route === ROUTE_CC_STATUS)) {
       const auth = requireBearerToken(req.headers, authToken);
       if (!auth.ok) {
         send(res, 401, { error: 'unauthorized' });
@@ -901,6 +979,17 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
       // body 400s (unlike the optional quota sidecar on /v1/cc-sessions, the
       // snapshot IS the payload here).
       if (route === ROUTE_CC_STATUS) {
+        // Round-3 QA P1 (security): /v1/cc-sessions gates user_id via
+        // isValidUserId; this sibling path didn't. In no-token mode the
+        // same pentest payload (`xss_+alert_1___@test.com` etc.) could
+        // still pollute the dashboard via /v1/cc-status. Apply the same
+        // gate here BEFORE handing to appendCcStatusSnapshot.
+        const snapObj = json as Record<string, unknown> | null;
+        const ccUser = snapObj?.user_id;
+        if (typeof ccUser === 'string' && ccUser.length > 0 && !isValidUserId(ccUser)) {
+          send(res, 400, { error: 'invalid user_id', detail: 'user_id must be an email or [A-Za-z0-9][A-Za-z0-9._-]{0,63} local-part' });
+          return;
+        }
         // Redundant-ghost gate: reject cc-status snapshots that arrive tagged
         // with a hostname-fallback user_id when the same session_id already
         // has a real transcript under a non-ghost user_id. The realtime hook
@@ -912,10 +1001,9 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
         //
         // Return 200 (not 4xx) so any client retry-on-error path doesn't
         // hammer the gate.
-        const snapObj = json as Record<string, unknown>;
-        const snapUid = typeof snapObj.user_id === 'string' ? snapObj.user_id : '';
-        const snapSid = typeof snapObj.session_id === 'string' ? snapObj.session_id : '';
-        const snapTs = typeof snapObj.ts === 'string' ? snapObj.ts : '';
+        const snapUid = typeof ccUser === 'string' ? ccUser : '';
+        const snapSid = typeof snapObj?.session_id === 'string' ? snapObj.session_id : '';
+        const snapTs = typeof snapObj?.ts === 'string' ? snapObj.ts : '';
         if (snapUid && snapSid && isGhostUserId(snapUid)) {
           const snapDate = dateStamp(snapTs, now());
           if (hasNonGhostTranscript(outputDir, snapSid, snapDate)) {
@@ -991,6 +1079,18 @@ export async function startMockServer(opts: MockServerOptions): Promise<MockServ
           return;
         }
         const ext = isLog ? 'jsonl' : 'ogg';
+        // Round-2 QA P0 (EM N1): previously safeUserId only sanitized; any
+        // string would round-trip into a writable user dir, so the security
+        // round's penetration test payloads (`xss_+alert_1___@test.com`,
+        // `svg_onload_1_@x.com`, etc.) ended up displayed as legitimate
+        // "team members" on real-data /people view. Now we *reject* explicit
+        // user_ids that don't match a basic email-or-localpart shape BEFORE
+        // writing. Missing / null / empty user_id is still allowed and
+        // collapses to 'unknown' (legacy uploaders depend on that fallback).
+        if (typeof envelope.user_id === 'string' && envelope.user_id.length > 0 && !isValidUserId(envelope.user_id)) {
+          send(res, 400, { error: 'invalid user_id', detail: 'user_id must be an email or [A-Za-z0-9][A-Za-z0-9._-]{0,63} local-part' });
+          return;
+        }
         const userIdSafe = safeUserId(envelope.user_id);
         const date = dateStamp(envelope.captured_at, now());
         const targetDir = join(outputDir, userIdSafe, date);

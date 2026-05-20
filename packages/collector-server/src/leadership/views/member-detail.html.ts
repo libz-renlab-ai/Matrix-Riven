@@ -190,23 +190,44 @@ function renderSessions(sessions: MemberDetail['sessions'], member: MemberSnapsh
   if (sessions.length === 0) {
     return `<section class="md-sessions fade-in"><h2 class="md-section-title">近期会话样本</h2><div class="lh-empty">本窗口暂无会话样本</div></section>`;
   }
-  const annotation = `<div class="md-session-note">代表会话 ${sessions.length} 条 · 今日 ${todayCount} 条 · 近 7 天 ${trend7dTotal} 条<br>列表只显示用作上下文判断的样本，并非该窗口的完整会话流。</div>`;
+  // Round-1 QA P0 (dogfooder + journalist): per-session prompt text was
+  // visible in two layers — preview always rendered + full inside <details>.
+  // Tighten so original text is gated behind explicit click: preview text
+  // now hidden by default, with a "展开预览" affordance; full prompt
+  // remains under "查看完整" (now labeled explicitly so leaders understand
+  // this is the engineer's original wording).
+  // Round-7 QA P0 (EM + journalist): previous implementation embedded the full
+  // prompt text in server-rendered HTML inside <details>. <details> only
+  // visually hides — `view-source` / `curl` / DOM inspector all return the
+  // raw bytes. The "audit log on expand" promise was misleading because the
+  // text was in the document the moment the page loaded.
+  //
+  // Round-7 honesty fix: stop rendering prompt text in HTML entirely. Each
+  // row shows only metadata + size class + an explicit "v2 起开放" note.
+  // No expand affordance is wired in v1; the row is informational only.
+  // When the audit-log endpoint ships (v2), this section gets replaced
+  // with an XHR-on-click flow that writes the audit entry and returns the
+  // prompt body.
+  const annotation = `<div class="md-session-note">代表会话 ${sessions.length} 条 · 今日 ${todayCount} 条 · 近 7 天 ${trend7dTotal} 条<br>v1 看板默认仅显示元数据（时间 · 项目 · token 量 · prompt 字数）；prompt 原文展示 + 服务端 audit log 在 v2 起开放（需 admin 审核 + 双因素）。</div>`;
   return `<section class="md-sessions fade-in">
     <h2 class="md-section-title">近期会话样本</h2>
     ${annotation}
     <ol class="md-session-list">
-      ${sessions.slice(0, 50).map((s) => {
-        const preview = escapeHtml(s.firstPromptPreview || '（无 prompt）');
+      ${sessions.slice(0, 50).map((s, idx) => {
         const full = s.firstPromptFull;
-        const expand = full && full.length > (s.firstPromptPreview?.length ?? 0)
-          ? `<details><summary>查看完整</summary><pre class="md-session-prompt">${escapeHtml(full)}</pre></details>`
-          : '';
+        const hasFull = !!(full && full.length > 0);
+        const previewLen = (s.firstPromptPreview ?? '').length;
+        const fullLen = full?.length ?? 0;
+        const sizeLabel = hasFull
+          ? `${fullLen} 字符原文（服务端持有，v1 不渲染）`
+          : (previewLen > 0
+            ? `${previewLen} 字符摘要（服务端持有，v1 不渲染）`
+            : '无 prompt');
         return `<li class="md-session-row">
           <span class="md-session-time">${s.capturedAt.slice(0, 16).replace('T', ' ')}</span>
           <span class="md-session-project">${escapeHtml(s.projectName)}</span>
           <span class="md-session-tokens">${shortTokens(s.totalTokens)} tok</span>
-          <span class="md-session-preview">${preview}</span>
-          ${expand}
+          <span class="md-session-preview" style="color:var(--ink-3);font-size:12px;">📝 ${sizeLabel}</span>
         </li>`;
       }).join('')}
     </ol>
@@ -243,7 +264,7 @@ function escapeHtml(s: string): string {
 const STATE_LABELS: Record<string, string> = {
   active: '活跃中',
   quiet: '安静',
-  stuck: '卡住',
+  stuck: '进展受阻',
   needs_help: '求助',
   low_activity: '本周参与不多',
 };

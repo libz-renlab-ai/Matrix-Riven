@@ -82,7 +82,7 @@ export function renderSources(): string {
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>数据来源 · Matrix-Riven</title>
+<title>数据来源 · Matrix·Riven</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>${LEADERSHIP_CSS}
 ${CONSENT_BANNER_CSS}
@@ -104,7 +104,25 @@ ${CONSENT_BANNER_CSS}
 <div class="sp-page">
   <a class="sp-back" href="/landing">← 返回 landing</a>
   <h1>这个看板上的数字，都从哪里来。</h1>
-  <p class="lead">Matrix-Riven 不爬日历、不读邮件、不接 Slack。它只读一件事：你团队 Claude Code 客户端上传到<strong>本地</strong> collector 的 session transcript。<br>这意味着「工程师在 Claude 里输的每一句话」都会被 leadership 看到（PII 模式除外）。<a href="#retain" style="color:var(--ink-2);border-bottom:1px solid var(--ink-5);">下面有详细列表</a>，请在部署前如实告知团队。</p>
+  <p class="lead">Matrix·Riven 不爬日历、不读邮件、不接 Slack。它只读一件事：你团队 Claude Code 客户端上传到<strong>本地</strong> collector 的 session transcript。<br>默认看板呈现「聚合数字 + LLM 改写摘要」；查看 prompt 原文需要 leader 主动展开（v2 起每次展开会写服务端 audit log；v1 仅做本地占位），<a href="#retain" style="color:var(--ink-2);border-bottom:1px solid var(--ink-5);">下面有详细列表</a>，请在部署前如实告知团队。</p>
+
+  <h2 id="install">30 秒接入（quickstart）</h2>
+  <p class="lead" style="margin-top:6px;">在每位工程师的开发机上：</p>
+  <pre style="background:var(--surface-2,#f4f3ee);padding:14px 16px;border-radius:8px;border:1px solid var(--hairline,#eee);overflow-x:auto;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;line-height:1.7;color:var(--ink-1,#222);">
+<span style="color:var(--ink-3);"># 1) 装客户端</span>
+npm i -g @matrix-riven/uploader-client
+
+<span style="color:var(--ink-3);"># 2) 配置 collector 地址 + token（admin 提供）</span>
+export RIVEN_COLLECTOR_URL=https://your-collector:8933
+export RIVEN_AUTH_TOKEN=<span style="color:var(--accent-ink);">&lt;your-team-token&gt;</span>
+
+<span style="color:var(--ink-3);"># 3) 注册 Claude Code Stop-hook（一次性）</span>
+matrix-riven install-hook
+
+<span style="color:var(--ink-3);"># 4) 正常用 Claude Code · 约 30 秒后回看板</span>
+open https://your-collector:8933/overview
+</pre>
+  <p class="lead" style="margin-top:6px;color:var(--ink-3);font-size:13px;">服务端启动（admin）：<code>PORT=8933 RIVEN_AUTH_TOKEN=&lt;…&gt; RIVEN_COLLECTOR_DIR=/var/riven-data node dist/bin-prod-server.cjs</code>。绑非 loopback 时必须设 token（无 token 拒绝启动）。详细见 <code>INSTALL.md</code>。</p>
 
   <h2>数据来源</h2>
   <table>

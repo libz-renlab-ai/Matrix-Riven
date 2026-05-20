@@ -31,7 +31,7 @@ export function stateLabel(state: MemberStateBadge): string {
   switch (state) {
     case 'active':       return '正常推进';
     case 'quiet':        return '本周节奏放缓';
-    case 'stuck':        return '进展缓慢';
+    case 'stuck':        return '进展受阻';
     case 'needs_help':   return '可能需要支援';
     case 'low_activity': return '本周参与不多';
   }

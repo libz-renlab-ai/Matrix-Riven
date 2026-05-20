@@ -203,11 +203,20 @@ export function generateRecommendations(
 
   for (const p of snap.projects) {
     if (p.etaDays != null && p.etaDays >= 1 && p.etaDays <= 14 && p.healthScore >= 6) {
+      // Round-1 QA P0 (EM): "deliver_in_sight" used to fire for any project
+      // with etaDays<=14 + health>=6 regardless of activity. devops-pipelines
+      // (activeTodayCount=0 + busFactorWarning=true) was getting "节奏稳定 ·
+      // 12 天可 deliver" alongside its own "单点风险（关键）" — directly
+      // contradicting itself in the same recommendation list. Suppress the
+      // upbeat deliver-in-sight rec when bus_factor already fired OR when
+      // there are zero active contributors today.
+      if (p.busFactorWarning) continue;
+      if (p.activeTodayCount === 0) continue;
       out.push({
         id: `deliver_${p.name}`,
         severity: 'info',
         headline: `${p.name} 临近交付`,
-        body: `预计 ${p.etaDays} 天内可 deliver · 健康度 ${p.healthScore}/10 · 节奏稳定。`,
+        body: `预计 ${p.etaDays} 天内可 deliver · 健康度 ${p.healthScore}/10 · ${p.activeTodayCount} 人活跃。`,
         triggers: ['etaDays', `project:${p.name}`],
       });
     }

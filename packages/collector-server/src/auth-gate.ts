@@ -8,6 +8,7 @@
 // the BPP_AUTH_TOKEN env var, not hardcode it.
 
 import type { IncomingHttpHeaders } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 
 export interface AuthOk {
   ok: true;
@@ -34,7 +35,16 @@ export function requireBearerToken(
     return { ok: false, error: 'unauthorized' };
   }
   const supplied = raw.slice(BEARER_PREFIX.length);
-  if (supplied !== expected_token) {
+  // Round-1 QA P1 (security): use timing-safe comparison so remote attackers
+  // can't side-channel-leak the token via response-timing diffs. Length must
+  // match before timingSafeEqual can run (otherwise it throws), so we first
+  // length-gate then compare equal-length buffers.
+  if (supplied.length !== expected_token.length) {
+    return { ok: false, error: 'unauthorized' };
+  }
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(expected_token);
+  if (!timingSafeEqual(a, b)) {
     return { ok: false, error: 'unauthorized' };
   }
   return { ok: true };

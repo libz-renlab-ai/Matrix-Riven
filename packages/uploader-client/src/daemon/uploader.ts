@@ -143,6 +143,11 @@ export async function uploadEntry(
         'content-type': 'application/json',
         authorization: `Bearer ${input.token}`,
         'idempotency-key': input.metadata.id,
+        // CSRF / DNS-rebind hardening (Round-1 QA P2 security). Custom
+        // header forces a CORS preflight from any browser-origin attacker;
+        // server-side, presence of this header marks the request as
+        // coming from a riven client, not a generic browser fetch.
+        'x-riven-client': 'uploader',
       },
       body: JSON.stringify(envelope),
     });
