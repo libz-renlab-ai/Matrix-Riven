@@ -80,7 +80,12 @@ export async function main(
     return;
   }
   if (!raw) return;
-  let parsed: { session_id?: unknown; cwd?: unknown; prompt?: unknown; transcript_path?: unknown };
+  let parsed: {
+    session_id?: unknown;
+    cwd?: unknown;
+    transcript_path?: unknown;
+    prompt?: unknown;
+  };
   try {
     parsed = JSON.parse(raw);
   } catch {
@@ -107,6 +112,12 @@ export async function main(
       event: 'user_prompt_submit',
       ...(typeof sessionId === 'string' ? { sessionId } : {}),
       cwd,
+      ...(transcriptPath && transcriptPath.length > 0
+        ? { transcriptPath }
+        : {}),
+      // rawPrompt threading is policy-gated downstream in realtime-emit
+      // (RIVEN_REALTIME_RAW_PROMPT=0 opts out); pass through unconditionally
+      // so the env gate is the single boundary.
       ...(promptText.length > 0 ? { rawPrompt: promptText } : {}),
       ...(Object.keys(extras).length > 0 ? { extras } : {}),
     });

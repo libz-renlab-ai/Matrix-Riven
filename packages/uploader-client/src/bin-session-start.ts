@@ -92,7 +92,11 @@ export async function main(
     return;
   }
   if (!raw) return;
-  let parsed: { session_id?: unknown; cwd?: unknown };
+  let parsed: {
+    session_id?: unknown;
+    cwd?: unknown;
+    transcript_path?: unknown;
+  };
   try {
     parsed = JSON.parse(raw);
   } catch {
@@ -100,6 +104,7 @@ export async function main(
   }
   const cwd = typeof parsed.cwd === 'string' ? parsed.cwd : process.cwd();
   const sessionId = parsed.session_id;
+  const transcriptPath = parsed.transcript_path;
 
   // Host metrics — cheap, sampled once per session_start.
   const extras: Record<string, unknown> = { ...sampleHostMetrics() };
@@ -118,6 +123,9 @@ export async function main(
       event: 'session_start',
       ...(typeof sessionId === 'string' ? { sessionId } : {}),
       cwd,
+      ...(typeof transcriptPath === 'string' && transcriptPath.length > 0
+        ? { transcriptPath }
+        : {}),
       ...(Object.keys(extras).length > 0 ? { extras } : {}),
     });
   } catch {
