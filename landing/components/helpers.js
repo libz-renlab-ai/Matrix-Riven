@@ -93,6 +93,33 @@ window.MR.highlightVerb = function(t) {
   return ({ commit: "提交", push: "推送", pr: "提 PR", release: "发布", tag: "打 tag", risky: "高风险操作" })[t] || "动作";
 };
 
+/* useLang — subscribe a component to global lang change events. */
+window.MR.useLang = function() {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const h = () => force(n => n + 1);
+    window.addEventListener("langchange", h);
+    return () => window.removeEventListener("langchange", h);
+  }, []);
+  return [window.LANG, window.setLang];
+};
+
+/* LangToggle — small pill at the top-right of nav. Plain HTML rendered by
+ * vc.jsx / app.jsx. Returns a React element. */
+window.MR.LangToggle = function() {
+  const [lang, setLang] = window.MR.useLang();
+  return React.createElement("button", {
+    className: "lang-toggle",
+    title: window.tr("切换语言"),
+    onClick: () => setLang(lang === "en" ? "zh" : "en"),
+    type: "button"
+  },
+    React.createElement("span", { className: lang === "zh" ? "active" : "" }, "中"),
+    React.createElement("span", { className: "sep" }, "/"),
+    React.createElement("span", { className: lang === "en" ? "active" : "" }, "EN")
+  );
+};
+
 window.MR.useTick = function(intervalMs) {
   const [tick, setTick] = useState(0);
   useEffect(() => {

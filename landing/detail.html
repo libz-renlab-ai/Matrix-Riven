@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <a href="index.html" style="position:fixed;top:32px;left:32px;z-index:200;display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:#fff;border:1px solid #ECEAE2;border-radius:999px;font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif;font-size:12.5px;color:#45433E;text-decoration:none;box-shadow:0 1px 2px rgba(28,27,25,.04),0 4px 16px rgba(28,27,25,.04);">← 返回简版</a>
+  <a href="index.html" id="back-to-short" style="position:fixed;top:32px;left:32px;z-index:200;display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:#fff;border:1px solid #ECEAE2;border-radius:999px;font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif;font-size:12.5px;color:#45433E;text-decoration:none;box-shadow:0 1px 2px rgba(28,27,25,.04),0 4px 16px rgba(28,27,25,.04);">← <span data-i18n="back">返回简版</span></a>
   <div id="app"></div>
 
   <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
@@ -19,6 +19,7 @@
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
   <script src="components/demo-data.js"></script>
+  <script src="i18n.js"></script>
   <script type="text/babel" src="components/helpers.js"></script>
   <script type="text/babel" src="components/dashboard.jsx"></script>
   <script type="text/babel" src="components/pitch-a.jsx"></script>
