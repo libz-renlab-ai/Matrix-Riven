@@ -1,12 +1,15 @@
 # Matrix·Riven Pitch Site
 
-Static one-page pitch site for VC + leadership audiences. 10-section narrative covering the problem, the product, the LLM narrative engine, the 16 signal detectors, the data flow, security/PII, the moat, hard numbers, and the roadmap.
+Static pitch site for VC + leadership audiences. Two pages:
+
+- **`/` (index.html)** — VC 速览版. 5 compact sections: Hero (with live mini-dashboard) → 4 product views → 3 outcome case studies → 4 traction numbers → CTA. Scroll-progress bar, cursor blob, magnetic buttons, reveal stagger.
+- **`/detail.html`** — 完整版 13 章 editorial pitch. Hero → Manifesto → Problem → Insight → Product → T1-T5 narrative → 16 signals → Flow → The Pact (safety) → Moat → Numbers → Roadmap → CTA. Floating "← 返回简版" link returns to `/`.
 
 ## Tech
 
 - Pure static HTML / CSS / JSX (no build step).
 - React 18 UMD + Babel standalone compile JSX in the browser.
-- Fonts: Newsreader (serif H1) + Inter + JetBrains Mono — loaded from Google Fonts.
+- Fonts: Newsreader (serif) + Inter + JetBrains Mono — Google Fonts.
 
 ## Local preview
 
@@ -14,28 +17,25 @@ Static one-page pitch site for VC + leadership audiences. 10-section narrative c
 npx serve landing
 ```
 
-then open http://localhost:3000.
+then open http://localhost:3000 (`/` for VC version, `/detail.html` for full).
 
 ## Deploy
 
-Zero-config Vercel static deploy. From this directory:
+Zero-config Vercel static deploy:
 
 ```bash
-npx vercel deploy --prod
+npx vercel deploy --prod --cwd landing
 ```
-
-The `index.html` at the root is the entry; everything else (`styles.css`, `app.jsx`, `components/*`) is loaded by relative `<script>` / `<link>` tags.
 
 ## File map
 
-- `index.html` — entry; pulls in React UMD + Babel + every component file.
-- `styles.css` — design system (warm paper + sage green + Newsreader serif).
-- `app.jsx` — `<App>` shell, sticky nav with scroll-spy, slide-over state.
+- `index.html` — VC 速览; pulls in `styles.css` + `styles-vc.css` + `demo-data.js` + `helpers.js` + `vc.jsx`.
+- `detail.html` — 完整版; pulls in `styles.css` + `demo-data.js` + `helpers.js` + `dashboard.jsx` + `pitch-a/b/c.jsx` + `app.jsx`.
+- `styles.css` — shared design system (warm paper + sage green + Newsreader serif).
+- `styles-vc.css` — VC-page-only additions.
+- `vc.jsx` — the VC 速览 `<App>` (self-contained, doesn't share with detail).
+- `app.jsx` — the 完整版 `<App>` shell.
 - `components/`
-  - `demo-data.js` — synthetic demo data shared across sections.
-  - `helpers.js` — small util helpers.
-  - `dashboard.jsx` — embedded v7 Spatial dashboard mock (used in the Product section).
-  - `pitch-1-hero.jsx` — Hero + Problem + Product sections.
-  - `pitch-2-narrative.jsx` — LLM narrative T1-T5 + 16 signal detectors.
-  - `pitch-3-engine.jsx` — Data flow + Safety/PII demo.
-  - `pitch-4-close.jsx` — Moat + Numbers + Roadmap + CTA + Slideover.
+  - `demo-data.js`, `helpers.js` — shared utilities.
+  - `dashboard.jsx` — embedded v7 Spatial dashboard mock.
+  - `pitch-a.jsx`, `pitch-b.jsx`, `pitch-c.jsx` — full-version section components.
