@@ -104,6 +104,22 @@ export function isInjectMockTranscript(transcriptText: string): boolean {
 }
 
 /**
+ * Top-level directories under `outputDir` that are NOT user data and must
+ * be filtered out of `GET /api/users`. The collector co-locates publish /
+ * auto-update artifacts (`client-latest/`) and append-only error logs
+ * (`client-update-errors.jsonl`) under the same root as per-user upload
+ * dirs (`<user_id>/<date>/...`). Without this filter the dashboard /
+ * `/api/users` consumer sees `client-latest` as a phantom team member.
+ *
+ * Files at the top level are already excluded by `listDirNames` (filters
+ * to directory entries); this set covers the directory-typed reserved
+ * names. Add to this set when new top-level dirs are introduced.
+ */
+const RESERVED_TOP_LEVEL_DIRS = new Set<string>([
+  'client-latest', // populated by `scripts/publish-client.mjs`
+]);
+
+/**
  * Email TLDs we treat as "real" — Matrix-Riven's `getUserId()` produces these
  * out of `git config user.email`. Anything outside this allowlist is treated
  * as a hostname-fallback "ghost" identifier.
@@ -649,7 +665,9 @@ function handleGet(
   }
 
   if (path === '/api/users') {
-    const users = listDirNames(outputDir).sort((a, b) => a.localeCompare(b));
+    const users = listDirNames(outputDir)
+      .filter((n) => !RESERVED_TOP_LEVEL_DIRS.has(n))
+      .sort((a, b) => a.localeCompare(b));
     send(res, 200, { users });
     return;
   }
