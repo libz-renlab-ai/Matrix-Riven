@@ -668,6 +668,21 @@ describe('mock-server dashboard', () => {
     expect(body.users).toEqual(['userA', 'userB']);
   });
 
+  it('GET /api/users excludes reserved top-level dirs (client-latest)', async () => {
+    // `scripts/publish-client.mjs` creates `<outputDir>/client-latest/`
+    // co-located with per-user upload dirs. Before this filter,
+    // `/api/users` listed it as a phantom team member alongside real
+    // emails. The dir IS still served via `/v1/client-latest/manifest`
+    // and the auto-updater paths — just not exposed via the user listing.
+    mkdirSync(join(outputDir, 'client-latest'), { recursive: true });
+    writeFileSync(join(outputDir, 'client-latest', 'manifest.json'), '{}');
+    const res = await fetch(`${server.url}/api/users`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { users: string[] };
+    expect(body.users).toEqual(['userA', 'userB']);
+    expect(body.users).not.toContain('client-latest');
+  });
+
   it('GET /api/dates?user=userA returns dates desc', async () => {
     const res = await fetch(`${server.url}/api/dates?user=userA`);
     expect(res.status).toBe(200);
