@@ -36,14 +36,17 @@ pnpm install
 pnpm -r build
 ```
 
-**成功判据：** 最后一条命令的输出里有 `Build success` 字样，且以下 6 个文件存在：
+**成功判据：** 最后一条命令的输出里有 `Build success` 字样，且以下 9 个文件存在：
 
 ```bash
 ls packages/uploader-client/dist/bin-*.cjs
-# 期望看到 6 个文件：
+# 期望看到 9 个文件：
 #   bin-auto-updater.cjs
 #   bin-digital-twin-tap.cjs
 #   bin-digital-twin.cjs
+#   bin-pre-compact.cjs
+#   bin-pre-tool-use.cjs
+#   bin-session-end.cjs
 #   bin-session-start.cjs
 #   bin-uploader.cjs
 #   bin-user-prompt-submit.cjs
@@ -59,14 +62,16 @@ node scripts/install-client.mjs
 
 这一条命令做完以下所有事：
 
-1. 把 6 个 `.cjs` bin 从 `dist/` 拷到 `~/.riven/digital-twin/`（稳定路径，不依赖 worktree）
+1. 把 9 个 `.cjs` bin 从 `dist/` 拷到 `~/.riven/digital-twin/`（稳定路径，不依赖 worktree）
    - 包括 `bin-auto-updater.cjs`，由 SessionStart hook fire-and-forget 拋起来自我维护
-2. 在 `~/.claude/settings.json` 里加 3 个 hook（`Stop` / `SessionStart` / `UserPromptSubmit`）
+2. 在 `~/.claude/settings.json` 里加 6 个 hook（`Stop` / `SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PreCompact` / `SessionEnd`）
    - 已有 settings.json 先备份成 `settings.json.riven-backup-<timestamp>`
    - 用 `_rivenTag` 识别幂等更新——重跑这一步不会产生重复 entry
    - 自动识别并替换老的 TeamBrain `_teamagentTag` entry
+   - 与其他工具的 hook（如 Viki、CC plugin 自带 hook）并存——installer 只追加，不删 其他条目
    - 其他无关字段（theme / enabledPlugins / advisorModel / …）一字不动
 3. 跑一次 dry-run 探针（`RIVEN_UPLOADER_DRYRUN=1`）确认打包没有 `MODULE_NOT_FOUND`
+4. 如果 `~/.riven/digital-twin.json` 还不存在，自动调一次 `bin-digital-twin login team-shared` 写好默认配置（zero-touch）——已有 config 一律不动
 
 **成功判据：** 最后一行打印 `done.`，且打印了 4 条 `next steps:`。
 
@@ -196,8 +201,8 @@ node scripts/install-client.mjs --uninstall
 ```
 
 会：
-- 从 `~/.claude/settings.json` 删除 3 个带 `_rivenTag` 的 hook 条目（同时清理老 `_teamagentTag` 条目）
-- 删除 `~/.riven/digital-twin/` 下的 6 个 `.cjs` bin
+- 从 `~/.claude/settings.json` 删除 6 个带 `_rivenTag` 的 hook 条目（同时清理老 `_teamagentTag` 条目）
+- 删除 `~/.riven/digital-twin/` 下的 9 个 `.cjs` bin
 
 不会：
 - 删 `~/.riven/digital-twin/queue/` 队列（有未上传的数据）

@@ -66,7 +66,7 @@ Claude Code Stop hook
 > 跑完之后再也不用手动 install，所有后续更新全自动。
 
 v0.3.0 起客户端会在**每次 Claude Code 启动**时（SessionStart hook）后台异步检查 collector
-server 上是否有新版本。有的话自动下载、原子替换 `~/.riven/digital-twin/` 下的 6 个
+server 上是否有新版本。有的话自动下载、原子替换 `~/.riven/digital-twin/` 下的 9 个
 `.cjs` 文件，必要时优雅重启 uploader daemon。**整个过程不阻塞 CC 启动，不需要用户介入**。
 
 ### 老版本升级到自动更新版本（一次性）
@@ -93,7 +93,7 @@ node scripts/publish-client.mjs --server <user@collector-host>
 
 `<user@collector-host>` 是标准 SSH 格式（与 `ssh user@host` 同语法）。
 
-效果：scp 6 个 .cjs + 原子 manifest 替换到 server。所有客户端**下次** Claude Code 启动
+效果：scp 9 个 .cjs + 原子 manifest 替换到 server。所有客户端**下次** Claude Code 启动
 时就会拉到新版（带 0–30s 随机 jitter，避免 30 台机器同毫秒打 server）。
 
 **可选参数**：
@@ -137,32 +137,35 @@ HMAC-SHA256 签 manifest；客户端用它验证。secret 未设两侧都是 bac
 pnpm -r build
 ```
 
-构建完成后，`packages/uploader-client/dist/` 包含以下 CJS standalone bin（依赖已内联，无需 node_modules）：
+构建完成后，`packages/uploader-client/dist/` 包含以下 9 个 CJS standalone bin（依赖已内联，无需 node_modules）：
 
 | bin | 用途 |
 |---|---|
 | `bin-digital-twin-tap.cjs` | Claude Code Stop hook，抓取 transcript 进本地队列 |
 | `bin-uploader.cjs` | detached 守护进程，负责队列上传 |
-| `bin-session-start.cjs` | SessionStart hook 薄壳，发射实时状态 |
-| `bin-user-prompt-submit.cjs` | UserPromptSubmit hook 薄壳，发射实时状态 |
+| `bin-auto-updater.cjs` | SessionStart 时 fire-and-forget 拉起，做客户端自我升级 |
+| `bin-session-start.cjs` | SessionStart hook，发射实时状态 + 拋 auto-updater |
+| `bin-user-prompt-submit.cjs` | UserPromptSubmit hook，实时状态发射 |
+| `bin-pre-tool-use.cjs` | PreToolUse hook，工具调用前的实时观测 |
+| `bin-pre-compact.cjs` | PreCompact hook，记录 compact 事件 |
+| `bin-session-end.cjs` | SessionEnd hook，记录会话结束 |
 | `bin-digital-twin.cjs` | CLI 工具（`login` / `pause` / `status` / `inject-mock` 等） |
 
 ### 2. 配置 Claude Code hooks
 
-在 Claude Code 设置中（`~/.claude/settings.json` 或项目级 `.claude/settings.json`）配置 3 个 hook：
+**推荐**：直接跑 `node scripts/install-client.mjs`，它会把 9 个 bin 装到 `~/.riven/digital-twin/` 并在 `~/.claude/settings.json` 里幂等合并 6 个 hook 条目，最后自动 `login team-shared` 写好默认 config——零交互。详见 [INSTALL.md](./INSTALL.md)。
+
+如果你想手工配，6 个 hook 的最小 JSON 形如：
 
 ```json
 {
   "hooks": {
-    "Stop": [
-      { "hooks": [{ "type": "command", "command": "node /path/to/bin-digital-twin-tap.cjs" }] }
-    ],
-    "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "node /path/to/bin-session-start.cjs" }] }
-    ],
-    "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "node /path/to/bin-user-prompt-submit.cjs" }] }
-    ]
+    "Stop":             [{ "hooks": [{ "type": "command", "command": "node /path/to/bin-digital-twin-tap.cjs" }] }],
+    "SessionStart":     [{ "hooks": [{ "type": "command", "command": "node /path/to/bin-session-start.cjs" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node /path/to/bin-user-prompt-submit.cjs" }] }],
+    "PreToolUse":       [{ "hooks": [{ "type": "command", "command": "node /path/to/bin-pre-tool-use.cjs" }] }],
+    "PreCompact":       [{ "hooks": [{ "type": "command", "command": "node /path/to/bin-pre-compact.cjs" }] }],
+    "SessionEnd":       [{ "hooks": [{ "type": "command", "command": "node /path/to/bin-session-end.cjs" }] }]
   }
 }
 ```
@@ -171,9 +174,9 @@ pnpm -r build
 
 ### 3. 客户端配置文件
 
-配置文件落在 `~/.riven/digital-twin.json`（**注意是 `.riven` 顶层的 json 文件，不在 `digital-twin/` 子目录里**）。首次运行 `bin-digital-twin.cjs login <token>` 后自动生成。其他本地数据（队列、daemon pid、上传日志、machine-id）都在 `~/.riven/digital-twin/` 下。
+配置文件落在 `~/.riven/digital-twin.json`（**注意是 `.riven` 顶层的 json 文件，不在 `digital-twin/` 子目录里**）。`install-client.mjs` 跑完会自动通过 `bin-digital-twin.cjs login team-shared` 创建一份默认配置（zero-touch），不需要用户手动跑 login。其他本地数据（队列、daemon pid、上传日志、machine-id）都在 `~/.riven/digital-twin/` 下。
 
-⚠️ **当前 `login` 不接受 endpoint 参数**，写出的配置默认使用一个上游遗留的内网 IP（`http://192.168.22.88:8933`）。新部署时需要手动编辑 `~/.riven/digital-twin.json` 里的 `uploader.endpoint` 字段指向你的真实 server，这是已知未优化点。
+⚠️ **当前 `login` 不接受 endpoint 参数**，installer 写出的默认配置使用 `http://192.168.22.88:8933`。**自建 collector 的部署**装完后需手动编辑 `~/.riven/digital-twin.json` 里的 `uploader.endpoint` 字段指向你自己的 server。这是已知未优化点。
 
 ### 4. 实时状态（可选）
 

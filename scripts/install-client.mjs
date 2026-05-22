@@ -378,6 +378,46 @@ function dryRunProbe(stageDir) {
   log(`probe OK: ${out.trim().split('\n').pop()}`);
 }
 
+/**
+ * Zero-touch bootstrap of the per-user config at `~/.riven/digital-twin.json`.
+ *
+ * Without this step a fresh-install user finishes `install-client.mjs` with
+ * hooks wired up but no config file — every subsequent `bin-digital-twin
+ * status` returns `digital-twin: not configured`, contradicting INSTALL §3a's
+ * 4 success criteria. The fix mirrors what an operator would type by hand:
+ * `bin-digital-twin login team-shared`. We only spawn it when the config
+ * file is absent, so a user with a custom endpoint / token (set by a previous
+ * `login` or hand-edit) is never overwritten.
+ */
+function ensureConfig(home, stageDir, dryRun) {
+  const configFile = join(home, '.riven', 'digital-twin.json');
+  if (existsSync(configFile)) {
+    log(`config already present at ${configFile} — leaving untouched`);
+    return;
+  }
+  if (dryRun) {
+    log(`[dry-run] would create ${configFile} via \`bin-digital-twin login team-shared\``);
+    return;
+  }
+  const cli = join(stageDir, 'bin-digital-twin.cjs');
+  log(`bootstrapping config: ${cli} login team-shared`);
+  const r = spawnSync(
+    process.execPath,
+    ['--no-warnings', cli, 'login', 'team-shared'],
+    { encoding: 'utf-8' },
+  );
+  const out = (r.stdout || '') + (r.stderr || '');
+  if (r.status !== 0) {
+    process.stderr.write(out);
+    fatal(`bin-digital-twin login exited ${r.status} — config not written`);
+  }
+  if (!existsSync(configFile)) {
+    process.stderr.write(out);
+    fatal(`bin-digital-twin login claimed success but ${configFile} is missing`);
+  }
+  log(`config written: ${configFile}`);
+}
+
 // ────────────────────────────── main ──────────────────────────────
 
 const args = parseArgs(process.argv.slice(2));
@@ -405,6 +445,7 @@ mergeHooks(home, stageDir, args.dryRun, args.projectLevel);
 if (!args.dryRun) {
   dryRunProbe(stageDir);
 }
+ensureConfig(home, stageDir, args.dryRun);
 log(`done.`);
 log(`next steps:`);
 log(`  1. Restart Claude Code (so it re-reads ~/.claude/settings.json).`);
