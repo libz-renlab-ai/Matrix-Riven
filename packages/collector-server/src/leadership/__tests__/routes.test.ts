@@ -3,8 +3,8 @@
  * Spins up a real http.Server with a mock collector dir.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { gzipSync } from 'node:zlib';
+import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { gzipSync, gunzipSync } from 'node:zlib';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -142,6 +142,28 @@ async function getJson(path: string): Promise<{ status: number; body: unknown; c
   const contentType = res.headers.get('content-type');
   const body = await res.json();
   return { status: res.status, body, contentType };
+}
+
+/**
+ * Raw HTTP GET that does NOT auto-decompress (unlike the global fetch/undici),
+ * so we can assert on Content-Encoding and inspect the bytes actually sent on
+ * the wire. Returns the response status, headers, and raw body buffer.
+ */
+function rawGet(
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; headers: IncomingMessage['headers']; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const req = request(`${baseUrl}${path}`, { method: 'GET', headers }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () =>
+        resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }),
+      );
+    });
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -773,5 +795,79 @@ describe('LLM-on e2e (L-13)', () => {
     const res = await fetch(`${llmBaseUrl}/api/overview`);
     expect(res.status).toBe(200);
     expect(llmCacheRef.keys().length).toBe(3);
+  });
+});
+
+// ── PR2: gzip compression + Server-Timing instrumentation ────────────────────
+
+describe('gzip compression + Server-Timing (PR2)', () => {
+  it('compresses /api/overview when the client sends Accept-Encoding: gzip', async () => {
+    const { status, headers, body } = await rawGet('/api/overview', { 'accept-encoding': 'gzip' });
+    expect(status).toBe(200);
+    expect(headers['content-encoding']).toBe('gzip');
+    expect(headers['vary']).toMatch(/accept-encoding/i);
+    // content-length must reflect the COMPRESSED byte length actually sent.
+    expect(Number(headers['content-length'])).toBe(body.length);
+    // Body must gunzip back to the real JSON snapshot.
+    const json = JSON.parse(gunzipSync(body).toString('utf8')) as Record<string, unknown>;
+    expect(Array.isArray(json.members)).toBe(true);
+    expect(Array.isArray(json.projects)).toBe(true);
+  });
+
+  it('does NOT compress when the client omits Accept-Encoding', async () => {
+    const { status, headers, body } = await rawGet('/api/overview', {});
+    expect(status).toBe(200);
+    expect(headers['content-encoding']).toBeUndefined();
+    // Plain JSON, directly parseable (not gzip magic bytes).
+    const json = JSON.parse(body.toString('utf8')) as Record<string, unknown>;
+    expect(Array.isArray(json.members)).toBe(true);
+  });
+
+  it('emits a Server-Timing: gzip header on compressed responses', async () => {
+    const { headers } = await rawGet('/api/overview', { 'accept-encoding': 'gzip' });
+    expect(headers['server-timing']).toMatch(/gzip;dur=/);
+  });
+
+  it('compresses HTML pages (/overview) when gzip is accepted', async () => {
+    const { status, headers, body } = await rawGet('/overview', { 'accept-encoding': 'gzip' });
+    expect(status).toBe(200);
+    expect(headers['content-encoding']).toBe('gzip');
+    const html = gunzipSync(body).toString('utf8');
+    expect(html).toContain('<!DOCTYPE html>');
+  });
+
+  it('skips compression for tiny bodies below the threshold (/api/llm/status)', async () => {
+    // {"enabled":false} is ~17 bytes — gzip overhead isn't worth it, so the
+    // response must be sent uncompressed even though the client accepts gzip.
+    const { status, headers, body } = await rawGet('/api/llm/status', { 'accept-encoding': 'gzip' });
+    expect(status).toBe(200);
+    expect(headers['content-encoding']).toBeUndefined();
+    expect(JSON.parse(body.toString('utf8'))).toEqual({ enabled: false });
+  });
+
+  it('304 responses are not compressed and keep working under Accept-Encoding: gzip', async () => {
+    const first = await rawGet('/api/overview', { 'accept-encoding': 'gzip' });
+    const etag = first.headers['etag'] as string | undefined;
+    expect(etag).toBeTruthy();
+    const second = await rawGet('/api/overview', {
+      'accept-encoding': 'gzip',
+      'if-none-match': etag!,
+    });
+    expect(second.status).toBe(304);
+    expect(second.body.length).toBe(0);
+    expect(second.headers['content-encoding']).toBeUndefined();
+  });
+
+  it('serves the cached gzipped buffer consistently across repeated hits', async () => {
+    // The API cache stores the precompressed buffer; two gzip-accepting hits
+    // must both come back gzip-encoded and gunzip to identical JSON.
+    cache.clear();
+    const a = await rawGet('/api/overview?range=7d', { 'accept-encoding': 'gzip' });
+    const b = await rawGet('/api/overview?range=7d', { 'accept-encoding': 'gzip' });
+    expect(a.headers['content-encoding']).toBe('gzip');
+    expect(b.headers['content-encoding']).toBe('gzip');
+    const ja = JSON.parse(gunzipSync(a.body).toString('utf8')) as Record<string, unknown>;
+    const jb = JSON.parse(gunzipSync(b.body).toString('utf8')) as Record<string, unknown>;
+    expect(ja.computedAt).toBe(jb.computedAt);
   });
 });
