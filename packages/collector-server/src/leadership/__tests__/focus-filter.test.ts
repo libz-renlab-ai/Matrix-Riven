@@ -117,16 +117,28 @@ describe('parseFocusFromQuery', () => {
 // ── resolveRange ─────────────────────────────────────────────────────────────
 
 describe('resolveRange', () => {
-  it("today returns [UTC day start of now, now]", () => {
+  // Day boundaries are SERVER-LOCAL (not UTC) so 今日 flips at local midnight.
+  // Assertions check the local-midnight invariant (getHours()===0 etc.) rather
+  // than absolute UTC strings, so they hold in any server timezone — and they
+  // FAIL on a non-UTC host if the impl ever regresses to setUTCHours/Date.UTC.
+  it('today returns [local midnight of now, now]', () => {
     const r = resolveRange({ range: 'today' }, NOW);
-    expect(r.start.toISOString()).toBe('2026-05-18T00:00:00.000Z');
+    const expected = new Date(NOW);
+    expected.setHours(0, 0, 0, 0);
+    expect(r.start.getTime()).toBe(expected.getTime());
+    expect(r.start.getHours()).toBe(0);
+    expect(r.start.getMinutes()).toBe(0);
+    expect(r.start.getSeconds()).toBe(0);
     expect(r.end).toBe(NOW);
   });
 
-  it('yesterday returns [-1d 00:00, today 00:00)', () => {
+  it('yesterday returns [local -1d midnight, local today midnight)', () => {
     const r = resolveRange({ range: 'yesterday' }, NOW);
-    expect(r.start.toISOString()).toBe('2026-05-17T00:00:00.000Z');
-    expect(r.end.toISOString()).toBe('2026-05-18T00:00:00.000Z');
+    const todayStart = new Date(NOW);
+    todayStart.setHours(0, 0, 0, 0);
+    expect(r.end.getTime()).toBe(todayStart.getTime());
+    expect(r.start.getTime()).toBe(todayStart.getTime() - 24 * 60 * 60 * 1000);
+    expect(r.start.getHours()).toBe(0);
   });
 
   it('7d returns [now-7d, now]', () => {
@@ -134,12 +146,13 @@ describe('resolveRange', () => {
     expect(NOW.getTime() - r.start.getTime()).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
-  it('custom uses from/to UTC day boundaries (to extended to end of day)', () => {
-    const from = new Date(Date.UTC(2026, 4, 1));
-    const to = new Date(Date.UTC(2026, 4, 10));
+  it('custom uses from/to local day boundaries (to extended to end of day)', () => {
+    const from = new Date(2026, 4, 1); // local 2026-05-01 00:00
+    const to = new Date(2026, 4, 10); // local 2026-05-10 00:00
     const r = resolveRange({ range: 'custom', from, to }, NOW);
-    expect(r.start.toISOString()).toBe('2026-05-01T00:00:00.000Z');
-    expect(r.end.toISOString()).toBe('2026-05-11T00:00:00.000Z');
+    expect(r.start.getTime()).toBe(new Date(2026, 4, 1).getTime());
+    expect(r.end.getTime()).toBe(new Date(2026, 4, 11).getTime()); // to + 24h
+    expect(r.start.getHours()).toBe(0);
   });
 });
 

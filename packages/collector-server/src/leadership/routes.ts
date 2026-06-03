@@ -1829,7 +1829,7 @@ function resolveEmailByLocalPart(collectorDir: string, localPart: string): strin
  * - anything else → null (route emits 400 so a misconfigured client doesn't
  *   silently get stale-window data without realising it)
  */
-function parseRange(rangeStr: string | undefined, now: Date): DateRange | null {
+export function parseRange(rangeStr: string | undefined, now: Date): DateRange | null {
   if (rangeStr !== undefined && rangeStr !== '' && !['today', '24h', '7d', '30d'].includes(rangeStr)) {
     return null;
   }
@@ -1839,7 +1839,12 @@ function parseRange(rangeStr: string | undefined, now: Date): DateRange | null {
   switch (rangeStr) {
     case 'today':
       start = new Date(now);
-      start.setUTCHours(0, 0, 0, 0);
+      // Server-local midnight (not UTC): 今日 follows the collector host's
+      // timezone so a UTC+8 team sees the day flip at local 00:00, not 08:00.
+      // On a UTC host this equals UTC midnight. Mirrors focus-filter's
+      // localDayStart(). On-disk <date> folders stay UTC (dateStamp) — the
+      // in-range filter keys off session timestamps, not folder names.
+      start.setHours(0, 0, 0, 0);
       label = 'today';
       break;
     case '24h':

@@ -58,24 +58,25 @@ export function parseFocusFromQuery(query: URLSearchParams): FocusFilter {
 }
 
 /**
- * Convert a `FocusFilter`'s `range` into concrete UTC start/end Dates.
- * `now` is injected for testability.
+ * Convert a `FocusFilter`'s `range` into concrete start/end Dates. Day
+ * boundaries (today / yesterday / custom) use the server's LOCAL timezone so
+ * 今日 flips at local midnight, not UTC. `now` is injected for testability.
  *
- *  today      → [00:00 UTC of now's UTC day, now]
- *  yesterday  → [00:00 UTC of now-1d, 00:00 UTC of now]
+ *  today      → [local 00:00 of now's day, now]
+ *  yesterday  → [local 00:00 of now-1d, local 00:00 of now]
  *  24h        → [now - 24h, now]
  *  7d         → [now - 7d, now]
  *  30d        → [now - 30d, now]
- *  custom     → [from 00:00 UTC, to + 24h 00:00 UTC)   (inclusive both ends, "to" extends to end of day)
+ *  custom     → [from local 00:00, to + 24h local 00:00)   (inclusive both ends, "to" extends to end of day)
  */
 export function resolveRange(filter: FocusFilter, now: Date): { start: Date; end: Date } {
   switch (filter.range) {
     case 'today': {
-      const start = utcDayStart(now);
+      const start = localDayStart(now);
       return { start, end: now };
     }
     case 'yesterday': {
-      const todayStart = utcDayStart(now);
+      const todayStart = localDayStart(now);
       const start = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
       return { start, end: todayStart };
     }
@@ -86,9 +87,9 @@ export function resolveRange(filter: FocusFilter, now: Date): { start: Date; end
     case '30d':
       return { start: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), end: now };
     case 'custom': {
-      if (!filter.from || !filter.to) return { start: utcDayStart(now), end: now };
-      const start = utcDayStart(filter.from);
-      const end = new Date(utcDayStart(filter.to).getTime() + 24 * 60 * 60 * 1000);
+      if (!filter.from || !filter.to) return { start: localDayStart(now), end: now };
+      const start = localDayStart(filter.from);
+      const end = new Date(localDayStart(filter.to).getTime() + 24 * 60 * 60 * 1000);
       return { start, end };
     }
   }
@@ -174,8 +175,11 @@ export function focusFilterCacheKey(f: FocusFilter): string {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-function utcDayStart(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+function localDayStart(d: Date): Date {
+  // Server-local midnight (not UTC). The dashboard's 今日 / 昨日 windows follow
+  // the collector host's timezone, so a UTC+8 team sees the day flip at local
+  // 00:00 instead of 08:00. On a UTC host this equals UTC midnight.
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
 function trimToUndef(v: string | null): string | undefined {
