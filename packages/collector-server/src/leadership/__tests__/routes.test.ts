@@ -775,3 +775,107 @@ describe('LLM-on e2e (L-13)', () => {
     expect(llmCacheRef.keys().length).toBe(3);
   });
 });
+
+// ── PR1: /api/overview?full= — unsliced fragments for People/Projects polling ─
+
+describe('GET /api/overview?full= (PR1: unsliced fragments)', () => {
+  // Isolated server with > 4 members AND > 4 projects so the top-4 slice is
+  // observable. The default /api/overview fragments slice to top-4 (for the
+  // Overview tab). The People/Projects 30 s polling loop instead requests the
+  // UNSLICED fragment so its tick refreshes the full grid in place rather than
+  // collapsing it to 4 (the bug this PR fixes).
+  const fullDir = join(tmpdir(), `riven-full-frag-${randomUUID()}`);
+  let fullServer: Server;
+  let fullBase: string;
+
+  beforeAll(async () => {
+    // 6 members, each owning their own project, 6 sessions across 2 active
+    // days — clears the project volume gate (≥ 5 sessions OR ≥ 2 active days)
+    // so all 6 members and all 6 projects survive into the snapshot.
+    for (let i = 0; i < 6; i++) {
+      const email = `dev${i}@example.com`;
+      const project = `proj-${i}`;
+      const cwd = `/home/dev${i}/${project}`;
+      for (const date of ['2026-05-14', '2026-05-15']) {
+        for (let k = 0; k < 3; k++) {
+          writeEnvelope(fullDir, email, date, `s${i}-${date}-${k}`, { projectName: project, cwd });
+        }
+      }
+    }
+    const deps: LeadershipRouteDeps = {
+      collectorDir: fullDir,
+      cache: new TtlCache<unknown>(60_000),
+      now: () => FIXED_NOW,
+    };
+    await new Promise<void>((resolve, reject) => {
+      fullServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+        if (!handleLeadershipRequest(req, res, deps)) {
+          res.statusCode = 404;
+          res.end('not handled');
+        }
+      });
+      fullServer.once('error', reject);
+      fullServer.listen(0, '127.0.0.1', () => {
+        const addr = fullServer.address();
+        if (!addr || typeof addr === 'string') {
+          reject(new Error('full-frag server failed to bind'));
+          return;
+        }
+        fullBase = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) =>
+      fullServer.close((err) => (err ? reject(err) : resolve())),
+    );
+  });
+
+  const countOf = (s: string | undefined, sub: string) => (s ? s.split(sub).length - 1 : 0);
+
+  it('default request slices members + projects to top-4 with a see-all footer', async () => {
+    const body = (await (await fetch(`${fullBase}/api/overview`)).json()) as {
+      members: unknown[]; projects: unknown[]; _html: Record<string, string>;
+    };
+    expect(body.members.length).toBeGreaterThan(4); // fixture makes slicing observable
+    expect(body.projects.length).toBeGreaterThan(4);
+    expect(countOf(body._html.members, 'class="member-tile"')).toBe(4);
+    expect(countOf(body._html.members, 'see-all-row')).toBe(1);
+    expect(countOf(body._html.projects, 'class="proj-row"')).toBe(4);
+    expect(countOf(body._html.projects, 'see-all-row')).toBe(1);
+  });
+
+  it('?full=members returns the UNSLICED members fragment (all members, no see-all)', async () => {
+    const body = (await (await fetch(`${fullBase}/api/overview?full=members`)).json()) as {
+      members: unknown[]; _html: Record<string, string>;
+    };
+    const total = body.members.length;
+    expect(total).toBeGreaterThan(4);
+    expect(countOf(body._html.members, 'class="member-tile"')).toBe(total);
+    expect(countOf(body._html.members, 'see-all-row')).toBe(0);
+    // full is scoped: projects stay sliced to the top-4.
+    expect(countOf(body._html.projects, 'class="proj-row"')).toBe(4);
+  });
+
+  it('?full=projects returns the UNSLICED projects fragment (all projects, no see-all)', async () => {
+    const body = (await (await fetch(`${fullBase}/api/overview?full=projects`)).json()) as {
+      projects: unknown[]; _html: Record<string, string>;
+    };
+    const total = body.projects.length;
+    expect(total).toBeGreaterThan(4);
+    expect(countOf(body._html.projects, 'class="proj-row"')).toBe(total);
+    expect(countOf(body._html.projects, 'see-all-row')).toBe(0);
+    // full is scoped: members stay sliced to the top-4.
+    expect(countOf(body._html.members, 'class="member-tile"')).toBe(4);
+  });
+
+  it('an unrecognised full value falls back to the default sliced fragments', async () => {
+    const body = (await (await fetch(`${fullBase}/api/overview?full=bogus`)).json()) as {
+      _html: Record<string, string>;
+    };
+    expect(countOf(body._html.members, 'class="member-tile"')).toBe(4);
+    expect(countOf(body._html.projects, 'class="proj-row"')).toBe(4);
+  });
+});

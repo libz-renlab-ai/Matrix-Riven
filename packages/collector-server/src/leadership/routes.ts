@@ -359,7 +359,14 @@ export function handleLeadershipRequest(
     // the same query string the page is mounted with, so the JSON snapshot
     // must apply the same filter or live polling resets the view.
     const apiFilter = parseFocusFromQuery(query);
-    const cacheKey = `/api/overview|${range.label}${focusFilterCacheKey(apiFilter)}`;
+    // PR1: the People/Projects 30 s polling loop requests the UNSLICED member
+    // or project fragment (`?full=members` / `?full=projects`) so its tick
+    // refreshes the full grid in place instead of collapsing it to the
+    // Overview's top-4. Normalise unknown values to null so arbitrary
+    // `?full=…` input can't spawn distinct cache entries (DoS amplification).
+    const fullParam = query.get('full');
+    const fullScope = fullParam === 'members' || fullParam === 'projects' ? fullParam : null;
+    const cacheKey = `/api/overview|${range.label}${focusFilterCacheKey(apiFilter)}${fullScope ? `|full=${fullScope}` : ''}`;
     let entry = deps.cache.get(cacheKey) as
       | { body: Record<string, unknown>; etag: string }
       | undefined;
@@ -380,8 +387,8 @@ export function handleLeadershipRequest(
           hero: renderHeroFragment(snap),
           kpis: renderKpisFragment(snap),
           attention: renderAttentionFragment(snap, { limit: 3 }),
-          members: renderMembersFragment(snap, { limit: 4 }),
-          projects: renderProjectsFragment(snap, { limit: 4 }),
+          members: renderMembersFragment(snap, fullScope === 'members' ? {} : { limit: 4 }),
+          projects: renderProjectsFragment(snap, fullScope === 'projects' ? {} : { limit: 4 }),
           highlights: renderHighlightsFragment(snap),
           collab: renderCollabFragment(snap),
         };
