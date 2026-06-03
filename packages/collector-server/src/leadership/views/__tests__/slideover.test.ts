@@ -306,6 +306,30 @@ describe('renderProjectSlideoverFragments (P-B6)', () => {
     expect(empty.evolve).toContain('暂无活动');
   });
 
+  it('evolve renders prompt times in the server-local timezone (not UTC)', () => {
+    const ts = '2026-05-15T20:00:00Z'; // UTC+8 -> 04:00 next local day
+    const d = new Date(ts);
+    const localHhMm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const pf = renderProjectSlideoverFragments(
+      makeProject(),
+      makeProjectDetail({ recentPrompts: [{ ts, by: 'a@x.com', preview: 'q' }] }),
+    );
+    expect(pf.evolve).toContain(localHhMm);
+    if (d.getTimezoneOffset() !== 0) expect(pf.evolve).not.toContain('>20:00<');
+  });
+
+  it('evolve renders milestone dates in the server-local timezone (not UTC)', () => {
+    const ts = '2026-05-15T20:00:00Z'; // UTC date 05-15; UTC+8 local date 05-16
+    const d = new Date(ts);
+    const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const pf = renderProjectSlideoverFragments(
+      makeProject(),
+      makeProjectDetail({ recentPrompts: [], milestones: [{ ts, type: 'commit', by: 'a@x', detail: 'feat: x' }] }),
+    );
+    expect(pf.evolve).toContain(localDate);
+    if (d.getTimezoneOffset() !== 0) expect(pf.evolve).not.toContain('>2026-05-15<');
+  });
+
   it('projects lists recent files (capped at 5)', () => {
     expect(f.projects).toContain('src/a.ts');
     expect(f.projects).toContain('src/b.ts');
