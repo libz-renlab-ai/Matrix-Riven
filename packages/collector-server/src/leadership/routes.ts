@@ -18,6 +18,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readdirSync, existsSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
+import { performance } from 'node:perf_hooks';
 import type { TtlCache } from './cache.js';
 import type { DateRange } from './types.js';
 import type { LlmCache } from './llm/cache.js';
@@ -125,10 +127,10 @@ export function handleLeadershipRequest(
   // with /overview, /retro, /people, /projects.
   if (pathname === '/landing') {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
-    sendHtml(res, 200, renderLanding({ hasAuth: !!deps.authToken }));
+    sendHtml(res, 200, renderLanding({ hasAuth: !!deps.authToken }), req);
     return true;
   }
   // 2026-05-19 QA-5 ops P1: health probe for load balancers / cron canaries.
@@ -139,7 +141,7 @@ export function handleLeadershipRequest(
   // applySecurityHeaders, so a probe seeing 200 means "just-now true".
   if (pathname === '/healthz') {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
     // Round-2 QA P0 (security): the disk scan below was unauth and uncached,
@@ -163,7 +165,7 @@ export function handleLeadershipRequest(
         lastIngestAt: cached.lastIngestAt,
         lastIngestAgeSec: ageOfIngest,
         cacheSize: deps.cache.size,
-      });
+      }, req);
       return true;
     }
     let collectorDirExists = false;
@@ -207,15 +209,15 @@ export function handleLeadershipRequest(
       lastIngestAt,
       lastIngestAgeSec,
       cacheSize: deps.cache.size,
-    });
+    }, req);
     return true;
   }
   if (pathname === '/sources') {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
-    sendHtml(res, 200, renderSources());
+    sendHtml(res, 200, renderSources(), req);
     return true;
   }
   // 2026-05-19 QA-4 P0: previously `/?demo=1` fell through to
@@ -234,7 +236,7 @@ export function handleLeadershipRequest(
       demo: true,
       effectiveRange: filter.range,
     });
-    sendHtml(res, 200, renderOverview(snap, { filterBarHtml, demo: true }));
+    sendHtml(res, 200, renderOverview(snap, { filterBarHtml, demo: true }), req);
     return true;
   }
   if (pathname === '/api/overview' && req.method === 'GET' && query.get('demo') === '1') {
@@ -268,7 +270,7 @@ export function handleLeadershipRequest(
       res.end();
       return true;
     }
-    sendJsonWithEtag(res, 200, demoBody, demoEtag);
+    sendJsonWithEtag(res, 200, demoBody, demoEtag, req);
     return true;
   }
 
@@ -295,7 +297,7 @@ export function handleLeadershipRequest(
       // GET / is the only ambiguous path — when ?sid=X is present, we want
       // to fall through to the Phase-1 dashboard rather than 401. Other
       // paths are leadership-only.
-      sendJson(res, 401, { error: 'unauthorized' });
+      sendJson(res, 401, { error: 'unauthorized' }, req);
       return true;
     }
   }
@@ -304,7 +306,7 @@ export function handleLeadershipRequest(
   if (pathname === '/' && req.method === 'GET' && !query.has('sid') && deps.authToken) {
     const auth = requireBearerToken(req.headers, deps.authToken);
     if (!auth.ok) {
-      sendJson(res, 401, { error: 'unauthorized' });
+      sendJson(res, 401, { error: 'unauthorized' }, req);
       return true;
     }
   }
@@ -319,11 +321,11 @@ export function handleLeadershipRequest(
   // rest of the dashboard.
   if (pathname === '/api/llm/status') {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
     if (!deps.llmCache) {
-      sendJson(res, 200, { enabled: false });
+      sendJson(res, 200, { enabled: false }, req);
       return true;
     }
     const stats = deps.llmCache.stats();
@@ -339,20 +341,20 @@ export function handleLeadershipRequest(
         todayCostUsd: Number(stats.todayCostUsd.toFixed(4)),
         byTier,
       },
-    });
+    }, req);
     return true;
   }
 
   if (pathname === '/api/overview') {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
     const rangeStr = query.get('range') ?? undefined;
     const nowDate = now();
     const range = parseRange(rangeStr, nowDate);
     if (range === null) {
-      sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+      sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] }, req);
       return true;
     }
     // Phase 3-A: focus filter on /api/overview too — the polling loop sends
@@ -361,7 +363,7 @@ export function handleLeadershipRequest(
     const apiFilter = parseFocusFromQuery(query);
     const cacheKey = `/api/overview|${range.label}${focusFilterCacheKey(apiFilter)}`;
     let entry = deps.cache.get(cacheKey) as
-      | { body: Record<string, unknown>; etag: string }
+      | { body: Record<string, unknown>; etag: string; gz: Buffer }
       | undefined;
     if (entry === undefined) {
       try {
@@ -386,7 +388,9 @@ export function handleLeadershipRequest(
           collab: renderCollabFragment(snap),
         };
         const body = { ...snap, _html } as Record<string, unknown>;
-        entry = { body, etag: etagFor(body) };
+        // PR2: precompute the gzipped buffer at cache-build time so the 30 s
+        // polling loop serves it straight from cache without re-gzipping.
+        entry = { body, etag: etagFor(body), gz: gzipSync(JSON.stringify(body)) };
         deps.cache.set(cacheKey, entry);
       } catch (err) {
         // Log server-side so ops can diagnose, but never leak the stack
@@ -397,7 +401,7 @@ export function handleLeadershipRequest(
             err instanceof Error ? err.stack ?? err.message : String(err)
           }\n`,
         );
-        sendJson(res, 500, { error: 'internal' });
+        sendJson(res, 500, { error: 'internal' }, req);
         return true;
       }
     }
@@ -408,7 +412,7 @@ export function handleLeadershipRequest(
       res.end();
       return true;
     }
-    sendJsonWithEtag(res, 200, entry.body, entry.etag);
+    sendJsonWithEtag(res, 200, entry.body, entry.etag, req, entry.gz);
     return true;
   }
 
@@ -416,7 +420,7 @@ export function handleLeadershipRequest(
   const membersApiMatch = /^\/api\/members\/([^/]+)$/.exec(pathname);
   if (membersApiMatch) {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
     const rawId = decodeURIComponent(membersApiMatch[1]!);
@@ -432,18 +436,18 @@ export function handleLeadershipRequest(
     if (query.get('demo') === '1') {
       const demoMember = getDemoMemberByLocalPart(localPart);
       if (!demoMember) {
-        sendJson(res, 404, { error: 'not_found' });
+        sendJson(res, 404, { error: 'not_found' }, req);
         return true;
       }
       const _html = renderMemberSlideoverFragments(demoMember, demoMember.detail);
-      sendJson(res, 200, { ...demoMember, _html });
+      sendJson(res, 200, { ...demoMember, _html }, req);
       return true;
     }
     const rangeStr = query.get('range') ?? undefined;
     const nowDate = now();
     const range = parseRange(rangeStr, nowDate);
     if (range === null) {
-      sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+      sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] }, req);
       return true;
     }
     const cacheKey = `/api/members/${localPart}|${range.label}`;
@@ -451,13 +455,13 @@ export function handleLeadershipRequest(
     // the slide-over live-polling loop (which fires every 30 s while the
     // drawer is open) returns a fast 304 on identical hits.
     let entry = deps.cache.get(cacheKey) as
-      | { body: Record<string, unknown>; etag: string }
+      | { body: Record<string, unknown>; etag: string; gz: Buffer }
       | undefined;
     if (entry === undefined) {
       // Resolve local-part → full email by scanning collector dir
       const email = resolveEmailByLocalPart(deps.collectorDir, localPart);
       if (!email) {
-        sendJson(res, 404, { error: 'not_found' });
+        sendJson(res, 404, { error: 'not_found' }, req);
         return true;
       }
       try {
@@ -469,14 +473,16 @@ export function handleLeadershipRequest(
           mainProjects: deps.mainProjects,
         });
         if (!detail) {
-          sendJson(res, 404, { error: 'not_found' });
+          sendJson(res, 404, { error: 'not_found' }, req);
           return true;
         }
         // P-B6: enrich the API response with pre-rendered slide-over fragments
         // so the client can swap them in without a second round-trip.
         const _html = renderMemberSlideoverFragments(detail, detail.detail);
         const body = { ...detail, _html } as Record<string, unknown>;
-        entry = { body, etag: etagFor(body) };
+        // PR2: precompute the gzipped buffer at cache-build time so the 30 s
+        // polling loop serves it straight from cache without re-gzipping.
+        entry = { body, etag: etagFor(body), gz: gzipSync(JSON.stringify(body)) };
         deps.cache.set(cacheKey, entry);
       } catch (err) {
         // Log server-side so ops can diagnose, but never leak the stack
@@ -487,7 +493,7 @@ export function handleLeadershipRequest(
             err instanceof Error ? err.stack ?? err.message : String(err)
           }\n`,
         );
-        sendJson(res, 500, { error: 'internal' });
+        sendJson(res, 500, { error: 'internal' }, req);
         return true;
       }
     }
@@ -498,7 +504,7 @@ export function handleLeadershipRequest(
       res.end();
       return true;
     }
-    sendJsonWithEtag(res, 200, entry.body, entry.etag);
+    sendJsonWithEtag(res, 200, entry.body, entry.etag, req, entry.gz);
     return true;
   }
 
@@ -506,7 +512,7 @@ export function handleLeadershipRequest(
   const projectsApiMatch = /^\/api\/projects\/([^/]+)$/.exec(pathname);
   if (projectsApiMatch) {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
     const projectName = decodeURIComponent(projectsApiMatch[1]!);
@@ -515,24 +521,24 @@ export function handleLeadershipRequest(
     if (query.get('demo') === '1') {
       const demoProject = getDemoProjectByName(projectName);
       if (!demoProject) {
-        sendJson(res, 404, { error: 'not_found' });
+        sendJson(res, 404, { error: 'not_found' }, req);
         return true;
       }
       const _html = renderProjectSlideoverFragments(demoProject, demoProject.detail);
-      sendJson(res, 200, { ...demoProject, _html });
+      sendJson(res, 200, { ...demoProject, _html }, req);
       return true;
     }
     const rangeStr = query.get('range') ?? undefined;
     const nowDate = now();
     const range = parseRange(rangeStr, nowDate);
     if (range === null) {
-      sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+      sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] }, req);
       return true;
     }
     const cacheKey = `/api/projects/${projectName}|${range.label}`;
     // P-C3: same enriched-payload + ETag cache shape as the member endpoint.
     let entry = deps.cache.get(cacheKey) as
-      | { body: Record<string, unknown>; etag: string }
+      | { body: Record<string, unknown>; etag: string; gz: Buffer }
       | undefined;
     if (entry === undefined) {
       try {
@@ -543,13 +549,15 @@ export function handleLeadershipRequest(
           now: nowDate,
         });
         if (!detail) {
-          sendJson(res, 404, { error: 'not_found' });
+          sendJson(res, 404, { error: 'not_found' }, req);
           return true;
         }
         // P-B6: enrich the API response with pre-rendered slide-over fragments.
         const _html = renderProjectSlideoverFragments(detail, detail.detail);
         const body = { ...detail, _html } as Record<string, unknown>;
-        entry = { body, etag: etagFor(body) };
+        // PR2: precompute the gzipped buffer at cache-build time so the 30 s
+        // polling loop serves it straight from cache without re-gzipping.
+        entry = { body, etag: etagFor(body), gz: gzipSync(JSON.stringify(body)) };
         deps.cache.set(cacheKey, entry);
       } catch (err) {
         // Log server-side so ops can diagnose, but never leak the stack
@@ -560,7 +568,7 @@ export function handleLeadershipRequest(
             err instanceof Error ? err.stack ?? err.message : String(err)
           }\n`,
         );
-        sendJson(res, 500, { error: 'internal' });
+        sendJson(res, 500, { error: 'internal' }, req);
         return true;
       }
     }
@@ -571,7 +579,7 @@ export function handleLeadershipRequest(
       res.end();
       return true;
     }
-    sendJsonWithEtag(res, 200, entry.body, entry.etag);
+    sendJsonWithEtag(res, 200, entry.body, entry.etag, req, entry.gz);
     return true;
   }
 
@@ -606,28 +614,28 @@ export function handleLeadershipRequest(
   // Phase 3-B: /activity is now a real page (was stub).
   if (pathname === '/activity') {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
     return renderActivityTab(req, res, deps, query, now);
   }
   if (pathname === '/api/activity') {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
     return handleActivityApi(req, res, deps, query, now);
   }
   if (pathname === '/insights') {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
     return renderInsightsTab(req, res, deps, query, now);
   }
   if (pathname === '/api/insights') {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
     return handleInsightsApi(req, res, deps, query, now);
@@ -642,7 +650,7 @@ export function handleLeadershipRequest(
   const peopleDetailMatch = /^\/people\/([^/]+)$/.exec(pathname);
   if (peopleDetailMatch) {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
     return renderMemberDetailPage(req, res, deps, query, now, decodeURIComponent(peopleDetailMatch[1]!));
@@ -655,7 +663,7 @@ export function handleLeadershipRequest(
   const membersHtmlMatch = /^\/members\/([^/]+)$/.exec(pathname);
   if (membersHtmlMatch) {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
     // 2026-05-19 QA-4 P2: security auditor flagged the legacy redirect
@@ -665,7 +673,7 @@ export function handleLeadershipRequest(
     // Member local-parts are letters/digits/dot/dash/underscore/at.
     const rawId = membersHtmlMatch[1]!;
     if (!/^[A-Za-z0-9._@-]{1,128}$/.test(rawId)) {
-      sendJson(res, 404, { error: 'not_found' });
+      sendJson(res, 404, { error: 'not_found' }, req);
       return true;
     }
     // Phase 3-C: forward to the new /people/:id URL (preserving id).
@@ -685,7 +693,7 @@ export function handleLeadershipRequest(
   const projectsHtmlMatch = /^\/projects\/([^/]+)$/.exec(pathname);
   if (projectsHtmlMatch) {
     if (req.method !== 'GET') {
-      sendJson(res, 405, { error: 'method_not_allowed' });
+      sendJson(res, 405, { error: 'method_not_allowed' }, req);
       return true;
     }
     // 2026-05-19 QA-4 P1: customer #2 flagged that /projects/<id>?demo=1
@@ -699,7 +707,7 @@ export function handleLeadershipRequest(
     // (owner/repo), dot, dash, underscore. Reject otherwise to avoid
     // header-injection / open-redirect via Location echo.
     if (!/^[A-Za-z0-9._/@-]{1,128}$/.test(rawProj)) {
-      sendJson(res, 404, { error: 'not_found' });
+      sendJson(res, 404, { error: 'not_found' }, req);
       return true;
     }
     const qs = query.toString();
@@ -726,7 +734,7 @@ function renderOverviewTab(
   now: () => Date,
 ): boolean {
   if (req.method !== 'GET') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 405, { error: 'method_not_allowed' }, req);
     return true;
   }
   const nowDate = now();
@@ -734,13 +742,13 @@ function renderOverviewTab(
   // Phase 3-A: filter.range overrides the legacy ?range= param.
   const range = parseRange(filter.range === 'today' && !query.has('range') ? undefined : filter.range, nowDate);
   if (range === null) {
-    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] }, req);
     return true;
   }
   const cacheKey = `html|/overview|${range.label}${focusFilterCacheKey(filter)}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
-    sendHtml(res, 200, cached as string);
+    sendHtml(res, 200, cached as string, req);
     return true;
   }
   try {
@@ -762,9 +770,9 @@ function renderOverviewTab(
     });
     const html = renderOverview(snap, { filterBarHtml });
     deps.cache.set(cacheKey, html);
-    sendHtml(res, 200, html);
+    sendHtml(res, 200, html, req);
   } catch {
-    sendHtml(res, 500, renderOverviewError());
+    sendHtml(res, 500, renderOverviewError(), req);
   }
   return true;
 }
@@ -783,21 +791,21 @@ function renderPeopleTab(
   now: () => Date,
 ): boolean {
   if (req.method !== 'GET') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 405, { error: 'method_not_allowed' }, req);
     return true;
   }
   const nowDate = now();
   const filter = parseFocusFromQuery(query);
   const range = parseRange(filter.range === 'today' && !query.has('range') ? undefined : filter.range, nowDate);
   if (range === null) {
-    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] }, req);
     return true;
   }
   const isDemo = query.get('demo') === '1';
   const cacheKey = `html|/people|${range.label}|${isDemo ? 'demo' : 'real'}${focusFilterCacheKey(filter)}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
-    sendHtml(res, 200, cached as string);
+    sendHtml(res, 200, cached as string, req);
     return true;
   }
   try {
@@ -826,9 +834,9 @@ function renderPeopleTab(
     });
     const html = renderTabPage('people', rangeToNavLabelLocal(range.label), banner + tightHero + body, filterBarHtml, { demo: isDemo });
     deps.cache.set(cacheKey, html);
-    sendHtml(res, 200, html);
+    sendHtml(res, 200, html, req);
   } catch {
-    sendHtml(res, 500, renderOverviewError());
+    sendHtml(res, 500, renderOverviewError(), req);
   }
   return true;
 }
@@ -844,21 +852,21 @@ function renderProjectsTab(
   now: () => Date,
 ): boolean {
   if (req.method !== 'GET') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 405, { error: 'method_not_allowed' }, req);
     return true;
   }
   const nowDate = now();
   const filter = parseFocusFromQuery(query);
   const range = parseRange(filter.range === 'today' && !query.has('range') ? undefined : filter.range, nowDate);
   if (range === null) {
-    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] }, req);
     return true;
   }
   const isDemo = query.get('demo') === '1';
   const cacheKey = `html|/projects|${range.label}|${isDemo ? 'demo' : 'real'}${focusFilterCacheKey(filter)}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
-    sendHtml(res, 200, cached as string);
+    sendHtml(res, 200, cached as string, req);
     return true;
   }
   try {
@@ -887,9 +895,9 @@ function renderProjectsTab(
     });
     const html = renderTabPage('projects', rangeToNavLabelLocal(range.label), banner + tightHero + body, filterBarHtml, { demo: isDemo });
     deps.cache.set(cacheKey, html);
-    sendHtml(res, 200, html);
+    sendHtml(res, 200, html, req);
   } catch {
-    sendHtml(res, 500, renderOverviewError());
+    sendHtml(res, 500, renderOverviewError(), req);
   }
   return true;
 }
@@ -907,12 +915,12 @@ function renderRetroTab(
   now: () => Date,
 ): boolean {
   if (req.method !== 'GET') {
-    sendJson(res, 405, { error: 'method_not_allowed' });
+    sendJson(res, 405, { error: 'method_not_allowed' }, req);
     return true;
   }
   const range = parseRange(query.get('range') ?? '7d', now());
   if (range === null) {
-    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] });
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d'] }, req);
     return true;
   }
   // 2026-05-18 round-16 audit P0: /retro?demo=1 used to ignore the demo
@@ -923,7 +931,7 @@ function renderRetroTab(
   const cacheKey = `html|/retro|${range.label}|${isDemo ? 'demo' : 'real'}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
-    sendHtml(res, 200, cached as string);
+    sendHtml(res, 200, cached as string, req);
     return true;
   }
   try {
@@ -938,9 +946,9 @@ function renderRetroTab(
         });
     const html = renderRetro(snap, { demo: isDemo });
     deps.cache.set(cacheKey, html);
-    sendHtml(res, 200, html);
+    sendHtml(res, 200, html, req);
   } catch {
-    sendHtml(res, 500, renderOverviewError());
+    sendHtml(res, 500, renderOverviewError(), req);
   }
   return true;
 }
@@ -1019,20 +1027,20 @@ function renderMemberDetailPage(
   const filter: FocusFilter = { ...filterRaw, focus: localPart };
   const range = parseRange(filter.range === 'today' && !query.has('range') ? '7d' : filter.range, nowDate);
   if (range === null) {
-    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] }, req);
     return true;
   }
   const cacheKey = `html|/people/${localPart}|${range.label}|${isDemo ? 'demo' : 'real'}${focusFilterCacheKey(filter)}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
-    sendHtml(res, 200, cached as string);
+    sendHtml(res, 200, cached as string, req);
     return true;
   }
   try {
     if (isDemo) {
       const demoMember = getDemoMemberByLocalPart(localPart);
       if (!demoMember || !demoMember.detail) {
-        sendHtml(res, 404, renderMemberNotFound(localPart));
+        sendHtml(res, 404, renderMemberNotFound(localPart), req);
         return true;
       }
       const filterBarHtml = renderFilterBar({
@@ -1045,12 +1053,12 @@ function renderMemberDetailPage(
       });
       const html = renderMemberDetail(demoMember, demoMember.detail, { filterBarHtml, demo: true });
       deps.cache.set(cacheKey, html);
-      sendHtml(res, 200, html);
+      sendHtml(res, 200, html, req);
       return true;
     }
     const email = resolveEmailByLocalPart(deps.collectorDir, localPart);
     if (!email) {
-      sendHtml(res, 404, renderMemberNotFound(localPart));
+      sendHtml(res, 404, renderMemberNotFound(localPart), req);
       return true;
     }
     const detail = buildMemberDetail({
@@ -1061,7 +1069,7 @@ function renderMemberDetailPage(
       mainProjects: deps.mainProjects,
     });
     if (!detail) {
-      sendHtml(res, 404, renderMemberNotFound(localPart));
+      sendHtml(res, 404, renderMemberNotFound(localPart), req);
       return true;
     }
     // Use snapshot for filter bar dropdown options.
@@ -1081,12 +1089,12 @@ function renderMemberDetailPage(
     });
     const html = renderMemberDetail(detail, detail.detail, { filterBarHtml });
     deps.cache.set(cacheKey, html);
-    sendHtml(res, 200, html);
+    sendHtml(res, 200, html, req);
   } catch (err) {
     process.stderr.write(
       `[leadership] 500 on /people/${localPart}: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
     );
-    sendHtml(res, 500, renderOverviewError());
+    sendHtml(res, 500, renderOverviewError(), req);
   }
   return true;
 }
@@ -1105,7 +1113,7 @@ function renderInsightsTab(
   const filter = parseFocusFromQuery(query);
   const range = parseRange(filter.range === 'today' && !query.has('range') ? '30d' : filter.range, nowDate);
   if (range === null) {
-    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] }, req);
     return true;
   }
   const isDemo = query.get('demo') === '1';
@@ -1115,7 +1123,7 @@ function renderInsightsTab(
   const cacheKey = `html|/insights|${range.label}|${isDemo ? 'demo' : 'real'}|axis=${activeSubTab}${focusFilterCacheKey(filter)}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
-    sendHtml(res, 200, cached as string);
+    sendHtml(res, 200, cached as string, req);
     return true;
   }
   try {
@@ -1157,12 +1165,12 @@ function renderInsightsTab(
     });
     const html = renderInsightsPage(insights, { filterBarHtml, activeSubTab, demo: isDemo });
     deps.cache.set(cacheKey, html);
-    sendHtml(res, 200, html);
+    sendHtml(res, 200, html, req);
   } catch (err) {
     process.stderr.write(
       `[leadership] 500 on /insights: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
     );
-    sendHtml(res, 500, renderOverviewError());
+    sendHtml(res, 500, renderOverviewError(), req);
   }
   return true;
 }
@@ -1253,7 +1261,7 @@ function handleInsightsApi(
   const filter = parseFocusFromQuery(query);
   const range = parseRange(filter.range === 'today' && !query.has('range') ? '30d' : filter.range, nowDate);
   if (range === null) {
-    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] }, req);
     return true;
   }
   const isDemo = query.get('demo') === '1';
@@ -1282,12 +1290,12 @@ function handleInsightsApi(
       filter,
     });
     if (isDemo) insights.healthScore.history30d = synthesizeDemoSparkline();
-    sendJson(res, 200, insights);
+    sendJson(res, 200, insights, req);
   } catch (err) {
     process.stderr.write(
       `[leadership] 500 on /api/insights: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
     );
-    sendJson(res, 500, { error: 'internal' });
+    sendJson(res, 500, { error: 'internal' }, req);
   }
   return true;
 }
@@ -1310,7 +1318,7 @@ function renderActivityTab(
   const filter = parseFocusFromQuery(query);
   const range = parseRange(filter.range === 'today' && !query.has('range') ? '7d' : filter.range, nowDate);
   if (range === null) {
-    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] }, req);
     return true;
   }
   const isDemo = query.get('demo') === '1';
@@ -1319,7 +1327,7 @@ function renderActivityTab(
   const cacheKey = `html|/activity|${range.label}|${isDemo ? 'demo' : 'real'}${focusFilterCacheKey(filter)}|before=${beforeStr ?? ''}`;
   const cached = deps.cache.get(cacheKey);
   if (cached !== undefined) {
-    sendHtml(res, 200, cached as string);
+    sendHtml(res, 200, cached as string, req);
     return true;
   }
   try {
@@ -1344,12 +1352,12 @@ function renderActivityTab(
     });
     const html = renderActivityPage(feed, { filterBarHtml, demo: isDemo });
     deps.cache.set(cacheKey, html);
-    sendHtml(res, 200, html);
+    sendHtml(res, 200, html, req);
   } catch (err) {
     process.stderr.write(
       `[leadership] 500 on /activity: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
     );
-    sendHtml(res, 500, renderOverviewError());
+    sendHtml(res, 500, renderOverviewError(), req);
   }
   return true;
 }
@@ -1365,7 +1373,7 @@ function handleActivityApi(
   const filter = parseFocusFromQuery(query);
   const range = parseRange(filter.range === 'today' && !query.has('range') ? '7d' : filter.range, nowDate);
   if (range === null) {
-    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] });
+    sendJson(res, 400, { error: 'invalid_range', allowed: ['today', '24h', '7d', '30d', 'yesterday', 'custom'] }, req);
     return true;
   }
   const isDemo = query.get('demo') === '1';
@@ -1379,7 +1387,7 @@ function handleActivityApi(
   if (beforeStr !== null) {
     const parsed = new Date(beforeStr);
     if (Number.isNaN(parsed.getTime())) {
-      sendJson(res, 400, { error: 'invalid_before', hint: 'ISO-8601 timestamp expected, e.g. 2026-05-19T00:00:00Z' });
+      sendJson(res, 400, { error: 'invalid_before', hint: 'ISO-8601 timestamp expected, e.g. 2026-05-19T00:00:00Z' }, req);
       return true;
     }
     beforeTs = parsed;
@@ -1394,12 +1402,12 @@ function handleActivityApi(
           now: nowDate,
           beforeTs,
         });
-    sendJson(res, 200, feed);
+    sendJson(res, 200, feed, req);
   } catch (err) {
     process.stderr.write(
       `[leadership] 500 on /api/activity: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
     );
-    sendJson(res, 500, { error: 'internal' });
+    sendJson(res, 500, { error: 'internal' }, req);
   }
   return true;
 }
@@ -1725,13 +1733,70 @@ function applySecurityHeaders(res: ServerResponse): void {
   res.setHeader('cache-control', 'no-store');
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  const json = JSON.stringify(body);
+/**
+ * PR2: below this size gzip's framing overhead + CPU isn't worth it — a
+ * 17-byte `{"enabled":false}` would actually grow. Bodies under the
+ * threshold ship uncompressed even when the client accepts gzip.
+ */
+const GZIP_MIN_BYTES = 1024;
+
+/** True when the client's Accept-Encoding advertises gzip. */
+function clientAcceptsGzip(req: IncomingMessage): boolean {
+  const ae = req.headers['accept-encoding'];
+  return typeof ae === 'string' && /\bgzip\b/i.test(ae);
+}
+
+/**
+ * PR2: core response writer with transparent gzip content-negotiation +
+ * Server-Timing instrumentation.
+ *
+ * Compresses when the client accepts gzip AND the body clears
+ * `GZIP_MIN_BYTES`; otherwise ships raw. `Vary: accept-encoding` is always
+ * set so any intermediary keys correctly on the negotiation. An optional
+ * `precompressedGz` (the API routes cache it alongside the body) skips the
+ * per-request `gzipSync` entirely — that's the win for the 30 s polling loop.
+ *
+ * 304 / redirect responses never reach here, so they stay uncompressed.
+ */
+function writeNegotiated(
+  res: ServerResponse,
+  req: IncomingMessage,
+  status: number,
+  contentType: string,
+  body: string,
+  opts: { etag?: string; precompressedGz?: Buffer } = {},
+): void {
   applySecurityHeaders(res);
   res.statusCode = status;
-  res.setHeader('content-type', 'application/json; charset=utf-8');
-  res.setHeader('content-length', Buffer.byteLength(json));
-  res.end(json);
+  res.setHeader('content-type', contentType);
+  if (opts.etag) res.setHeader('etag', opts.etag);
+  res.setHeader('vary', 'accept-encoding');
+  const rawBytes = Buffer.byteLength(body);
+  if (clientAcceptsGzip(req) && rawBytes >= GZIP_MIN_BYTES) {
+    let gz = opts.precompressedGz;
+    let dur = 0;
+    let cached = true;
+    if (gz === undefined) {
+      const t0 = performance.now();
+      gz = gzipSync(body);
+      dur = performance.now() - t0;
+      cached = false;
+    }
+    res.setHeader('content-encoding', 'gzip');
+    res.setHeader('content-length', gz.length);
+    res.setHeader(
+      'server-timing',
+      `gzip;dur=${dur.toFixed(1)};desc="${cached ? 'cached' : 'live'} ${rawBytes}->${gz.length}B"`,
+    );
+    res.end(gz);
+    return;
+  }
+  res.setHeader('content-length', rawBytes);
+  res.end(body);
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown, req: IncomingMessage): void {
+  writeNegotiated(res, req, status, 'application/json; charset=utf-8', JSON.stringify(body));
 }
 
 function sendJsonWithEtag(
@@ -1739,14 +1804,13 @@ function sendJsonWithEtag(
   status: number,
   body: unknown,
   etag: string,
+  req: IncomingMessage,
+  precompressedGz?: Buffer,
 ): void {
-  const json = JSON.stringify(body);
-  applySecurityHeaders(res);
-  res.statusCode = status;
-  res.setHeader('content-type', 'application/json; charset=utf-8');
-  res.setHeader('content-length', Buffer.byteLength(json));
-  res.setHeader('etag', etag);
-  res.end(json);
+  writeNegotiated(res, req, status, 'application/json; charset=utf-8', JSON.stringify(body), {
+    etag,
+    precompressedGz,
+  });
 }
 
 /**
@@ -1770,12 +1834,8 @@ function etagFor(obj: unknown): string {
   return '"' + createHash('sha1').update(JSON.stringify(obj)).digest('hex').slice(0, 16) + '"';
 }
 
-function sendHtml(res: ServerResponse, status: number, html: string): void {
-  applySecurityHeaders(res);
-  res.statusCode = status;
-  res.setHeader('content-type', 'text/html; charset=utf-8');
-  res.setHeader('content-length', Buffer.byteLength(html));
-  res.end(html);
+function sendHtml(res: ServerResponse, status: number, html: string, req: IncomingMessage): void {
+  writeNegotiated(res, req, status, 'text/html; charset=utf-8', html);
 }
 
 function sendRedirect(res: ServerResponse, status: 301 | 302, location: string): void {
