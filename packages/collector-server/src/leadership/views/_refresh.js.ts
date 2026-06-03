@@ -338,24 +338,53 @@ export const CLIENT_REFRESH_SCRIPT = `
     }
   }
 
+  // 2026-06-03 PR1: which tab is this poll running on? The same script is
+  // embedded on /overview, /people, /projects, /activity, /insights and the
+  // member-detail page — but only Overview/People/Projects own pollable
+  // Overview fragments. Returning 'other' makes the poll a no-op on the rest
+  // (previously it blindly overwrote any element whose id matched a slot — e.g.
+  // the /activity hero — with the Overview fragment).
+  function currentPollTab() {
+    var path = '';
+    try { if (typeof location !== 'undefined') path = location.pathname || ''; } catch (e) { /* SSR */ }
+    if (path === '/people') return 'people';
+    if (path === '/projects') return 'projects';
+    if (path === '/' || path === '/overview') return 'overview';
+    return 'other';
+  }
+
   async function pollOverview() {
     try {
-      // 2026-05-18 round-15 audit P0: propagate the demo flag.
-      // 2026-05-19 QA-7 P1: propagate THE WHOLE query string. Previous
-      // version only carried "?demo=1", so a viewer on
-      // /overview?demo=1&focus=alex&range=7d kept getting their filtered
-      // 1-member view silently swapped back to the unfiltered 4-member
-      // /api/overview?demo=1 response every 30 s. The chip stayed
-      // orange while the data underneath flipped. Now we forward
-      // location.search verbatim (drop hash; the API doesnt care).
+      var tab = currentPollTab();
+      if (tab === 'other') return;
+      // 2026-05-18/05-19: propagate THE WHOLE query string (demo / focus /
+      // range) so the polled snapshot matches the mounted view rather than
+      // silently swapping a filtered view back to the unfiltered default.
       var ovQs = '';
       try {
         if (typeof location !== 'undefined' && location.search) {
           ovQs = location.search;
         }
       } catch (e) { /* SSR / non-browser fallback */ }
+      // 2026-06-03 PR1: path-aware fetch + scoped swap. People/Projects are
+      // FULL unsliced grids that reuse the Overview shell. Fetching the
+      // Overview's top-4 fragments and swapping #members/#projects collapsed
+      // those grids to 4 on every 30 s tick. Now each tab requests its own
+      // UNSLICED fragment (full=members|projects) and swaps ONLY that slot, so
+      // the full grid refreshes in place. Overview keeps its 7-slot top-4 swap.
+      var url, slots;
+      if (tab === 'people') {
+        url = '/api/overview' + ovQs + (ovQs ? '&' : '?') + 'full=members';
+        slots = ['members'];
+      } else if (tab === 'projects') {
+        url = '/api/overview' + ovQs + (ovQs ? '&' : '?') + 'full=projects';
+        slots = ['projects'];
+      } else {
+        url = '/api/overview' + ovQs;
+        slots = ['hero', 'kpis', 'attention', 'members', 'projects', 'highlights', 'collab'];
+      }
       var headers = overviewEtag ? { 'if-none-match': overviewEtag } : {};
-      var resp = await fetch('/api/overview' + ovQs, { headers: headers });
+      var resp = await fetch(url, { headers: headers });
       if (resp.status === 304) {
         flashLiveDot();
         return;
@@ -363,7 +392,6 @@ export const CLIENT_REFRESH_SCRIPT = `
       if (!resp.ok) return;
       overviewEtag = resp.headers.get('etag');
       var snap = await resp.json();
-      var slots = ['hero', 'kpis', 'attention', 'members', 'projects', 'highlights', 'collab'];
       for (var i = 0; i < slots.length; i++) {
         var slot = slots[i];
         var el = document.getElementById(slot);
@@ -371,7 +399,8 @@ export const CLIENT_REFRESH_SCRIPT = `
           el.outerHTML = snap._html[slot];
         }
       }
-      if (snap && snap.kpis) {
+      // KPI delta badges only apply to the Overview KPI row.
+      if (tab === 'overview' && snap && snap.kpis) {
         showKpiDeltas(lastKpis, snap.kpis);
         lastKpis = snap.kpis;
         try { localStorage.setItem('lh.lastKpis', JSON.stringify(snap.kpis)); } catch (e) { /* ignore */ }
