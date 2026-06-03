@@ -57,6 +57,25 @@ describe('buildCcSessionEnvelope', () => {
     expect(env.envelope.riven_version).toBe(sampleMeta.riven_version);
   });
 
+  it('forwards git_remote into the envelope block when present, omits it when absent', () => {
+    // Attribution fix: the client resolves `git config --get remote.origin.url`
+    // at capture and emits it as the authoritative project identity, so the
+    // server never has to guess the repo from transcript text.
+    const withRemote = buildCcSessionEnvelope({
+      metadata: { ...sampleMeta, git_remote: 'https://github.com/myorg/myrepo.git' },
+      payloadBytes: Buffer.from('x'),
+      identity: { user_id: 'u', machine_id: 'm' },
+    });
+    expect(withRemote.envelope.git_remote).toBe('https://github.com/myorg/myrepo.git');
+
+    const without = buildCcSessionEnvelope({
+      metadata: sampleMeta,
+      payloadBytes: Buffer.from('x'),
+      identity: { user_id: 'u', machine_id: 'm' },
+    });
+    expect('git_remote' in without.envelope).toBe(false);
+  });
+
   it('produces a JSON-serializable envelope (mock-server can read it)', () => {
     const env = buildCcSessionEnvelope({
       metadata: sampleMeta,

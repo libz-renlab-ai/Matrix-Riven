@@ -40,6 +40,28 @@ describe('tapSession', () => {
     home = freshHome();
   });
 
+  it('records git_remote in metadata when the resolver returns an origin, omits it otherwise', () => {
+    const cwd = '/Users/test/proj';
+    const sessionId = 'sess-git';
+    const transcriptDir = join(home, '.claude', 'projects', projectDirForCwd(cwd));
+    mkdirSync(transcriptDir, { recursive: true });
+    writeFileSync(join(transcriptDir, `${sessionId}.jsonl`), '{"type":"user"}\n', 'utf-8');
+
+    const withRemote = tapSession(
+      { cwd, sessionId },
+      { homedir: () => home, ulid: () => 'g-ulid-1', resolveGitRemote: () => 'https://github.com/myorg/myrepo.git' },
+    );
+    const meta1 = JSON.parse(readFileSync(withRemote.metadataPath!, 'utf-8')) as Record<string, unknown>;
+    expect(meta1.git_remote).toBe('https://github.com/myorg/myrepo.git');
+
+    const without = tapSession(
+      { cwd, sessionId },
+      { homedir: () => home, ulid: () => 'g-ulid-2', resolveGitRemote: () => undefined },
+    );
+    const meta2 = JSON.parse(readFileSync(without.metadataPath!, 'utf-8')) as Record<string, unknown>;
+    expect('git_remote' in meta2).toBe(false);
+  });
+
   it('returns no-log when transcript file does not exist', () => {
     const result = tapSession(
       { cwd: '/some/dir', sessionId: 'missing-session' },

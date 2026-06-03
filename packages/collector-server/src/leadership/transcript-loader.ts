@@ -622,40 +622,64 @@ const PLACEHOLDER_REMOTES = new Set([
 ]);
 
 /**
- * Scan a parsed session for the first github.com URL inside any Bash command,
- * tool-result text, or other string-valued tool-input field. Used at parse
- * time so every ParsedSession gets `envelope.gitRemote` populated once and
- * downstream consumers (aggregator, propagation pass) skip re-scanning.
+ * Fallback scan for a session's *own* git origin. The authoritative source is
+ * the client-supplied `envelope.git_remote` (see `parseEnvelopeBuffer`); this
+ * runs only when that's absent (old clients / non-git dirs).
  *
- * Returns null when nothing is found; callers should then rely on cwd-prefix
- * propagation across sibling sessions (`propagateRemotes`) or the
- * `deriveProjectName` cwd-walk fallback.
+ * 2026-06-03 attribution fix: this used to grab the FIRST `github.com/owner/repo`
+ * found ANYWHERE in the session — any Bash command, any string-valued tool
+ * input (WebFetch URLs, file paths), any tool-result text. That mis-attributed
+ * work to whatever repo a session happened to `git clone`, WebFetch, or merely
+ * mention (a README link, a CI log, an npm-deprecation warning). It now accepts
+ * a remote ONLY from evidence that the URL is *this* working dir's origin:
  *
- * Placeholder slugs (`owner/repo`, `foo/bar`, etc.) are filtered out — those
- * almost always come from documentation/example URLs and would otherwise
- * collapse unrelated sessions that quoted the same example.
+ *   - tool-result text shaped like `git remote -v` output
+ *     (`origin <url> (fetch|push)`), or a `[remote "origin"] … url = <url>`
+ *     git-config block;
+ *   - a `git remote add|set-url origin <url>` command — `origin` only, because
+ *     an `upstream` remote points at a fork's *parent*, a different repo.
+ *
+ * Everything else is ignored, so the session falls back to the cwd-derived
+ * project name — where the work actually happened. Placeholder slugs
+ * (`owner/repo`, `foo/bar`, …) are still filtered out.
  */
 export function extractRemoteFromSession(session: ParsedSession): string | null {
   for (const m of session.messages) {
     for (const tu of m.toolUses) {
       if (tu.name === 'Bash' && typeof tu.input.command === 'string') {
-        const found = findGithubRemote(tu.input.command);
+        const found = remoteFromOriginCommand(tu.input.command);
         if (found && !PLACEHOLDER_REMOTES.has(found.toLowerCase())) return found;
-      }
-      // Also peek into other string-valued tool inputs (file paths in
-      // Write/Edit, URLs in WebFetch, etc.) for occasional embedded
-      // github.com references.
-      for (const v of Object.values(tu.input)) {
-        if (typeof v === 'string') {
-          const found = findGithubRemote(v);
-          if (found && !PLACEHOLDER_REMOTES.has(found.toLowerCase())) return found;
-        }
       }
     }
     for (const tr of m.toolResults) {
-      const found = findGithubRemote(tr.text);
+      const found = remoteFromOriginOutput(tr.text);
       if (found && !PLACEHOLDER_REMOTES.has(found.toLowerCase())) return found;
     }
+  }
+  return null;
+}
+
+/** Remote from `git remote add|set-url origin <url>` (origin only). */
+function remoteFromOriginCommand(command: string): string | null {
+  const m = command.match(/\bgit\s+remote\s+(?:add|set-url)\s+(?:--\S+\s+)*origin\s+(\S+)/);
+  return m ? findGithubRemote(m[1]!) : null;
+}
+
+/**
+ * Remote from origin-shaped output: `git remote -v`
+ * (`origin <url> (fetch|push)`) or a git-config `[remote "origin"] … url = <url>`
+ * block. Bounded so the config match never crosses into another `[section]`.
+ */
+function remoteFromOriginOutput(text: string): string | null {
+  const rv = text.match(/(?:^|\n)\s*origin\s+(\S+)\s+\((?:fetch|push)\)/);
+  if (rv) {
+    const r = findGithubRemote(rv[1]!);
+    if (r) return r;
+  }
+  const cfg = text.match(/\[remote\s+"origin"\][^[]*?\burl\s*=\s*(\S+)/);
+  if (cfg) {
+    const r = findGithubRemote(cfg[1]!);
+    if (r) return r;
   }
   return null;
 }

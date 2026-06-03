@@ -54,6 +54,13 @@ export interface CcSessionMetadata {
    * entries that have never failed.
    */
   first_failed_at?: string;
+  /**
+   * Attribution fix (2026-06-03) — `git config --get remote.origin.url` of
+   * `cwd`, resolved by the client at capture. Authoritative project identity;
+   * the collector prefers it over scanning transcript text. Absent when the
+   * cwd is not a git repo / has no origin.
+   */
+  git_remote?: string;
 }
 
 /** Inner envelope block — what mock-server.ts reads under `obj.envelope`. */
@@ -95,6 +102,12 @@ export interface CcSessionEnvelopeBlock {
    * expires_at ISO timestamp so dashboards can warn before token rotates.
    */
   oauth_expires_at?: string;
+  /**
+   * Attribution fix (2026-06-03) — authoritative `remote.origin.url` of the
+   * session's cwd, resolved client-side. The collector prefers this over
+   * scanning transcript text for github URLs. Absent for non-git dirs.
+   */
+  git_remote?: string;
 }
 
 /** Host environment captured on every envelope. Bucket 1/2 widens this block. */
@@ -248,6 +261,7 @@ export function buildCcSessionEnvelope(input: BuildEnvelopeInput): CcSessionEnve
   if (x?.l1RedactionsByKind) envelopeBlock.l1_redactions_by_kind = x.l1RedactionsByKind;
   if (x?.l1RedactionsByLocation) envelopeBlock.l1_redactions_by_location = x.l1RedactionsByLocation;
   if (x?.oauthExpiresAt) envelopeBlock.oauth_expires_at = x.oauthExpiresAt;
+  if (input.metadata.git_remote) envelopeBlock.git_remote = input.metadata.git_remote;
   const env: CcSessionEnvelope = {
     schema_version: 1,
     envelope: envelopeBlock,

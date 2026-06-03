@@ -81,57 +81,83 @@ describe('findGithubRemote', () => {
 });
 
 describe('extractRemoteFromSession', () => {
+  // 2026-06-03: this scan is now an ORIGIN-ONLY fallback (the authoritative
+  // path is the client-supplied envelope.git_remote). It must NOT attribute a
+  // session to a repo it merely cloned, fetched, or mentioned — only to
+  // evidence that a github URL is THIS working dir's origin. Previously it
+  // grabbed the first github.com URL anywhere (command, WebFetch URL, prose
+  // tool-result), which mis-attributed work to foreign repos.
+
   it('returns null when no github URL appears anywhere', () => {
-    const session = makeSessionWithBash('git push origin main');
-    expect(extractRemoteFromSession(session)).toBeNull();
+    expect(extractRemoteFromSession(makeSessionWithBash('git push origin main'))).toBeNull();
   });
 
-  it('finds remote in Bash command tool_use input', () => {
-    const session = makeSessionWithBash('git clone https://github.com/anthropics/claude-code.git');
-    expect(extractRemoteFromSession(session)).toBe('anthropics/claude-code');
+  // ── what it MUST ignore (the mis-attribution bug) ──────────────────────────
+  it('ignores a `git clone` of another repo', () => {
+    expect(
+      extractRemoteFromSession(makeSessionWithBash('git clone https://github.com/torvalds/linux.git')),
+    ).toBeNull();
   });
 
-  it('finds remote in tool_result text', () => {
-    const session = makeSessionWithToolResult(
-      'origin\tgit@github.com:Anthropic/matrix-riven.git (fetch)',
-    );
-    expect(extractRemoteFromSession(session)).toBe('Anthropic/matrix-riven');
-  });
-
-  it('finds remote in a non-Bash tool input string field', () => {
+  it('ignores a github URL in a non-Bash tool input (WebFetch, etc.)', () => {
     const s = makeBlankSession();
     s.messages.push({
       role: 'assistant',
       text: '',
-      toolUses: [{ name: 'WebFetch', input: { url: 'https://github.com/anthropics/sdk' } }],
+      toolUses: [{ name: 'WebFetch', input: { url: 'https://github.com/facebook/react' } }],
       toolResults: [],
     });
-    expect(extractRemoteFromSession(s)).toBe('anthropics/sdk');
-  });
-
-  it('skips placeholder example slugs and falls through to a real remote', () => {
-    // foo/bar appears first (documentation example), real remote follows.
-    const s = makeBlankSession();
-    s.messages.push({
-      role: 'assistant',
-      text: '',
-      toolUses: [
-        { name: 'Bash', input: { command: 'echo https://github.com/foo/bar' } },
-        { name: 'Bash', input: { command: 'git clone https://github.com/real-org/real-repo' } },
-      ],
-      toolResults: [],
-    });
-    expect(extractRemoteFromSession(s)).toBe('real-org/real-repo');
-  });
-
-  it('returns null when only placeholder slugs are mentioned', () => {
-    const s = makeSessionWithBash('cp from https://github.com/owner/repo to https://github.com/user/repo');
     expect(extractRemoteFromSession(s)).toBeNull();
   });
 
-  it('strips a trailing sentence period from the captured slug', () => {
-    // findGithubRemote's regex captures up to the lookahead; normalisation
-    // then trims trailing `.` so `vhs.` reduces to `vhs`.
+  it('ignores a github link merely mentioned in tool-result text', () => {
+    expect(
+      extractRemoteFromSession(
+        makeSessionWithToolResult('npm warn deprecated; see https://github.com/vercel/next.js/issues/999'),
+      ),
+    ).toBeNull();
+  });
+
+  it("ignores `git remote add upstream <url>` (a fork's parent is a different repo)", () => {
+    expect(
+      extractRemoteFromSession(makeSessionWithBash('git remote add upstream https://github.com/other/parent')),
+    ).toBeNull();
+  });
+
+  // ── what it MUST still capture (genuine origin evidence) ───────────────────
+  it('captures the origin from `git remote -v` output', () => {
+    expect(
+      extractRemoteFromSession(
+        makeSessionWithToolResult(
+          'origin\tgit@github.com:Anthropic/matrix-riven.git (fetch)\norigin\tgit@github.com:Anthropic/matrix-riven.git (push)',
+        ),
+      ),
+    ).toBe('Anthropic/matrix-riven');
+  });
+
+  it('captures the origin from `git remote add origin <url>`', () => {
+    expect(
+      extractRemoteFromSession(makeSessionWithBash('git remote add origin https://github.com/myorg/myrepo.git')),
+    ).toBe('myorg/myrepo');
+  });
+
+  it('captures the origin from a .git/config [remote "origin"] block', () => {
+    expect(
+      extractRemoteFromSession(
+        makeSessionWithToolResult(
+          '[remote "origin"]\n\turl = https://github.com/myorg/myrepo.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*',
+        ),
+      ),
+    ).toBe('myorg/myrepo');
+  });
+
+  it('skips a placeholder origin slug', () => {
+    expect(
+      extractRemoteFromSession(makeSessionWithBash('git remote add origin https://github.com/owner/repo')),
+    ).toBeNull();
+  });
+
+  it('strips a trailing sentence period from the captured slug (findGithubRemote)', () => {
     expect(findGithubRemote('see https://github.com/charmbracelet/vhs.')).toBe('charmbracelet/vhs');
   });
 });
