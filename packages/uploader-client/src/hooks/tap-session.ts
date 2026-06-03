@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { homedir as osHomedir, platform as osPlatform, arch as osArch, hostname } from 'node:os';
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn, execFileSync } from 'node:child_process';
 import type { SpawnOptions, ChildProcess } from 'node:child_process';
 import { ulid as defaultUlid } from 'ulid';
 import { digitalTwinPaths, MAX_PAYLOAD_BYTES, type CcSessionQuotaBlock, type CcSessionMetadata } from '@matrix-riven/shared';
@@ -50,6 +50,11 @@ export interface TapSessionDeps {
   nodeBin?: string;
   /** Issue #266 F8 — override the size cap for tests. Defaults to MAX_PAYLOAD_BYTES. */
   maxPayloadBytes?: number;
+  /**
+   * Attribution fix — resolve the cwd's git origin. Overridable for tests so
+   * they don't shell out to `git`. Defaults to `defaultResolveGitRemote`.
+   */
+  resolveGitRemote?: (cwd: string) => string | undefined;
 }
 
 /**
@@ -83,6 +88,26 @@ export function projectDirForCwd(cwd: string): string {
  */
 export function claudeTranscriptPath(home: string, cwd: string, sessionId: string): string {
   return join(home, '.claude', 'projects', projectDirForCwd(cwd), `${sessionId}.jsonl`);
+}
+
+/**
+ * Resolve the cwd's git origin via `git config --get remote.origin.url`. Local
+ * (reads .git/config, no network), fast, best-effort: returns undefined for a
+ * non-git dir, a missing origin, a missing/slow `git`, or any error. Never
+ * throws — the Stop hook must not block.
+ */
+function defaultResolveGitRemote(cwd: string): string | undefined {
+  try {
+    const out = execFileSync('git', ['-C', cwd, 'config', '--get', 'remote.origin.url'], {
+      timeout: 1000,
+      windowsHide: true,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -139,6 +164,11 @@ export function tapSession(
     }
 
     const projectName = input.cwd.split(/[/\\]/).filter(Boolean).pop() ?? '';
+    // Attribution fix: resolve the cwd's actual git origin so the collector
+    // uses an authoritative project identity instead of scraping transcript
+    // text (which mis-attributed work to repos a session merely cloned /
+    // fetched / mentioned). Best-effort; absent for non-git dirs.
+    const gitRemote = (deps.resolveGitRemote ?? defaultResolveGitRemote)(input.cwd);
     const metadata: CcSessionMetadata = {
       id,
       kind: 'cc-session' as const,
@@ -155,6 +185,8 @@ export function tapSession(
       // Issue #283: forward quota only when caller provided one — keeps the
       // field absent from the JSON on pre-#283 Stop taps (no JSON churn).
       ...(input.quota ? { quota: input.quota } : {}),
+      // Absent from the JSON when the cwd isn't a git repo (no churn).
+      ...(gitRemote ? { git_remote: gitRemote } : {}),
     };
     writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf-8');
 
