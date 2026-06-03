@@ -247,15 +247,17 @@ function severityOrder(s: 'info' | 'warn' | 'critical'): number {
 
 /**
  * Aggregate the last 12 weeks of activity into one row per week.
- * Week boundary = UTC Monday 00:00.
+ * Week boundary = server-local Monday 00:00 (consistent with PR4's local-tz
+ * day boundary). UTC boundaries flipped the week at local Monday 08:00 for a
+ * UTC+8 team, so a Monday-early-morning session landed in the prior week.
  */
 export function buildTimeAxis(sessions: ParsedSession[], now: Date): InsightsTimeWeek[] {
   const weeks: InsightsTimeWeek[] = [];
-  const todayUtc = utcDayStart(now);
-  // Find the most recent Monday on or before now.
-  const dayOfWeek = todayUtc.getUTCDay(); // 0=Sun,1=Mon,...
+  const todayLocal = localDayStart(now);
+  // Find the most recent Monday on or before now, in the server's LOCAL tz.
+  const dayOfWeek = todayLocal.getDay(); // 0=Sun,1=Mon,...
   const daysSinceMon = (dayOfWeek + 6) % 7;
-  const thisMon = new Date(todayUtc.getTime() - daysSinceMon * 86400000);
+  const thisMon = new Date(todayLocal.getTime() - daysSinceMon * 86400000);
   for (let w = 11; w >= 0; w--) {
     const start = new Date(thisMon.getTime() - w * 7 * 86400000);
     const end = new Date(start.getTime() + 7 * 86400000);
@@ -275,7 +277,7 @@ export function buildTimeAxis(sessions: ParsedSession[], now: Date): InsightsTim
       }
     }
     weeks.push({
-      weekStart: start.toISOString().slice(0, 10),
+      weekStart: localDateKey(start),
       tokens,
       sessions: sessionsCount,
       commits,
@@ -332,6 +334,12 @@ function localPart(email: string): string {
   return at > 0 ? email.slice(0, at) : email;
 }
 
-function utcDayStart(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+/** Server-local midnight of `d` (matches PR4's localDayStart). */
+function localDayStart(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/** Server-local YYYY-MM-DD label for a week-start Date. */
+function localDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
