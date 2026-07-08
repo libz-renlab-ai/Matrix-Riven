@@ -375,7 +375,7 @@ function renderProjectEvolve(detail: ProjectDetail): string {
     .map(
       (m, i) => `
     <div class="so-evolve-item${i === 0 ? ' latest' : ''}">
-      <div class="so-evolve-time mono">${escapeHtml(m.ts.slice(0, 10))}</div>
+      <div class="so-evolve-time mono">${escapeHtml(localDateKey(m.ts))}</div>
       <div class="so-evolve-text serif">${escapeHtml(milestoneLabel(m.type))} · ${escapeHtml(milestoneSummary(m.detail))}</div>
     </div>`,
     )
@@ -433,8 +433,18 @@ function escapeHtml(s: string): string {
 }
 
 function formatHHMM(ts: string): string {
-  if (ts.length >= 16 && ts[10] === 'T') return ts.slice(11, 16);
-  return ts;
+  // Server-local HH:MM (consistent with PR4's local-timezone day boundary).
+  // Falls back to the raw string when it isn't a parseable timestamp.
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** Server-local YYYY-MM-DD for an ISO ts (the evolve timeline's date labels). */
+function localDateKey(ts: string): string {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts.slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 // Short token-count formatter for drawer cards: 1234 → "1.2k", 12345 → "12k",

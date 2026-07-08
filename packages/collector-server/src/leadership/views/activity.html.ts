@@ -123,7 +123,7 @@ function renderBody(snap: ActivityFeedSnapshot, groups: Map<string, ActivityEven
 
 function renderRow(e: ActivityEvent): string {
   const icon = ICON_FOR_TYPE[e.type] ?? '·';
-  const hhmm = e.ts.slice(11, 16);
+  const hhmm = localHhMm(new Date(e.ts));
   const by = e.by.split('@')[0] ?? e.by;
   const summary = escapeHtml(e.summary);
   const promptFull = e.detail?.promptFull;
@@ -150,10 +150,10 @@ function renderRow(e: ActivityEvent): string {
 function groupByDate(events: ActivityEvent[]): Map<string, ActivityEvent[]> {
   const out = new Map<string, ActivityEvent[]>();
   const today = new Date();
-  const todayKey = utcDateKey(today);
-  const yesterdayKey = utcDateKey(new Date(today.getTime() - 24 * 60 * 60 * 1000));
+  const todayKey = localDayKey(today);
+  const yesterdayKey = localDayKey(new Date(today.getTime() - 24 * 60 * 60 * 1000));
   for (const e of events) {
-    const key = e.ts.slice(0, 10);
+    const key = localDayKey(new Date(e.ts));
     let label: string;
     if (key === todayKey) label = '今天';
     else if (key === yesterdayKey) label = '昨天';
@@ -165,8 +165,23 @@ function groupByDate(events: ActivityEvent[]): Map<string, ActivityEvent[]> {
   return out;
 }
 
-function utcDateKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
+/**
+ * Server-local YYYY-MM-DD for a Date. The timeline buckets + labels (今天/昨天)
+ * by the server's LOCAL calendar day — consistent with PR4's local-timezone
+ * day boundary for /api/overview ranges (focus-filter's localDayStart).
+ * Bucketing by UTC made events after ~16:00 local (a UTC+8 team) roll into the
+ * next day on the board.
+ */
+function localDayKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Server-local HH:MM for a Date (the timeline's per-row time-of-day). */
+function localHhMm(d: Date): string {
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function shortTokens(n: number): string {

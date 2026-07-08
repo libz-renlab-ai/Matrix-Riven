@@ -24,28 +24,40 @@ describe('renderActivityPage', () => {
     expect(html).toContain('没有活动');
   });
 
-  it('groups events by date with 今天 / 昨天 headers', () => {
-    const today = new Date().toISOString().slice(0, 10);
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  it('groups events by date with 今天 / 昨天 headers in the server-local timezone', () => {
+    const now = new Date();
+    // Local yesterday at noon — unambiguously the previous LOCAL calendar day.
+    const yNoon = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 12, 0, 0).toISOString();
     const snap = mkSnap({
       events: [
-        ev('session', today + 'T10:00:00Z', 'alice@x', 'today event'),
-        ev('commit', yesterday + 'T09:00:00Z', 'bob@x', 'yesterday event'),
+        ev('session', now.toISOString(), 'alice@x', 'today event'),
+        ev('commit', yNoon, 'bob@x', 'yesterday event'),
         ev('session', '2026-05-10T08:00:00Z', 'casey@x', 'older event'),
       ],
     });
     const html = renderActivityPage(snap);
     expect(html).toContain('今天');
     expect(html).toContain('昨天');
-    expect(html).toContain('2026-05-10');
+    // Older events label by their LOCAL calendar date.
+    const old = new Date('2026-05-10T08:00:00Z');
+    const oldKey = `${old.getFullYear()}-${String(old.getMonth() + 1).padStart(2, '0')}-${String(old.getDate()).padStart(2, '0')}`;
+    expect(html).toContain(oldKey);
   });
 
-  it('renders event row with time / icon / by / project / summary', () => {
+  it('renders the event time in the server-local timezone (not UTC)', () => {
+    const ts = '2026-05-18T10:30:00Z';
+    const d = new Date(ts);
+    const localHhMm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     const snap = mkSnap({
-      events: [ev('session', '2026-05-18T10:30:00Z', 'alice@x.com', 'hello prompt', 'matrix-riven')],
+      events: [ev('session', ts, 'alice@x.com', 'hello prompt', 'matrix-riven')],
     });
     const html = renderActivityPage(snap);
-    expect(html).toContain('10:30');
+    expect(html).toContain(localHhMm);
+    // Regression guard: on a non-UTC host the local time must differ from the
+    // raw UTC slice the renderer used to print.
+    if (d.getTimezoneOffset() !== 0) {
+      expect(html).not.toContain(`activity-time">${ts.slice(11, 16)}<`);
+    }
     expect(html).toContain('📝');
     expect(html).toContain('alice'); // local-part only
     expect(html).toContain('matrix-riven');
